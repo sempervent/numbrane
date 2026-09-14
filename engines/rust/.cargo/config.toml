@@ -1,0 +1,9 @@
+# Project-local Cargo config (does not clear user aliases).
+# Makefile uses CARGO_BUILD_JOBS + cargo-clippy to avoid broken user clippy aliases.
+#
+# wasm32: with rustup, `rustup target add wasm32-unknown-unknown` is enough.
+# With Homebrew, `brew install rust-wasm` and run `just latticefall-build`
+# (the build script injects the rust-wasm cargo config).
+
+[build]
+jobs = 8

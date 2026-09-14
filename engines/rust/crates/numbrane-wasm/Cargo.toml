@@ -1,0 +1,18 @@
+[package]
+name = "numbrane-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NUMBRANE WASM bridge (LATTICEFALL particle sim)"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+numbrane-core = { path = "../numbrane-core" }
+wasm-bindgen = "0.2"
+
+[features]
+default = []
+# Marker feature for wasm-targeted builds (documentation / CI gating).
+wasm = []
