@@ -247,5 +247,23 @@ export async function createReactionDiffusionPiece(
       gl.deleteFramebuffer(a.fbo);
       gl.deleteFramebuffer(b.fbo);
     },
+    exportState() {
+      // Readback not available without sync read — return seed metadata only.
+      // Studio IndexedDB capture uses recipe; GPU state reload uses seedArtifact URL.
+      return { arrays: {}, shapes: {}, json: { seed, simW, simH, kind: "rd" } };
+    },
+    importState(s: {
+      arrays: Record<string, Float32Array>;
+      shapes: Record<string, number[]>;
+      json?: Record<string, unknown>;
+    }) {
+      const U = s.arrays.U;
+      const V = s.arrays.V;
+      if (!U || !V) return;
+      const shape = s.shapes.U ?? s.shapes.V;
+      const h = shape?.[0] ?? simH;
+      const w = shape?.[1] ?? Math.floor(U.length / Math.max(h, 1));
+      uploadState(U, V, w, h);
+    },
   };
 }

@@ -13,7 +13,9 @@
     "test:e2e": "playwright test",
     "test:latticefall": "vitest run tests/latticefall.test.ts tests/latticefall_contract.test.ts",
     "test:live": "vitest run tests/live_transport.test.ts tests/live_audio.test.ts tests/live_audio_path.test.ts tests/live_midi.test.ts tests/live_modulation.test.ts tests/live_set.test.ts tests/live_smoke.test.ts tests/live_seed.test.ts",
-    "dev:live": "vite --open /live.html?set=pfl-default"
+    "dev:live": "vite --open /live.html?set=pfl-default",
+    "dev:studio": "vite --open /studio.html",
+    "test:studio": "vitest run tests/studio.test.ts"
   },
   "dependencies": {
     "tone": "^14.8.49",

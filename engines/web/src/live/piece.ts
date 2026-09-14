@@ -43,6 +43,16 @@ export type LivePiece = {
   getBaseParameters(): Record<string, number>;
   getTelemetry(): LiveTelemetry;
   dispose(): void;
+  exportState?: () => {
+    arrays?: Record<string, Float32Array>;
+    shapes?: Record<string, number[]>;
+    json?: Record<string, unknown>;
+  };
+  importState?: (s: {
+    arrays: Record<string, Float32Array>;
+    shapes: Record<string, number[]>;
+    json?: Record<string, unknown>;
+  }) => void;
 };
 
 export type LivePieceFactory = (gl: WebGL2RenderingContext) => LivePiece;
