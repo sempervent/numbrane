@@ -297,18 +297,66 @@ ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
 [group('ci')]
-ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke
     @echo "ci ok"
 
 # ── pieces / clean ───────────────────────────────────────────────────
 
 [group('pieces')]
-pieces:
-    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py pieces
+render piece seed="42" width="1920" height="1080" frame="0" format="png":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py render {{piece}} --seed {{seed}} --width {{width}} --height {{height}} --frame {{frame}} --format {{format}}
 
 [group('pieces')]
-render piece seed="42":
-    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py render {{piece}} --seed {{seed}}
+gallery:
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py gallery --output ../../artifacts/gallery
+
+[group('pieces')]
+seed-test:
+    cd "{{root}}/engines/python" && uv run pytest tests/test_seeds.py -q
+
+[group('pieces')]
+render-test: seed-test
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/python"
+    uv run python ../../tools/numbrane_cli.py render geometry/seed-of-life --seed 42 --width 512 --height 512 --format svg -o ../../artifacts/seed-of-life.svg
+    uv run python ../../tools/numbrane_cli.py render reaction-diffusion/reaction-diffusion --seed 42 --width 128 --height 128 --frame 80 -o ../../artifacts/rd-frame80.png
+    uv run python ../../tools/numbrane_cli.py render fractals/escape-time --seed 42 --width 256 --height 256 -o ../../artifacts/escape.png
+    uv run python ../../tools/numbrane_cli.py seed create reaction-diffusion/reaction-diffusion --seed 42 --frame 40 --width 64 --height 64 -o ../../artifacts/seeds/rd-42
+    uv run python ../../tools/numbrane_cli.py seed continue ../../artifacts/seeds/rd-42 --steps 20 -o ../../artifacts/seeds/rd-42-cont
+    uv run python ../../tools/numbrane_cli.py seed create growth/differential-growth --seed 7 --frame 30 --width 128 --height 128 -o ../../artifacts/seeds/dg-7
+    uv run python ../../tools/numbrane_cli.py seed continue ../../artifacts/seeds/dg-7 --steps 10 -o ../../artifacts/seeds/dg-7-cont
+    uv run python ../../tools/numbrane_cli.py seed inspect ../../artifacts/seeds/rd-42 >/dev/null
+    uv run python ../../tools/numbrane_cli.py seed from-raster ../../artifacts/rd-frame80.png --transform nutrient -o ../../artifacts/seeds/from-raster-rd
+    echo "render-test ok"
+
+[group('pieces')]
+explore piece="fractals/strange-attractors" seeds="1,42,137":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py explore {{piece}} --seeds {{seeds}}
+
+[group('pieces')]
+seed-create piece seed="42" frame="100" width="256" height="256":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py seed create {{piece}} --seed {{seed}} --frame {{frame}} --width {{width}} --height {{height}}
+
+[group('pieces')]
+seed-continue artifact steps="50":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py seed continue {{artifact}} --steps {{steps}}
+
+[group('pieces')]
+pieces-test: render-test
+    @echo "pieces-test ok"
+
+[group('pieces')]
+gallery-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/python"
+    uv run python ../../tools/numbrane_cli.py gallery --seeds 42 --size 256 --frame 60 --pieces geometry/seed-of-life,reaction-diffusion/reaction-diffusion --output ../../artifacts/gallery-smoke
+    echo "gallery-smoke ok"
+
+[group('pieces')]
+pieces:
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py pieces
 
 [group('clean')]
 clean:

@@ -29,8 +29,8 @@ export {
   applyModToBase,
 } from "./modulation";
 export { Compositor } from "./compositor";
-export { createShaderPiece } from "./pieces/registry";
-export { pieceMode, LIVE_PIECE_IDS } from "./pieces/pieceModes";
+export { createLivePiece, createShaderPiece } from "./pieces/registry";
+export { pieceMode, pieceSubmode, LIVE_PIECE_IDS } from "./pieces/pieceModes";
 export {
   PerformanceRecorder,
   PerformanceReplayer,

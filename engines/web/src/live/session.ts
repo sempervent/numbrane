@@ -4,7 +4,7 @@
 
 import { LiveRuntime } from "./runtime";
 import { Compositor } from "./compositor";
-import { createShaderPiece } from "./pieces/registry";
+import { createLivePiece } from "./pieces/registry";
 import { LIVE_PIECE_IDS } from "./pieces/pieceModes";
 import { LiveAudioInput } from "./inputs/audioInput";
 import {
@@ -163,7 +163,7 @@ export class LiveSession {
     this.canvas.height = h;
 
     for (const layer of scene.layers) {
-      const piece = await createShaderPiece(gl, layer.piece);
+      const piece = await createLivePiece(gl, layer.piece);
       const seed = layer.seed ?? this.runtime.getSeed();
       piece.initialize({ piece: layer.piece }, seed);
       piece.resize(w, h);
@@ -633,6 +633,10 @@ export class LiveSession {
       latencyMs: this.audio.latencyMs,
       ...extra,
     });
+  }
+
+  setSeed(seed: number): void {
+    this.runtime.setSeed(seed);
   }
 
   async dispose(): Promise<void> {

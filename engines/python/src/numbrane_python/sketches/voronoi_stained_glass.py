@@ -4,7 +4,6 @@ import numpy as np
 from pydantic import BaseModel, Field
 from numbrane_python.core.ctx import RenderContext
 from numbrane_python.core.render_result import RenderResult
-from numbrane_python.fields.scalar import NoiseField
 from numbrane_python.render.canvas import Canvas
 from numbrane_python.render.palettes import get_palette, gradient_map
 from numbrane_python.render.postfx import apply_vignette, apply_bloom
@@ -40,30 +39,27 @@ def render(config: VoronoiStainedGlassConfig, ctx: RenderContext) -> RenderResul
     layer = canvas.create_layer("main")
 
     # Create coordinate grids
-    y, x = np.ogrid[: ctx.height, : ctx.width]
-    x_norm = x / ctx.width
-    y_norm = y / ctx.height
-    coords = np.stack([x_norm, y_norm], axis=-1)
+    yy, xx = np.mgrid[0 : ctx.height, 0 : ctx.width]
+    x_norm = xx / max(ctx.width, 1)
+    y_norm = yy / max(ctx.height, 1)
 
     # Generate Voronoi points
     rng = ctx.rng.generator
     points = np.array([[rng.uniform(0, 1), rng.uniform(0, 1)] for _ in range(config.num_points)])
 
-    # Compute Voronoi diagram (simplified - distance to nearest point)
+    # Compute Voronoi diagram (distance to nearest point)
     voronoi = np.zeros((ctx.height, ctx.width))
     cell_ids = np.zeros((ctx.height, ctx.width), dtype=int)
 
-    for i in range(ctx.height):
-        for j in range(ctx.width):
-            dists = np.sqrt((x_norm[i, j] - points[:, 0]) ** 2 + (y_norm[i, j] - points[:, 1]) ** 2)
-            nearest = np.argmin(dists)
-            voronoi[i, j] = dists[nearest]
-            cell_ids[i, j] = nearest
+    # Vectorized nearest-site for modest point counts
+    flat = np.stack([x_norm.ravel(), y_norm.ravel()], axis=1)
+    dists = ((flat[:, None, :] - points[None, :, :]) ** 2).sum(axis=2)
+    nearest = np.argmin(dists, axis=1)
+    cell_ids = nearest.reshape(ctx.height, ctx.width)
+    voronoi = np.sqrt(dists[np.arange(dists.shape[0]), nearest]).reshape(ctx.height, ctx.width)
 
-    # Add noise variation
-    noise_field = NoiseField(scale=config.noise_scale, seed=ctx.rng.seed)
-    noise = noise_field.sample(x_norm, y_norm)
-    voronoi += noise * 0.1
+    # Soft cell shading without 3D noise (stable at gallery sizes)
+    voronoi = voronoi / max(float(voronoi.max()), 1e-6)
 
     # Map to colors
     palette_colors = get_palette(config.palette)
