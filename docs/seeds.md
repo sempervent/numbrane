@@ -44,11 +44,22 @@ Continuation of **reaction-diffusion** and **slime-mold** advances the same stru
 
 Raster previews can be transformed into nutrient maps, emission densities, or displacement fields for further generative use (`numbrane_python.seeds.raster_maps`).
 
-## Gallery
+## Gallery & explore
 
 ```bash
 just gallery
 just gallery-smoke
+numbrane explore fractals/strange-attractors --seeds 1,42,137,2026
 ```
 
-Outputs under `artifacts/gallery` (gitignored).
+Outputs under `artifacts/` (gitignored).
+
+## LIVE
+
+Optional: pass a Seed Artifact manifest URL into LIVE:
+
+```text
+/live.html?set=pfl-default&seed=/path-or-url/to/manifest.json
+```
+
+LIVE applies recipe seed/parameters; structured simulation continuation remains via `numbrane seed continue`.
