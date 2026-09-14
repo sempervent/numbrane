@@ -121,10 +121,22 @@ export class LiveSession {
   async init(): Promise<void> {
     await this.compositor.init();
     this.applyResolution(this.resolution);
+    this.audio.onStatusChange = () => this.emitStatus();
+    // MIDI is optional — do not request access on startup.
+    this.emitStatus({
+      midiOk: false,
+      midiEnabled: false,
+      audioStatus: this.audio.statusMessage,
+    });
+  }
+
+  /** Optional Web MIDI enable (never required for performance). */
+  async enableMidi(): Promise<{ ok: boolean; error?: string }> {
     const midi = await this.midi.init();
     this.midi.onMessage = (msg, deviceId) => this.handleMidi(msg, deviceId);
     this.midi.onDevicesChanged = () => this.emitStatus();
-    this.emitStatus({ midiOk: midi.ok, midiError: midi.error });
+    this.emitStatus({ midiOk: midi.ok, midiEnabled: midi.ok, midiError: midi.error });
+    return midi;
   }
 
   async loadSet(set: SetDef): Promise<void> {
@@ -609,10 +621,14 @@ export class LiveSession {
       scene: this.runtime.getScene()?.id,
       sceneIndex: this.runtime.getSceneIndex(),
       set: this.runtime.getSet()?.set_id,
+      setName: this.runtime.getSet()?.name,
       blackout: this.runtime.isBlackout(),
       recording: this.recorder.isRecording(),
       transport: this.runtime.transport.getSnapshot(),
       audioActive: this.audio.isActive(),
+      audioStatus: this.audio.statusMessage,
+      audioDevice: this.audio.getSelectedDeviceId(),
+      audioPermission: this.audio.status,
       midiDevices: this.midi.listDevices(),
       latencyMs: this.audio.latencyMs,
       ...extra,

@@ -167,6 +167,12 @@ function bindKeys(session: LiveSession): void {
   });
 }
 
+function section(title: string): HTMLElement {
+  const wrap = el("section", { class: "section" });
+  wrap.appendChild(el("h2", {}, title));
+  return wrap;
+}
+
 function mountUi(
   root: HTMLElement,
   session: LiveSession,
@@ -177,30 +183,105 @@ function mountUi(
   root.appendChild(el("h1", {}, "NUMBRANE LIVE"));
   root.appendChild(el("p", { class: "sub" }, set.name));
 
-  const status = el("pre", { id: "status" }, "…");
-  root.appendChild(status);
+  const runtimeStatus = el("pre", { id: "runtime-status", class: "runtime" }, "No audio input");
+  root.appendChild(runtimeStatus);
 
+  // ── Audio (primary) ─────────────────────────────────────────────
+  const audioSec = section("Audio");
   const meters = el("div", { class: "meters" });
-  const energyBar = el("div", { class: "bar" });
-  meters.appendChild(el("label", {}, "energy"));
+  const energyBar = el("div", { class: "bar", id: "meter-energy" });
+  meters.appendChild(el("label", {}, "input level"));
   meters.appendChild(energyBar);
-  root.appendChild(meters);
+  audioSec.appendChild(meters);
 
+  const audioSel = el("select", { id: "audio-device" }) as HTMLSelectElement;
+  audioSel.appendChild(el("option", { value: "" }, "Browser default input"));
+  audioSec.appendChild(el("label", {}, "Input device"));
+  audioSec.appendChild(audioSel);
+
+  const audioStatus = el("p", { class: "audio-status", id: "audio-status" }, "No audio input");
+  audioSec.appendChild(audioStatus);
+
+  const refreshDevices = async () => {
+    const devices = await session.audio.listDevices();
+    const cur = audioSel.value;
+    audioSel.innerHTML = "";
+    audioSel.appendChild(el("option", { value: "" }, "Browser default input"));
+    for (const d of devices) {
+      audioSel.appendChild(el("option", { value: d.deviceId }, d.label));
+    }
+    if (Array.from(audioSel.options).some((o) => o.value === cur)) audioSel.value = cur;
+  };
+
+  const startAudio = async () => {
+    const r = await session.audio.start(audioSel.value || undefined);
+    await refreshDevices();
+    if (r.ok) {
+      audioStatus.textContent = session.audio.statusMessage;
+    } else {
+      audioStatus.textContent = "No audio input";
+    }
+  };
+
+  const audioBtn = el("button", { type: "button", class: "primary" }, "Enable microphone / audio");
+  audioBtn.addEventListener("click", () => void startAudio());
+  audioSec.appendChild(audioBtn);
+
+  audioSel.addEventListener("change", () => {
+    if (session.audio.isActive() || session.audio.status === "lost") {
+      void startAudio();
+    }
+  });
+
+  const reconnectBtn = el("button", { type: "button" }, "Reconnect input");
+  reconnectBtn.addEventListener("click", async () => {
+    const r = await session.audio.reconnect();
+    audioStatus.textContent = r.ok ? session.audio.statusMessage : "No audio input";
+    await refreshDevices();
+  });
+  audioSec.appendChild(reconnectBtn);
+  session.audio.watchDevices(() => void refreshDevices());
+  root.appendChild(audioSec);
+
+  // ── Set / Scene ─────────────────────────────────────────────────
+  const setSec = section("Set / Scene");
+  setSec.appendChild(el("p", { class: "muted" }, `Set: ${set.name} (${set.set_id})`));
   const sceneList = el("div", { class: "scenes" });
   set.scenes.forEach((s, i) => {
     const b = el("button", { type: "button", "data-scene": s.id }, `${i + 1}. ${s.name}`);
     b.addEventListener("click", () => void session.gotoScene(s.id));
     sceneList.appendChild(b);
   });
-  root.appendChild(sceneList);
-
-  const row = el("div", { class: "row" });
-  const mkBtn = (label: string, fn: () => void) => {
+  setSec.appendChild(sceneList);
+  const nav = el("div", { class: "row" });
+  const mkBtn = (parent: HTMLElement, label: string, fn: () => void) => {
     const b = el("button", { type: "button" }, label);
     b.addEventListener("click", fn);
-    row.appendChild(b);
+    parent.appendChild(b);
   };
-  mkBtn("▶/■", () => {
+  mkBtn(nav, "Prev", () => void session.gotoScene(session.runtime.getSceneIndex() - 1));
+  mkBtn(nav, "Next", () => void session.gotoScene(session.runtime.getSceneIndex() + 1));
+  mkBtn(nav, "Blackout", () => session.runtime.setBlackout(!session.runtime.isBlackout()));
+  mkBtn(nav, "Panic", () => session.panic());
+  setSec.appendChild(nav);
+  root.appendChild(setSec);
+
+  // ── Transport (internal default) ────────────────────────────────
+  const transportSec = section("Transport");
+  transportSec.appendChild(
+    el("p", { class: "muted" }, "Internal BPM by default. Tempo is optional for audio-reactive visuals."),
+  );
+  const bpm = el("input", {
+    type: "number",
+    value: String(set.bpm ?? 120),
+    min: "40",
+    max: "240",
+  }) as HTMLInputElement;
+  bpm.addEventListener("change", () => session.runtime.transport.setBpm(Number(bpm.value)));
+  transportSec.appendChild(el("label", {}, "BPM"));
+  transportSec.appendChild(bpm);
+  const tRow = el("div", { class: "row" });
+  mkBtn(tRow, "▶/■", () => {
     const t = session.runtime.transport;
     if (t.getSnapshot().playing) t.stop();
     else {
@@ -208,11 +289,26 @@ function mountUi(
       t.start();
     }
   });
-  mkBtn("Prev", () => void session.gotoScene(session.runtime.getSceneIndex() - 1));
-  mkBtn("Next", () => void session.gotoScene(session.runtime.getSceneIndex() + 1));
-  mkBtn("Blackout", () => session.runtime.setBlackout(!session.runtime.isBlackout()));
-  mkBtn("Panic", () => session.panic());
-  mkBtn("Record", () => {
+  mkBtn(tRow, "Tap", () => session.runtime.transport.tap(performance.now()));
+  transportSec.appendChild(tRow);
+  root.appendChild(transportSec);
+
+  // ── Visuals ─────────────────────────────────────────────────────
+  const visSec = section("Visuals");
+  const quality = el("select") as HTMLSelectElement;
+  for (const q of ["low", "medium", "high", "ultra"] as QualityProfile[]) {
+    quality.appendChild(el("option", { value: q }, q));
+  }
+  quality.value = "high";
+  quality.addEventListener("change", () => session.setQuality(quality.value as QualityProfile));
+  visSec.appendChild(el("label", {}, "Quality"));
+  visSec.appendChild(quality);
+  root.appendChild(visSec);
+
+  // ── Recording ───────────────────────────────────────────────────
+  const recSec = section("Recording");
+  const recRow = el("div", { class: "row" });
+  mkBtn(recRow, "Record", () => {
     const stopped = session.toggleRecord();
     if (stopped) {
       const blob = new Blob([serializeRecording(stopped)], { type: "application/json" });
@@ -222,68 +318,68 @@ function mountUi(
       a.click();
     }
   });
-  mkBtn("Snapshot", () => {
+  mkBtn(recRow, "Snapshot", () => {
     const a = document.createElement("a");
     a.href = canvas.toDataURL("image/png");
     a.download = `numbrane-live-${Date.now()}.png`;
     a.click();
   });
-  root.appendChild(row);
+  recSec.appendChild(recRow);
+  root.appendChild(recSec);
 
-  const audioSel = el("select", { id: "audio-device" }) as HTMLSelectElement;
-  audioSel.appendChild(el("option", { value: "" }, "— audio input —"));
-  root.appendChild(el("label", {}, "Audio"));
-  root.appendChild(audioSel);
-  const audioBtn = el("button", { type: "button" }, "Enable audio");
-  audioBtn.addEventListener("click", async () => {
-    const devices = await session.audio.listDevices();
-    audioSel.innerHTML = "";
-    audioSel.appendChild(el("option", { value: "" }, "default"));
-    for (const d of devices) {
-      audioSel.appendChild(el("option", { value: d.deviceId }, d.label));
-    }
-    const r = await session.audio.start(audioSel.value || undefined);
-    status.textContent = r.ok
-      ? status.textContent + "\naudio ok"
-      : `audio: ${r.error ?? "denied"} (continuing without input)`;
-  });
-  root.appendChild(audioBtn);
-
-  const learnBtn = el("button", { type: "button" }, "MIDI Learn → next scene");
-  learnBtn.addEventListener("click", () => {
-    session.midiMapper.startLearn("action.next_scene", "trigger");
-    learnBtn.textContent = "Move a control…";
-  });
-  root.appendChild(learnBtn);
-
-  const bpm = el("input", { type: "number", value: "120", min: "40", max: "240" }) as HTMLInputElement;
-  bpm.addEventListener("change", () => session.runtime.transport.setBpm(Number(bpm.value)));
-  root.appendChild(el("label", {}, "BPM"));
-  root.appendChild(bpm);
-  const tap = el("button", { type: "button" }, "Tap");
-  tap.addEventListener("click", () => session.runtime.transport.tap(performance.now()));
-  root.appendChild(tap);
-
-  const quality = el("select") as HTMLSelectElement;
-  for (const q of ["low", "medium", "high", "ultra"] as QualityProfile[]) {
-    quality.appendChild(el("option", { value: q }, q));
-  }
-  quality.value = "high";
-  quality.addEventListener("change", () => session.setQuality(quality.value as QualityProfile));
-  root.appendChild(el("label", {}, "Quality"));
-  root.appendChild(quality);
-
+  // ── Output ──────────────────────────────────────────────────────
+  const outSec = section("Output");
+  outSec.appendChild(
+    el(
+      "p",
+      { class: "muted" },
+      "Fullscreen on another display, or OBS Browser Source (output only — not an audio path).",
+    ),
+  );
   const res = el("select") as HTMLSelectElement;
   for (const r of ["1920x1080", "3840x2160", "1080x1920", "1080x1080"] as ResolutionPreset[]) {
     res.appendChild(el("option", { value: r }, r));
   }
   res.addEventListener("change", () => session.applyResolution(res.value as ResolutionPreset));
-  root.appendChild(el("label", {}, "Resolution"));
-  root.appendChild(res);
+  outSec.appendChild(el("label", {}, "Resolution"));
+  outSec.appendChild(res);
+  const outLink = el("a", {
+    href: "/live-output.html?set=pfl-default",
+    target: "_blank",
+    rel: "noopener",
+  }, "Open OBS / display output");
+  outSec.appendChild(outLink);
+  root.appendChild(outSec);
+
+  // ── Optional MIDI ───────────────────────────────────────────────
+  const midiSec = section("Optional external control (MIDI)");
+  midiSec.appendChild(
+    el(
+      "p",
+      { class: "muted" },
+      "Not required. Enable only if you want MIDI Learn or optional MIDI Clock.",
+    ),
+  );
+  const midiStatus = el("p", { class: "muted", id: "midi-status" }, "MIDI off");
+  midiSec.appendChild(midiStatus);
+  const midiEnable = el("button", { type: "button" }, "Enable MIDI (optional)");
+  midiEnable.addEventListener("click", async () => {
+    const r = await session.enableMidi();
+    midiStatus.textContent = r.ok
+      ? `MIDI on · ${session.midi.listDevices().length} device(s)`
+      : `MIDI unavailable · ${r.error ?? "continuing without MIDI"}`;
+  });
+  midiSec.appendChild(midiEnable);
+  const learnBtn = el("button", { type: "button" }, "MIDI Learn → next scene");
+  learnBtn.addEventListener("click", () => {
+    session.midiMapper.startLearn("action.next_scene", "trigger");
+    learnBtn.textContent = "Move a control…";
+  });
+  midiSec.appendChild(learnBtn);
+  root.appendChild(midiSec);
 
   const hud = el("pre", { id: "hud" }, "");
   root.appendChild(hud);
-
   root.appendChild(
     el(
       "p",
@@ -292,21 +388,49 @@ function mountUi(
     ),
   );
 
-  session.onStatus = (s) => {
-    status.textContent = JSON.stringify(s, null, 2);
+  const renderStatus = (s: Record<string, unknown>) => {
+    const audioLine = String(s.audioStatus ?? "No audio input");
+    audioStatus.textContent = audioLine;
+    runtimeStatus.textContent = [
+      `Audio: ${audioLine}`,
+      `Set: ${s.setName ?? s.set ?? "—"}`,
+      `Scene: ${s.scene ?? "—"}`,
+      `Transport: ${(s.transport as { source?: string; bpm?: number; playing?: boolean } | undefined)?.source ?? "internal"} · ${
+        (s.transport as { bpm?: number } | undefined)?.bpm ?? "—"
+      } BPM · ${
+        (s.transport as { playing?: boolean } | undefined)?.playing ? "playing" : "stopped"
+      }`,
+    ].join("\n");
   };
+
+  session.onStatus = (s) => renderStatus(s);
   session.onHud = (h) => {
     if (!session.showHud) {
       hud.textContent = "";
       return;
     }
-    hud.textContent = `FPS ${h.fps.toFixed(1)}  frame ${h.frameMs.toFixed(1)}ms  gl ${h.glMs.toFixed(1)}ms  audio ${h.audioMs.toFixed(1)}ms  layers ${h.layers}`;
+    const f = session.getFeatures();
+    hud.textContent = `FPS ${h.fps.toFixed(1)}  frame ${h.frameMs.toFixed(1)}ms  gl ${h.glMs.toFixed(1)}ms  audio-dsp ${h.audioMs.toFixed(1)}ms  layers ${h.layers}  energy ${f.energy.toFixed(2)}`;
   };
 
   setInterval(() => {
     const f = session.getFeatures();
-    energyBar.style.width = `${Math.round(f.energy * 100)}%`;
+    const active = session.audio.isActive();
+    energyBar.style.width = `${Math.round((active ? f.energy : 0) * 100)}%`;
+    if (!active && session.audio.status !== "active") {
+      energyBar.style.opacity = "0.35";
+    } else {
+      energyBar.style.opacity = "1";
+    }
   }, 50);
+
+  renderStatus({
+    audioStatus: session.audio.statusMessage,
+    set: set.set_id,
+    setName: set.name,
+    scene: session.runtime.getScene()?.id,
+    transport: session.runtime.transport.getSnapshot(),
+  });
 }
 
 async function main(): Promise<void> {

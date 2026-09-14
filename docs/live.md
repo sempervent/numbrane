@@ -1,12 +1,14 @@
 # NUMBRANE LIVE
 
-NUMBRANE LIVE is a real-time visual performance instrument. It turns generative pieces into layered, modulatable scenes driven by audio analysis, MIDI, and logical transport — for live music with Positive Feedback Loop and similar setups.
+NUMBRANE LIVE is a real-time visual performance instrument for Positive Feedback Loop and similar live music setups.
+
+Primary path:
 
 ```text
-live music / Ableton / instruments
+MacBook microphone (or any browser audio input)
             |
             v
-    audio + MIDI + transport
+       Web Audio analysis
             |
             v
        NUMBRANE LIVE
@@ -14,25 +16,25 @@ live music / Ableton / instruments
      generative scenes + modulation
             |
             v
-       OBS / display
+    display / optional OBS
 ```
+
+No Ableton, MIDI, DAW, or OBS is required. OBS is an optional output target only — it does not carry audio into NUMBRANE.
 
 No AI, ML, or external generative services. Analysis and visuals are algorithmic / procedural / human-controlled.
 
-## Launch
+## Startup
 
 ```bash
 just live
 ```
 
-Open the printed URL (default `http://127.0.0.1:5173/live.html`).
-
-Control UI loads the `pfl-default` Set. OBS-only output:
-
-```text
-http://127.0.0.1:5173/live-output.html?set=pfl-default
-http://127.0.0.1:5173/live-output.html?set=pfl-default&alpha=1&res=1920x1080&scene=collapse
-```
+1. Open the printed URL (`http://127.0.0.1:5173/live.html`).
+2. Allow microphone / audio access when the browser asks.
+3. Select an input (built-in mic, interface, mixer feed, or any OS-exposed input).
+4. Confirm the input meter moves.
+5. Perform with the loaded `pfl-default` Set (scenes via UI or ←/→).
+6. Optionally open the OBS / display output page, or fullscreen the canvas on another screen.
 
 ## Keyboard
 
@@ -51,18 +53,38 @@ http://127.0.0.1:5173/live-output.html?set=pfl-default&alpha=1&res=1920x1080&sce
 - **Layer** — piece instance with opacity, blend, parameters, modulation
 - **Scene** — composed layers + post FX + modulation
 - **Set** — ordered scenes for a performance (`pieces/live/<id>/set.json`)
-- **Cue** — scene/blackout/panic/record actions (MIDI-bindable)
-- **Transport** — logical BPM/beat/bar/phase (`internal` \| `MIDI Clock` \| `replay`)
+- **Cue** — scene/blackout/panic/record actions (keyboard / UI; optionally MIDI-bound)
+- **Transport** — logical BPM/beat/bar/phase. **Default: internal BPM.** Optional MIDI Clock. Audio reactivity does not require tempo.
 
 Art consumes logical `frame`, `t`, `dt`, `beat`, `bar`, `phase` — not wall clock.
 
+## Audio inputs
+
+Any device the browser lists after permission, including:
+
+- MacBook / MacBook Air built-in microphone
+- USB audio interface
+- mixer / interface feed
+- aggregate devices
+- OS loopback / virtual inputs when the OS exposes them as audio inputs
+
+NUMBRANE does not hard-code device names. Denied audio access is not a failure: visuals continue with internal transport and LFOs; audio modulators stay at neutral zero and the UI shows **No audio input**.
+
+## Optional external control (MIDI)
+
+MIDI Learn and MIDI Clock are optional advanced features. See `docs/midi.md`. The happy path never requires MIDI.
+
+## Output
+
+- Control UI + canvas on one display
+- Fullscreen / second display without OBS
+- Optional OBS Browser Source: see `docs/obs.md`
+
 ## Quality & resolution
 
-Manual profiles: `low` · `medium` · `high` · `ultra` (particles / sim / bloom cost).
+Manual profiles: `low` · `medium` · `high` · `ultra`.
 
 Presets: `1920x1080`, `3840x2160`, `1080x1920`, `1080x1080`.
-
-Target: 1080p @ 60 fps on ordinary desktops; usable at 30 fps on weaker hardware.
 
 ## Blackout & panic
 

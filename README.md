@@ -36,7 +36,7 @@ just latticefall-test && just latticefall-smoke
 
 ## NUMBRANE LIVE
 
-Realtime visual performance instrument (audio + MIDI + scenes → OBS):
+Realtime visual performance instrument (microphone / audio input → generative scenes; optional OBS output):
 
 ```bash
 just live              # control UI + PFL set
@@ -44,7 +44,7 @@ just live-pfl          # same, opens pfl-default
 just live-test && just live-smoke && just live-e2e
 ```
 
-See `docs/live.md`, `docs/midi.md`, `docs/obs.md`, `docs/audio-reactivity.md`.
+See `docs/live.md`, `docs/audio-reactivity.md`, `docs/obs.md`. MIDI is optional (`docs/midi.md`).
 
 ## Architecture
 

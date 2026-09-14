@@ -1,5 +1,6 @@
 /**
  * Live audio input device + AnalyserNode pipeline.
+ * Primary performance input for NUMBRANE LIVE (mic / interface / loopback).
  */
 
 import {
@@ -12,6 +13,13 @@ import {
 
 export type AudioDeviceInfo = { deviceId: string; label: string };
 
+export type AudioInputStatus =
+  | "inactive"
+  | "active"
+  | "denied"
+  | "unavailable"
+  | "lost";
+
 export class LiveAudioInput {
   private ctx: AudioContext | null = null;
   private stream: MediaStream | null = null;
@@ -21,8 +29,18 @@ export class LiveAudioInput {
   private features: AudioFeatures = emptyFeatures();
   private timeBuf: Float32Array | null = null;
   private freqBuf: Float32Array | null = null;
-  private startedAt = 0;
+  private selectedDeviceId: string | null = null;
+  private deviceListener: (() => void) | null = null;
+  status: AudioInputStatus = "inactive";
+  statusMessage = "No audio input";
   latencyMs = 0;
+  onStatusChange: ((status: AudioInputStatus, message: string) => void) | null = null;
+
+  private emitStatus(status: AudioInputStatus, message: string): void {
+    this.status = status;
+    this.statusMessage = message;
+    this.onStatusChange?.(status, message);
+  }
 
   async listDevices(): Promise<AudioDeviceInfo[]> {
     if (!navigator.mediaDevices?.enumerateDevices) return [];
@@ -31,20 +49,67 @@ export class LiveAudioInput {
       .filter((d) => d.kind === "audioinput")
       .map((d) => ({
         deviceId: d.deviceId,
-        label: d.label || `Audio input ${d.deviceId.slice(0, 6)}`,
+        label: d.label || `Audio input ${d.deviceId.slice(0, 6) || "…"}`,
       }));
   }
 
+  getSelectedDeviceId(): string | null {
+    return this.selectedDeviceId;
+  }
+
+  /** Watch device list changes (reconnect / reselection UI). */
+  watchDevices(onChange: (devices: AudioDeviceInfo[]) => void): void {
+    if (!navigator.mediaDevices) return;
+    this.unwatchDevices();
+    const handler = () => {
+      void this.listDevices().then(onChange);
+    };
+    navigator.mediaDevices.addEventListener("devicechange", handler);
+    this.deviceListener = () => {
+      navigator.mediaDevices.removeEventListener("devicechange", handler);
+    };
+  }
+
+  unwatchDevices(): void {
+    this.deviceListener?.();
+    this.deviceListener = null;
+  }
+
+  /**
+   * Request permission and start analysis.
+   * Pass no deviceId to use the browser default input (often the built-in mic).
+   */
   async start(deviceId?: string): Promise<{ ok: boolean; error?: string }> {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      this.emitStatus("unavailable", "No audio input");
+      return { ok: false, error: "getUserMedia unavailable" };
+    }
     try {
-      await this.stop();
+      await this.stop({ preserveStatus: true });
       const constraints: MediaStreamConstraints = {
         audio: deviceId
-          ? { deviceId: { exact: deviceId }, echoCancellation: false, noiseSuppression: false }
-          : { echoCancellation: false, noiseSuppression: false },
+          ? {
+              deviceId: { exact: deviceId },
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            }
+          : {
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            },
       };
       this.stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const track = this.stream.getAudioTracks()[0];
+      this.selectedDeviceId =
+        deviceId || track?.getSettings().deviceId || track?.label || "default";
+      track?.addEventListener("ended", () => {
+        this.analyser = null;
+        this.emitStatus("lost", "No audio input");
+      });
       this.ctx = new AudioContext();
+      if (this.ctx.state === "suspended") await this.ctx.resume();
       this.source = this.ctx.createMediaStreamSource(this.stream);
       this.analyser = this.ctx.createAnalyser();
       this.analyser.fftSize = 2048;
@@ -53,19 +118,25 @@ export class LiveAudioInput {
       this.timeBuf = new Float32Array(this.analyser.fftSize);
       this.freqBuf = new Float32Array(this.analyser.frequencyBinCount);
       this.state = createAnalyzerState();
-      this.startedAt = performance.now();
-      // Analysis window latency approximation
+      this.features = emptyFeatures();
       this.latencyMs = (this.analyser.fftSize / this.ctx.sampleRate) * 1000;
+      const label = track?.label || "default input";
+      this.emitStatus("active", label);
       return { ok: true };
     } catch (e) {
-      return {
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-      };
+      const msg = e instanceof Error ? e.message : String(e);
+      this.selectedDeviceId = null;
+      this.emitStatus("denied", "No audio input");
+      return { ok: false, error: msg };
     }
   }
 
-  async stop(): Promise<void> {
+  /** Try to resume the previously selected device after loss. */
+  async reconnect(): Promise<{ ok: boolean; error?: string }> {
+    return this.start(this.selectedDeviceId ?? undefined);
+  }
+
+  async stop(opts?: { preserveStatus?: boolean }): Promise<void> {
     this.source?.disconnect();
     this.analyser?.disconnect();
     this.stream?.getTracks().forEach((t) => t.stop());
@@ -74,15 +145,20 @@ export class LiveAudioInput {
     this.stream = null;
     this.source = null;
     this.analyser = null;
+    this.timeBuf = null;
+    this.freqBuf = null;
+    this.features = emptyFeatures();
+    if (!opts?.preserveStatus) {
+      this.emitStatus("inactive", "No audio input");
+    }
   }
 
-  /** Pull latest features; safe if not started. */
+  /** Pull latest features; safe if not started — returns neutral zeros. */
   poll(): AudioFeatures {
     if (!this.analyser || !this.ctx || !this.timeBuf || !this.freqBuf) {
-      return this.features;
+      return { ...this.features };
     }
     this.analyser.getFloatTimeDomainData(this.timeBuf as Float32Array<ArrayBuffer>);
-    // getFloatFrequencyData is dB; convert to linear-ish magnitudes
     const db = new Float32Array(this.freqBuf.length);
     this.analyser.getFloatFrequencyData(db as Float32Array<ArrayBuffer>);
     for (let i = 0; i < db.length; i++) {
@@ -103,12 +179,12 @@ export class LiveAudioInput {
     return { ...this.features };
   }
 
-  /** Inject features (tests / replay). */
+  /** Inject features (tests / replay). Does not require a live device. */
   inject(features: AudioFeatures): void {
     this.features = { ...features };
   }
 
   isActive(): boolean {
-    return this.analyser != null;
+    return this.analyser != null && this.status === "active";
   }
 }

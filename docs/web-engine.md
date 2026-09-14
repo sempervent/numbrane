@@ -14,7 +14,7 @@ Deterministic browser runtime:
 
 Entry: `live.html` / `live-output.html` → `src/live/`.
 
-Layered WebGL compositor, transport, Web MIDI, audio analysis, modulation matrix, PFL sets under `pieces/live/`.
+Layered WebGL compositor, internal transport, microphone/audio analysis, optional Web MIDI, modulation matrix, PFL sets under `pieces/live/`.
 
 ```bash
 just live

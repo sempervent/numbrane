@@ -1,6 +1,12 @@
-# OBS
+# OBS (optional output)
 
-Use NUMBRANE LIVE as an **OBS Browser Source**.
+OBS consumes NUMBRANE's rendered visuals. It is **not** part of the audio-input path and does not connect Ableton (or any DAW) to NUMBRANE.
+
+```text
+NUMBRANE LIVE  →  OBS Browser Source  →  stream / record
+```
+
+You can also run NUMBRANE fullscreen on another display with no OBS.
 
 ## Output URL
 
@@ -24,7 +30,7 @@ Control UI is hidden; no cursor interaction is required.
 
 WebGL is created with `alpha: true` and `premultipliedAlpha: false`. Transparent mode clears to zero alpha so generated visuals can layer over camera footage in OBS.
 
-In OBS: Browser Source → enable **Shutdown source when not visible** as desired; set width/height to match `res`.
+In OBS: Browser Source → set width/height to match `res`.
 
 ## Recording video
 

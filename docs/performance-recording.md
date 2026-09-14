@@ -9,7 +9,7 @@ Instead, NUMBRANE LIVE records the **analyzed, normalized feature stream** that 
 - Base Set definition
 - Seed / fps
 - Transport-related control events
-- Scene cues and MIDI-mapped control events
+- Scene cues and optional MIDI-mapped control events
 - Parameter / mapping events
 - Normalized audio-feature frames (`energy`, bands, onset, …)
 

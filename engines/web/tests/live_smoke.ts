@@ -14,7 +14,6 @@ import {
   serializeRecording,
 } from "../src/live/recording/performance";
 import { emptyFeatures, type AudioFeatures } from "../src/live/inputs/audioAnalysis";
-import { parseMidiBytes, MidiMapper } from "../src/live/inputs/midi";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const set = JSON.parse(
@@ -51,15 +50,6 @@ export function runSmoke(seconds = 45): {
   const envs = new EnvelopeBank();
   envs.setDefs([{ id: "env.flash", kind: "pulse", attack: 0.01, decay: 0.15 }]);
   const mod = new ModulationMatrix();
-  const mapper = new MidiMapper();
-  mapper.bindings.push({
-    id: "n",
-    type: "note",
-    note: 60,
-    channel: 1,
-    target: "action.next_scene",
-    mode: "trigger",
-  });
 
   const recorder = new PerformanceRecorder();
   recorder.start(set, 42, 60, 0);
@@ -75,13 +65,9 @@ export function runSmoke(seconds = 45): {
     const feats = synthFeatures(frame.beat);
     if (feats.onset) envs.trigger("env.flash", frame.t);
 
-    // scene changes every 8 beats via fake MIDI
+    // Advance scenes on a fixed beat schedule (no MIDI required)
     if (i > 0 && i % (8 * 30) === 0) {
-      const msg = parseMidiBytes(new Uint8Array([0x90, 60, 100]));
-      if (msg) {
-        const ev = mapper.handle(msg);
-        if (ev.length) rt.nextScene();
-      }
+      rt.nextScene();
     }
 
     const scene = rt.getScene()!;
