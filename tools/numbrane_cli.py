@@ -258,9 +258,11 @@ def cmd_render(args: argparse.Namespace) -> int:
         else:
             config = kwargs
         result = mod.render(config, ctx)
-        image = getattr(result, "image", None) or getattr(result, "canvas", None)
+        image = getattr(result, "image", None)
+        if image is None:
+            image = getattr(result, "canvas", None)
         out = out.with_suffix(".png")
-        if hasattr(result, "save") and image is None:
+        if image is None and hasattr(result, "save"):
             result.save(out)
         else:
             _save_image(image, out)
