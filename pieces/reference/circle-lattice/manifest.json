@@ -1,0 +1,21 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/circle-lattice",
+  "name": "Circle Lattice",
+  "backend": "multi",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "notes": "Inspired by generative Seed of Life hex lattice."
+  },
+  "supported_artifacts": [
+    "geometry-ir",
+    "svg"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": false,
+    "interactive": false,
+    "audio": false
+  }
+}

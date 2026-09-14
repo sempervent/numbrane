@@ -1,0 +1,17 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/noise-landscape",
+  "name": "Noise Landscape (reference alias)",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": [
+    "png"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": false,
+    "interactive": false,
+    "audio": false
+  }
+}

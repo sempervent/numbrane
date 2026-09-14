@@ -1,0 +1,17 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "geometry/metatron",
+  "name": "Metatron Cube",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": [
+    "geometry-ir"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": false,
+    "interactive": false,
+    "audio": false
+  }
+}

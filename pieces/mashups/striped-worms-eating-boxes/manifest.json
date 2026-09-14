@@ -1,0 +1,17 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "mashups/striped-worms-eating-boxes",
+  "name": "Striped Worms Eating Boxes",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": [
+    "png"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": false,
+    "audio": false
+  }
+}

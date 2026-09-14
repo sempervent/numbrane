@@ -1,0 +1,20 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "audiovisual/nodes",
+  "name": "Audiovisual Nodes",
+  "backend": "web",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "notes": "Interactive WebGL + Tone.js nodes; Math.random replaced with NAP Rng; u_time from logical frame/fps."
+  },
+  "supported_artifacts": [
+    "json"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": true,
+    "audio": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "geometry/seed-of-life",
+  "backend": "python",
+  "seed": 1,
+  "parameters": {
+    "geom.radius": 1.0
+  },
+  "expected_artifacts": [
+    "geometry-ir"
+  ]
+}
