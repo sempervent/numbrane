@@ -297,7 +297,7 @@ ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
 [group('ci')]
-ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke
     @echo "ci ok"
 
 # ── pieces / clean ───────────────────────────────────────────────────

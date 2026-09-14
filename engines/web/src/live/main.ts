@@ -69,6 +69,29 @@ export async function bootLive(opts: {
   const sceneParam = params.get("scene");
   if (sceneParam) await session.gotoScene(sceneParam);
 
+  const seedUrl = params.get("seed") || params.get("seedArtifact");
+  if (seedUrl && seedUrl.endsWith(".json")) {
+    try {
+      const { fetchSeedManifest, applySeedToParams } = await import("./seedLoad");
+      const man = await fetchSeedManifest(seedUrl);
+      const mapped = applySeedToParams(man);
+      session.setSeed(mapped.seed ?? session.runtime.getSeed());
+      const scene = session.runtime.getScene();
+      if (scene) {
+        for (const layer of scene.layers) {
+          const piece = session.runtime.getPiece(layer.id);
+          if (!piece) continue;
+          for (const [k, v] of Object.entries(mapped)) {
+            if (k === "seed" || k === "frame") continue;
+            piece.setParameter(k, v);
+          }
+        }
+      }
+    } catch {
+      // optional — LIVE remains usable without seed artifact
+    }
+  }
+
   const resPreset = (params.get("res") as ResolutionPreset) || "1920x1080";
   session.applyResolution(resPreset);
 

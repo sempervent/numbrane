@@ -361,6 +361,33 @@ def cmd_seed_continue(args: argparse.Namespace) -> int:
     return 0
 
 
+
+def cmd_explore(args: argparse.Namespace) -> int:
+    """Deterministic seed variants for a piece (rule-based exploration)."""
+    seeds = [int(s) for s in args.seeds.split(",")]
+    out_dir = Path(args.output or ROOT / "artifacts" / "explore" / args.piece.replace("/", "_"))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for i, seed in enumerate(seeds):
+        ns = argparse.Namespace(
+            piece=args.piece,
+            seed=seed,
+            recipe=args.recipe,
+            width=args.size,
+            height=args.size,
+            frame=args.frame,
+            format="png",
+            output=str(out_dir / f"var_{i:02d}_s{seed}.png"),
+            quality="high",
+        )
+        if args.piece in GEOM_SVG_PIECES:
+            ns.format = "svg"
+            ns.output = str(out_dir / f"var_{i:02d}_s{seed}.svg")
+        print(f"explore {args.piece} seed={seed}")
+        cmd_render(ns)
+    print(out_dir)
+    return 0
+
+
 def cmd_gallery(args: argparse.Namespace) -> int:
     seeds = [int(s) for s in args.seeds.split(",")]
     pieces = args.pieces.split(",") if args.pieces else [
@@ -456,6 +483,15 @@ def main() -> int:
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--output", "-o")
     p.set_defaults(func=cmd_seed_continue)
+
+    p = sub.add_parser("explore", help="Deterministic seed variants for a piece")
+    p.add_argument("piece")
+    p.add_argument("--seeds", default="1,42,137,2026,999")
+    p.add_argument("--size", type=int, default=384)
+    p.add_argument("--frame", type=int, default=200)
+    p.add_argument("--recipe")
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_explore)
 
     p = sub.add_parser("gallery", help="Render a piece×seed contact sheet folder")
     p.add_argument("--seeds", default="1,42,137,2026")

@@ -635,6 +635,10 @@ export class LiveSession {
     });
   }
 
+  setSeed(seed: number): void {
+    this.runtime.setSeed(seed);
+  }
+
   async dispose(): Promise<void> {
     this.stopLoop();
     this.runtime.clearPieces();
