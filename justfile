@@ -303,12 +303,44 @@ ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test
 # ── pieces / clean ───────────────────────────────────────────────────
 
 [group('pieces')]
-pieces:
-    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py pieces
+render piece seed="42" width="1920" height="1080" frame="0" format="png":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py render {{piece}} --seed {{seed}} --width {{width}} --height {{height}} --frame {{frame}} --format {{format}}
 
 [group('pieces')]
-render piece seed="42":
-    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py render {{piece}} --seed {{seed}}
+gallery:
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py gallery --output ../../artifacts/gallery
+
+[group('pieces')]
+seed-test:
+    cd "{{root}}/engines/python" && uv run pytest tests/test_seeds.py -q
+
+[group('pieces')]
+render-test: seed-test
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/python"
+    uv run python ../../tools/numbrane_cli.py render geometry/seed-of-life --seed 42 --width 512 --height 512 --format svg -o ../../artifacts/seed-of-life.svg
+    uv run python ../../tools/numbrane_cli.py render reaction-diffusion/reaction-diffusion --seed 42 --width 128 --height 128 --frame 80 -o ../../artifacts/rd-frame80.png
+    uv run python ../../tools/numbrane_cli.py seed create reaction-diffusion/reaction-diffusion --seed 42 --frame 40 --width 64 --height 64 -o ../../artifacts/seeds/rd-42
+    uv run python ../../tools/numbrane_cli.py seed continue ../../artifacts/seeds/rd-42 --steps 20 -o ../../artifacts/seeds/rd-42-cont
+    uv run python ../../tools/numbrane_cli.py seed inspect ../../artifacts/seeds/rd-42 >/dev/null
+    echo "render-test ok"
+
+[group('pieces')]
+pieces-test: render-test
+    @echo "pieces-test ok"
+
+[group('pieces')]
+gallery-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/python"
+    uv run python ../../tools/numbrane_cli.py gallery --seeds 42 --size 256 --frame 60 --pieces geometry/seed-of-life,reaction-diffusion/reaction-diffusion --output ../../artifacts/gallery-smoke
+    echo "gallery-smoke ok"
+
+[group('pieces')]
+pieces:
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py pieces
 
 [group('clean')]
 clean:

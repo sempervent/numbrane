@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/seed-artifact.schema.json",
+  "title": "NUMBRANE Seed Artifact",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "artifact_version",
+    "piece_id",
+    "engine",
+    "seed",
+    "artifact_type",
+    "content_digest"
+  ],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "0.1.0" },
+    "artifact_version": { "type": "string", "const": "1" },
+    "piece_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
+    },
+    "piece_version": { "type": "string" },
+    "engine": {
+      "type": "string",
+      "enum": ["python", "web", "rust", "polyglot"]
+    },
+    "seed": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+    "frame": { "type": "integer", "minimum": 0 },
+    "tick": { "type": "integer", "minimum": 0 },
+    "width": { "type": "integer", "minimum": 1 },
+    "height": { "type": "integer", "minimum": 1 },
+    "artifact_type": {
+      "type": "string",
+      "enum": [
+        "geometry",
+        "scalar-field",
+        "vector-field",
+        "simulation-state",
+        "agent-state",
+        "parameter-state",
+        "palette",
+        "raster",
+        "complex-plane-state",
+        "world"
+      ]
+    },
+    "recipe": { "type": "object" },
+    "state_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["role", "path"],
+        "properties": {
+          "role": { "type": "string" },
+          "path": { "type": "string" },
+          "format": {
+            "type": "string",
+            "enum": ["json", "npy", "npz", "png", "svg", "bin"]
+          },
+          "dtype": { "type": "string" },
+          "shape": {
+            "type": "array",
+            "items": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "preview": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "png": { "type": "string" },
+        "svg": { "type": "string" }
+      }
+    },
+    "content_digest": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{16,64}$"
+    },
+    "created_at": { "type": "string" },
+    "notes": { "type": "string" }
+  }
+}

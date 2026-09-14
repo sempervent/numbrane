@@ -51,7 +51,8 @@ check-jsonschema --check-metaschema \
   spec/schema/geometry-ir.schema.json \
   spec/schema/artifact.schema.json \
   spec/schema/parameter.schema.json \
-  spec/schema/live-set.schema.json
+  spec/schema/live-set.schema.json \
+  spec/schema/seed-artifact.schema.json
 echo "json-schema metaschema: ok"
 
 echo "ok -- validation done"

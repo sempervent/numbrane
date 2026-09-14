@@ -14,14 +14,12 @@ just bootstrap       # install engine deps
 just precommit-install   # install pre-commit + pre-push hooks
 just ci-lite         # local lightweight CI
 just pieces          # list piece catalog
-just render particles/noodles seed=42
-just render landscape/noise-landscape seed=42
-just render geometry/seed-of-life seed=1
-just latticefall         # flagship LATTICEFALL (WebGL + WASM + Tone)
-just dev-web             # interactive WebGL/Tone engine
+just render geometry/seed-of-life seed=42 width=1024 height=1024 format=svg
+just gallery-smoke
+just seed-test && just render-test
 ```
 
-`just` is the **canonical** developer interface. `make` remains a temporary shim that delegates to `just`.
+Seed Artifacts persist structured generative state for stills and continuation — see `docs/seeds.md`.
 
 ## Flagship: LATTICEFALL
 

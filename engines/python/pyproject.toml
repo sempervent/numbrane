@@ -27,6 +27,7 @@ dev = ["pytest>=8.0", "ruff>=0.6", "jsonschema>=4.23"]
 
 [project.scripts]
 numbrane-python = "numbrane_python.cli.app:main"
+numbrane = "numbrane_python.cli.numbrane_main:main"
 
 [build-system]
 requires = ["hatchling"]

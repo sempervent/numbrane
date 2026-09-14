@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""NUMBRANE piece CLI — list, inspect, render (Python engine + geometry/landscape)."""
+"""NUMBRANE user CLI — pieces, render, seed artifacts, gallery."""
 
 from __future__ import annotations
 
@@ -32,6 +32,13 @@ SKETCH_MAP = {
     "mashups/striped-worms-eating-boxes": "mashups.striped_worms_eating_boxes",
 }
 
+GEOM_SVG_PIECES = {
+    "geometry/seed-of-life",
+    "geometry/metatron",
+    "reference/circle-lattice",
+    "geometry/circle-lattice",
+}
+
 
 def discover_manifests() -> list[dict]:
     pieces = []
@@ -44,12 +51,15 @@ def discover_manifests() -> list[dict]:
 
 def cmd_pieces(_: argparse.Namespace) -> int:
     rows = discover_manifests()
-    print(f"{'ID':40} {'ENGINE':8} {'DET':3} {'NAME'}")
-    print("-" * 80)
+    print(f"{'ID':40} {'ENGINE':8} {'STILL':5} {'RT':3} {'NAME'}")
+    print("-" * 90)
     for m in rows:
         caps = m.get("capabilities", {})
-        det = "Y" if caps.get("deterministic") else "N"
-        print(f"{m['piece_id']:40} {m.get('backend', '?'):8} {det:3} {m.get('name', '')}")
+        still = "Y" if caps.get("still") else "N"
+        rt = "Y" if caps.get("realtime") else "N"
+        print(
+            f"{m['piece_id']:40} {m.get('backend', '?'):8} {still:5} {rt:3} {m.get('name', '')}"
+        )
     print(f"\n{len(rows)} pieces")
     return 0
 
@@ -66,17 +76,14 @@ def cmd_inspect(args: argparse.Namespace) -> int:
 
 def _load_recipe(args: argparse.Namespace) -> dict:
     if args.recipe:
-        return json.loads(Path(args.recipe).read_text())
-    # find default recipe next to manifest
-    for m in discover_manifests():
-        if m["piece_id"] == args.piece:
+        recipe = json.loads(Path(args.recipe).read_text())
+    else:
+        recipe = None
+        for m in discover_manifests():
+            if m["piece_id"] != args.piece:
+                continue
             manifest_dir = ROOT / Path(m["_manifest_path"]).parent
-            candidates = [
-                manifest_dir / "recipe.json",
-                manifest_dir / "recipe.default.json",
-            ]
-            recipe = None
-            for recipe_path in candidates:
+            for recipe_path in (manifest_dir / "recipe.json", manifest_dir / "recipe.default.json"):
                 if recipe_path.exists():
                     recipe = json.loads(recipe_path.read_text())
                     break
@@ -86,20 +93,75 @@ def _load_recipe(args: argparse.Namespace) -> dict:
                     "piece_id": args.piece,
                     "backend": m.get("backend", "python"),
                     "seed": args.seed,
-                    "parameters": {"output.width": 256, "output.height": 256},
+                    "parameters": {},
                 }
-            recipe["seed"] = args.seed
-            return recipe
-    raise SystemExit(f"piece not found: {args.piece}")
+            break
+        if recipe is None:
+            raise SystemExit(f"piece not found: {args.piece}")
+    recipe["seed"] = args.seed
+    params = dict(recipe.get("parameters") or {})
+    if getattr(args, "width", None):
+        params["width"] = args.width
+        params["output.width"] = args.width
+    if getattr(args, "height", None):
+        params["height"] = args.height
+        params["output.height"] = args.height
+    if not params.get("width") and not params.get("output.width"):
+        params["width"] = params.get("output.width", 1920)
+        params["output.width"] = params["width"]
+    if not params.get("height") and not params.get("output.height"):
+        params["height"] = params.get("output.height", 1080)
+        params["output.height"] = params["height"]
+    recipe["parameters"] = params
+    if getattr(args, "frame", None) is not None:
+        recipe.setdefault("time", {})["frame"] = args.frame
+    return recipe
+
+
+def _save_image(image, out: Path) -> None:
+    from PIL import Image
+    import numpy as np
+
+    if isinstance(image, Image.Image):
+        image.save(out)
+        return
+    arr = np.asarray(image)
+    if arr.dtype != np.uint8:
+        if arr.max() <= 1.0:
+            arr = (arr * 255).clip(0, 255)
+        arr = arr.astype("uint8")
+    Image.fromarray(arr).save(out)
 
 
 def cmd_render(args: argparse.Namespace) -> int:
+    from numbrane_python.geometry.lattice import (
+        flower_of_life_centers,
+        geometry_ir_from_centers,
+        metatron_lines,
+        seed_of_life_centers,
+    )
+    from numbrane_python.landscape.noise_landscape import render_noise_landscape
+    from numbrane_python.nap.adapter import recipe_to_render_context
+    from numbrane_python.pieces.circle_lattice import generate as gen_lattice
+    from numbrane_python.seeds.svg_export import geometry_ir_to_svg
+    from numbrane_python.seeds.sim_state import (
+        simulate_reaction_diffusion,
+        simulate_slime,
+        _preview_from_field,
+    )
+
     recipe = _load_recipe(args)
     piece = args.piece
+    frame = int(getattr(args, "frame", 0) or 0)
+    fmt = (args.format or "png").lower()
     out = (
-        Path(args.output) if args.output else ROOT / "artifacts" / f"{piece.replace('/', '_')}.png"
+        Path(args.output)
+        if args.output
+        else ROOT / "artifacts" / f"{piece.replace('/', '_')}.{fmt}"
     )
     out.parent.mkdir(parents=True, exist_ok=True)
+    w = int(recipe["parameters"].get("width") or recipe["parameters"].get("output.width") or 1920)
+    h = int(recipe["parameters"].get("height") or recipe["parameters"].get("output.height") or 1080)
 
     if piece == "flagship/latticefall":
         from numbrane_python.pieces.latticefall import build_world
@@ -110,44 +172,60 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(out)
         return 0
 
-    from numbrane_python.geometry.lattice import (
-        flower_of_life_centers,
-        geometry_ir_from_centers,
-        metatron_lines,
-        seed_of_life_centers,
-    )
-    from numbrane_python.landscape.noise_landscape import render_noise_landscape
-    from numbrane_python.nap.adapter import recipe_to_render_context
-    from numbrane_python.pieces.circle_lattice import generate as gen_lattice
-
-    if piece in {"reference/circle-lattice", "geometry/circle-lattice"}:
-        ir = gen_lattice(recipe)
-        out = out.with_suffix(".json")
-        out.write_text(json.dumps(ir, indent=2))
+    if piece in GEOM_SVG_PIECES or piece in {
+        "reference/circle-lattice",
+        "geometry/circle-lattice",
+    }:
+        r = float(recipe.get("parameters", {}).get("geom.radius", 1.0))
+        if "seed-of-life" in piece:
+            ir = geometry_ir_from_centers(seed_of_life_centers(r), r)
+        elif "metatron" in piece:
+            centers = flower_of_life_centers(
+                r, levels=int(recipe.get("parameters", {}).get("geom.levels", 1))
+            )
+            ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
+        else:
+            ir = gen_lattice(recipe)
+        if fmt == "svg":
+            out = out.with_suffix(".svg")
+            out.write_text(geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8")
+        elif fmt == "json":
+            out = out.with_suffix(".json")
+            out.write_text(json.dumps(ir, indent=2))
+        else:
+            # rasterize SVG via cairo-free path: write SVG then also dump IR json sibling?
+            # Use simple PIL blank + note — prefer writing SVG when geometry
+            out_svg = out.with_suffix(".svg")
+            out_svg.write_text(geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8")
+            out = out.with_suffix(".json")
+            out.write_text(json.dumps(ir, indent=2))
+            print(out_svg)
         print(out)
         return 0
 
-    if piece == "geometry/seed-of-life":
-        r = float(recipe.get("parameters", {}).get("geom.radius", 1.0))
-        ir = geometry_ir_from_centers(seed_of_life_centers(r), r)
-        out = out.with_suffix(".json")
-        out.write_text(json.dumps(ir, indent=2))
+    if piece == "reaction-diffusion/reaction-diffusion":
+        iters = frame if frame > 0 else int(recipe["parameters"].get("iterations", 600))
+        iters = min(iters, 4000)
+        u, v = simulate_reaction_diffusion(w, h, args.seed, iterations=iters)
+        img = _preview_from_field(v)
+        out = out.with_suffix(".png")
+        _save_image(img, out)
         print(out)
         return 0
 
-    if piece == "geometry/metatron":
-        r = float(recipe.get("parameters", {}).get("geom.radius", 1.0))
-        centers = flower_of_life_centers(
-            r, levels=int(recipe.get("parameters", {}).get("geom.levels", 1))
-        )
-        ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
-        out = out.with_suffix(".json")
-        out.write_text(json.dumps(ir, indent=2))
+    if piece == "growth/slime-mold":
+        steps = frame if frame > 0 else int(recipe["parameters"].get("steps", 300))
+        steps = min(steps, 1200)
+        _agents, trail = simulate_slime(w, h, args.seed, steps=steps)
+        img = _preview_from_field(trail / max(float(trail.max()), 1e-6))
+        out = out.with_suffix(".png")
+        _save_image(img, out)
         print(out)
         return 0
 
     if piece in {"landscape/noise-landscape", "reference/noise-landscape"}:
         img = render_noise_landscape(recipe)
+        out = out.with_suffix(".png")
         img.save(out)
         print(out)
         return 0
@@ -156,40 +234,27 @@ def cmd_render(args: argparse.Namespace) -> int:
         import importlib
 
         mod = importlib.import_module(f"numbrane_python.sketches.{SKETCH_MAP[piece]}")
-        ctx, kwargs = recipe_to_render_context(recipe)
-        # Filter kwargs to config model fields when possible
+        ctx, kwargs = recipe_to_render_context(recipe, frame=frame)
         config_cls = getattr(mod, next(n for n in dir(mod) if n.endswith("Config")), None)
         if config_cls is not None:
             fields = getattr(config_cls, "model_fields", None) or getattr(
                 config_cls, "__fields__", {}
             )
             filtered = {k: v for k, v in kwargs.items() if k in fields}
-            # ensure required size/seed
-            for k in ("seed", "width", "height"):
-                if k in fields and k in kwargs:
-                    filtered[k] = kwargs[k]
+            if frame > 0 and "iterations" in fields:
+                filtered["iterations"] = frame
+            if frame > 0 and "steps" in fields:
+                filtered["steps"] = frame
             config = config_cls(**filtered)
         else:
             config = kwargs
         result = mod.render(config, ctx)
-        # RenderResult typically has image attribute
-        from PIL import Image
-        import numpy as np
-
-        image = getattr(result, "image", None)
-        if image is None:
-            image = getattr(result, "canvas", None)
-        if isinstance(image, Image.Image):
-            image.save(out)
-        elif hasattr(result, "save"):
+        image = getattr(result, "image", None) or getattr(result, "canvas", None)
+        out = out.with_suffix(".png")
+        if hasattr(result, "save") and image is None:
             result.save(out)
         else:
-            arr = np.asarray(image if image is not None else result)
-            if arr.dtype != np.uint8:
-                if arr.max() <= 1.0:
-                    arr = (arr * 255).clip(0, 255)
-                arr = arr.astype("uint8")
-            Image.fromarray(arr).save(out)
+            _save_image(image, out)
         print(out)
         return 0
 
@@ -199,13 +264,142 @@ def cmd_render(args: argparse.Namespace) -> int:
         or piece.startswith("reference/escape")
     ):
         print(
-            f"Piece {piece} is web-engine hosted. Launch with: just dev-web",
+            f"Piece {piece} is web-engine hosted for interactive preview. "
+            f"Use Seed Artifact / LIVE for realtime; offline stills use sibling engines when wired.",
             file=sys.stderr,
         )
         return 0
 
     print(f"No python renderer wired for {piece}", file=sys.stderr)
     return 1
+
+
+def cmd_seed_create(args: argparse.Namespace) -> int:
+    from numbrane_python.seeds import create_seed_artifact, default_library_root
+
+    recipe = _load_recipe(args)
+    out = Path(args.output) if args.output else default_library_root() / (
+        f"{args.piece.replace('/', '-')}-s{args.seed}-f{args.frame}"
+    )
+    art = create_seed_artifact(
+        args.piece,
+        recipe,
+        output=out,
+        frame=args.frame,
+        width=args.width,
+        height=args.height,
+    )
+    print(art.root)
+    print(f"digest={art.content_digest} type={art.artifact_type} frame={art.frame}")
+    return 0
+
+
+def cmd_seed_list(args: argparse.Namespace) -> int:
+    from numbrane_python.seeds.artifact import default_library_root, list_artifacts, load_artifact
+
+    root = Path(args.library) if args.library else default_library_root()
+    arts = list_artifacts(root)
+    if not arts:
+        print(f"(empty) {root}")
+        return 0
+    for p in arts:
+        a = load_artifact(p)
+        print(f"{p.name:40} {a.piece_id:36} f={a.frame:<6} {a.artifact_type}")
+    return 0
+
+
+def cmd_seed_inspect(args: argparse.Namespace) -> int:
+    from numbrane_python.seeds import load_artifact
+
+    art = load_artifact(Path(args.artifact))
+    print(json.dumps(art.to_manifest(), indent=2))
+    return 0
+
+
+def cmd_seed_render(args: argparse.Namespace) -> int:
+    from numbrane_python.seeds import load_artifact
+    from PIL import Image
+    import shutil
+
+    art = load_artifact(Path(args.artifact))
+    assert art.root is not None
+    out = Path(args.output) if args.output else Path("artifacts") / f"{art.root.name}-preview.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    prev = art.preview.get("png")
+    if prev and (art.root / prev).exists():
+        shutil.copy(art.root / prev, out)
+        print(out)
+        return 0
+    if art.preview.get("svg"):
+        # copy svg
+        svg_out = out.with_suffix(".svg")
+        shutil.copy(art.root / art.preview["svg"], svg_out)
+        print(svg_out)
+        return 0
+    for sf in art.state_files:
+        if sf.format == "npy" and sf.role == "raster":
+            import numpy as np
+
+            arr = np.load(art.root / sf.path)
+            Image.fromarray(arr).save(out)
+            print(out)
+            return 0
+    print("no preview available", file=sys.stderr)
+    return 1
+
+
+def cmd_seed_continue(args: argparse.Namespace) -> int:
+    from numbrane_python.seeds import continue_seed_artifact
+
+    art = continue_seed_artifact(
+        Path(args.artifact),
+        steps=args.steps,
+        output=Path(args.output) if args.output else None,
+    )
+    print(art.root)
+    print(f"digest={art.content_digest} frame={art.frame}")
+    return 0
+
+
+def cmd_gallery(args: argparse.Namespace) -> int:
+    seeds = [int(s) for s in args.seeds.split(",")]
+    pieces = args.pieces.split(",") if args.pieces else [
+        "geometry/seed-of-life",
+        "geometry/metatron",
+        "reaction-diffusion/reaction-diffusion",
+        "growth/slime-mold",
+        "fractals/strange-attractors",
+        "fields/flow-hatching",
+        "tiling/truchet-tiles",
+        "particles/noodles",
+    ]
+    out_dir = Path(args.output or ROOT / "artifacts" / "gallery")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    ns = argparse.Namespace(
+        recipe=None,
+        seed=42,
+        width=args.size,
+        height=args.size,
+        frame=args.frame,
+        format="png",
+        output=None,
+        piece=None,
+    )
+    for piece in pieces:
+        for seed in seeds:
+            ns.piece = piece
+            ns.seed = seed
+            ns.output = str(out_dir / f"{piece.replace('/', '_')}_s{seed}.png")
+            # geometry prefers svg+json
+            if piece in GEOM_SVG_PIECES:
+                ns.format = "svg"
+                ns.output = str(out_dir / f"{piece.replace('/', '_')}_s{seed}.svg")
+            else:
+                ns.format = "png"
+            print(f"gallery {piece} seed={seed}")
+            cmd_render(ns)
+    print(out_dir)
+    return 0
 
 
 def main() -> int:
@@ -219,12 +413,70 @@ def main() -> int:
     p.add_argument("piece")
     p.set_defaults(func=cmd_inspect)
 
-    p = sub.add_parser("render", help="Render a piece")
+    p = sub.add_parser("render", help="Render a deterministic still")
     p.add_argument("piece")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--recipe")
     p.add_argument("--output", "-o")
+    p.add_argument("--frame", type=int, default=0)
+    p.add_argument("--width", type=int)
+    p.add_argument("--height", type=int)
+    p.add_argument("--format", choices=["png", "svg", "json"], default="png")
+    p.add_argument("--quality", default="high")
     p.set_defaults(func=cmd_render)
+
+    seed = sub.add_parser("seed", help="Seed Artifact commands")
+    seed_sub = seed.add_subparsers(dest="seed_cmd", required=True)
+
+    p = seed_sub.add_parser("create", help="Create a Seed Artifact")
+    p.add_argument("piece")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--recipe")
+    p.add_argument("--frame", type=int, default=0)
+    p.add_argument("--width", type=int, default=512)
+    p.add_argument("--height", type=int, default=512)
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_seed_create)
+
+    p = seed_sub.add_parser("list", help="List Seed Artifacts in library")
+    p.add_argument("--library")
+    p.set_defaults(func=cmd_seed_list)
+
+    p = seed_sub.add_parser("inspect", help="Inspect a Seed Artifact")
+    p.add_argument("artifact")
+    p.set_defaults(func=cmd_seed_inspect)
+
+    p = seed_sub.add_parser("render", help="Export Seed Artifact preview")
+    p.add_argument("artifact")
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_seed_render)
+
+    p = seed_sub.add_parser("continue", help="Advance a structured Seed Artifact")
+    p.add_argument("artifact")
+    p.add_argument("--steps", type=int, default=100)
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_seed_continue)
+
+    p = sub.add_parser("gallery", help="Render a piece×seed contact sheet folder")
+    p.add_argument("--seeds", default="1,42,137,2026")
+    p.add_argument("--pieces", default="")
+    p.add_argument("--size", type=int, default=384)
+    p.add_argument("--frame", type=int, default=200)
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_gallery)
+
+    p = sub.add_parser("sweep", help="Parameter seed sweep (gallery alias)")
+    p.add_argument("piece")
+    p.add_argument("--seeds", default="1,42,137,2026")
+    p.add_argument("--size", type=int, default=384)
+    p.add_argument("--frame", type=int, default=200)
+    p.add_argument("--output", "-o")
+
+    def cmd_sweep(a: argparse.Namespace) -> int:
+        a.pieces = a.piece
+        return cmd_gallery(a)
+
+    p.set_defaults(func=cmd_sweep)
 
     args = parser.parse_args()
     return args.func(args)
