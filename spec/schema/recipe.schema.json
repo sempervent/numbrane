@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/recipe.schema.json",
+  "title": "NAP Recipe",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "piece_id",
+    "backend",
+    "seed",
+    "parameters"
+  ],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "0.1.0" },
+    "piece_id": { "type": "string", "minLength": 1 },
+    "backend": {
+      "type": "string",
+      "enum": ["python", "web", "rust", "glsl", "multi"]
+    },
+    "seed": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "canvas": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "width": { "type": "integer", "minimum": 1 },
+        "height": { "type": "integer", "minimum": 1 },
+        "background": { "type": "string" }
+      }
+    },
+    "time": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "frame": { "type": "integer", "minimum": 0 },
+        "fps": { "type": "number", "exclusiveMinimum": 0 },
+        "mode": {
+          "type": "string",
+          "enum": ["deterministic", "live"]
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": { "$ref": "event.schema.json" }
+    },
+    "expected_artifacts": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

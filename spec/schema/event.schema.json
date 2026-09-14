@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/event.schema.json",
+  "title": "NAP Event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "frame"],
+  "properties": {
+    "type": {
+      "type": "string",
+      "enum": [
+        "pointer.move",
+        "pointer.down",
+        "pointer.up",
+        "parameter.change",
+        "node.create",
+        "node.delete",
+        "transport.change"
+      ]
+    },
+    "frame": { "type": "integer", "minimum": 0 },
+    "tick": { "type": "integer", "minimum": 0 },
+    "pointer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "space": {
+          "type": "string",
+          "enum": ["normalized-screen", "pixel", "cartesian-2d"]
+        },
+        "button": { "type": "integer" }
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "value": true
+      }
+    },
+    "node": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "playing": { "type": "boolean" },
+        "bpm": { "type": "number" }
+      }
+    }
+  }
+}
