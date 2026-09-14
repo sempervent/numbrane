@@ -30,12 +30,17 @@ def continue_seed_artifact(
     assert art.root is not None
     arrays: dict[str, np.ndarray] = {}
     meta: dict = {}
+    json_blobs: dict = {}
     for sf in art.state_files:
         p = art.root / sf.path
         if sf.format == "npy":
             arrays[sf.role] = np.load(p)
-        elif sf.role == "meta" and sf.format == "json":
-            meta = json.loads(p.read_text(encoding="utf-8"))
+        elif sf.format == "json":
+            data = json.loads(p.read_text(encoding="utf-8"))
+            if sf.role == "meta":
+                meta = data
+            else:
+                json_blobs[sf.role] = data
 
     advanced = advance_from_artifact_state(
         art.piece_id,
@@ -43,12 +48,13 @@ def continue_seed_artifact(
         meta,
         art.recipe,
         extra_steps=steps,
+        json_blobs=json_blobs,
     )
     out = Path(output) if output else art.root.parent / f"{art.root.name}-continued"
     out.mkdir(parents=True, exist_ok=True)
     (out / "state").mkdir(parents=True, exist_ok=True)
     state_files: list[StateFile] = []
-    for name, arr in advanced["arrays"].items():
+    for name, arr in advanced.get("arrays", {}).items():
         rel = f"state/{name}.npy"
         np.save(out / rel, arr)
         state_files.append(
@@ -60,6 +66,10 @@ def continue_seed_artifact(
                 shape=list(arr.shape),
             )
         )
+    for name, data in advanced.get("json_blobs", {}).items():
+        rel = f"state/{name}.json"
+        (out / rel).write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        state_files.append(StateFile(role=name, path=rel, format="json"))
     meta_path = "state/meta.json"
     (out / meta_path).write_text(json.dumps(advanced["meta"], indent=2) + "\n", encoding="utf-8")
     state_files.append(StateFile(role="meta", path=meta_path, format="json"))

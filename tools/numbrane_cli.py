@@ -230,6 +230,15 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(out)
         return 0
 
+    if piece in {"fractals/escape-time", "reference/escape-time"}:
+        from numbrane_python.pieces.escape_time import render_escape_time
+
+        img = render_escape_time(recipe, width=w, height=h, frame=frame)
+        out = out.with_suffix(".png")
+        _save_image(img, out)
+        print(out)
+        return 0
+
     if piece in SKETCH_MAP:
         import importlib
 
@@ -258,20 +267,110 @@ def cmd_render(args: argparse.Namespace) -> int:
         print(out)
         return 0
 
-    if (
-        piece.startswith("audiovisual/")
-        or piece.startswith("fractals/escape")
-        or piece.startswith("reference/escape")
-    ):
+    if piece.startswith("audiovisual/"):
         print(
-            f"Piece {piece} is web-engine hosted for interactive preview. "
-            f"Use Seed Artifact / LIVE for realtime; offline stills use sibling engines when wired.",
+            f"Piece {piece} is web-engine hosted for interactive preview "
+            "(Tone/nodes). Use `just dev-web` or LIVE audiovisual scenes.",
             file=sys.stderr,
         )
         return 0
 
     print(f"No python renderer wired for {piece}", file=sys.stderr)
     return 1
+
+
+def cmd_seed_from_raster(args: argparse.Namespace) -> int:
+    """Create a Seed Artifact by transforming a raster into mathematical state."""
+    import numpy as np
+    from PIL import Image
+
+    from numbrane_python.seeds import (
+        default_library_root,
+        raster_to_displacement,
+        raster_to_emission_density,
+        raster_to_nutrient_map,
+    )
+    from numbrane_python.seeds.artifact import (
+        ARTIFACT_VERSION,
+        PROTOCOL_VERSION,
+        SeedArtifact,
+        StateFile,
+        content_digest,
+        save_artifact,
+    )
+
+    mode = args.transform
+    piece = args.piece
+    out = Path(args.output) if args.output else default_library_root() / (
+        f"raster-{mode}-{Path(args.image).stem}"
+    )
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "state").mkdir(parents=True, exist_ok=True)
+    nutrient = raster_to_nutrient_map(args.image)
+    h, w = nutrient.shape
+    state_files: list[StateFile] = []
+    artifact_type = "raster"
+    if mode == "nutrient" or piece.startswith("reaction-diffusion"):
+        u = np.ones_like(nutrient)
+        v = nutrient.astype(np.float32)
+        for name, arr in (("U", u), ("V", v)):
+            rel = f"state/{name}.npy"
+            np.save(out / rel, arr)
+            state_files.append(
+                StateFile(role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape))
+            )
+        artifact_type = "simulation-state"
+        piece = "reaction-diffusion/reaction-diffusion"
+    elif mode == "emission" or piece.startswith("particles"):
+        dens = raster_to_emission_density(args.image)
+        rel = "state/emission.npy"
+        np.save(out / rel, dens)
+        state_files.append(
+            StateFile(role="emission", path=rel, format="npy", dtype=str(dens.dtype), shape=list(dens.shape))
+        )
+        artifact_type = "scalar-field"
+        piece = piece if piece.startswith("particles") else "particles/noodles"
+    else:
+        dx, dy = raster_to_displacement(args.image)
+        for name, arr in (("dx", dx), ("dy", dy)):
+            rel = f"state/{name}.npy"
+            np.save(out / rel, arr)
+            state_files.append(
+                StateFile(role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape))
+            )
+        artifact_type = "vector-field"
+        piece = piece if piece.startswith("fields") else "fields/flow-hatching"
+
+    preview = "preview.png"
+    Image.open(args.image).convert("RGB").resize((min(w, 1024), min(h, 1024))).save(out / preview)
+    recipe = {
+        "protocol_version": "0.1.0",
+        "piece_id": piece,
+        "seed": args.seed,
+        "parameters": {"width": w, "height": h, "from_raster": args.image},
+    }
+    art = SeedArtifact(
+        protocol_version=PROTOCOL_VERSION,
+        artifact_version=ARTIFACT_VERSION,
+        piece_id=piece,
+        engine="python",
+        seed=args.seed,
+        artifact_type=artifact_type,
+        content_digest="",
+        frame=0,
+        tick=0,
+        width=w,
+        height=h,
+        recipe=recipe,
+        state_files=state_files,
+        preview={"png": preview},
+        notes=f"raster transform={mode}",
+    )
+    art.content_digest = content_digest(art.to_manifest())
+    save_artifact(art, out)
+    print(art.root)
+    print(f"digest={art.content_digest} type={art.artifact_type} transform={mode}")
+    return 0
 
 
 def cmd_seed_create(args: argparse.Namespace) -> int:
@@ -483,6 +582,17 @@ def main() -> int:
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--output", "-o")
     p.set_defaults(func=cmd_seed_continue)
+
+    p = seed_sub.add_parser(
+        "from-raster",
+        help="Build Seed Artifact from image (nutrient/emission/displacement)",
+    )
+    p.add_argument("image")
+    p.add_argument("--transform", choices=["nutrient", "emission", "displacement"], default="nutrient")
+    p.add_argument("--piece", default="reaction-diffusion/reaction-diffusion")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--output", "-o")
+    p.set_defaults(func=cmd_seed_from_raster)
 
     p = sub.add_parser("explore", help="Deterministic seed variants for a piece")
     p.add_argument("piece")

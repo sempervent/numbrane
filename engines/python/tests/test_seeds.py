@@ -99,3 +99,32 @@ def test_raster_transforms(tmp_path: Path):
     dx, dy = raster_to_displacement(str(path))
     assert dx.shape == nutrient.shape
     assert np.isfinite(dx).all()
+
+
+def test_differential_growth_continuation():
+    from numbrane_python.seeds.sim_state import simulate_differential_growth
+
+    a = simulate_differential_growth(128, 128, 9, steps=40, num_seeds=3)
+    b = simulate_differential_growth(128, 128, 9, steps=20, num_seeds=3)
+    c = simulate_differential_growth(128, 128, 9, steps=20, segments0=b, start_step=20)
+    assert a.shape == c.shape
+    assert np.allclose(a, c, atol=1e-4)
+
+
+def test_lsystem_continuation():
+    from numbrane_python.seeds.sim_state import simulate_lsystem
+
+    s1, g1 = simulate_lsystem(1, generations=4)
+    s0, _ = simulate_lsystem(1, generations=2)
+    s2, _ = simulate_lsystem(1, generations=2, current=s0)
+    assert s1 == s2
+    assert g1 == 4
+
+
+def test_noodles_continuation():
+    from numbrane_python.seeds.sim_state import simulate_noodles
+
+    a = simulate_noodles(64, 64, 5, steps=30, num_particles=20)
+    b = simulate_noodles(64, 64, 5, steps=15, num_particles=20)
+    c = simulate_noodles(64, 64, 5, steps=15, positions0=b, start_step=15)
+    assert np.allclose(a, c, atol=1e-4)
