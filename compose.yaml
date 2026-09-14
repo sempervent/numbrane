@@ -1,9 +1,25 @@
-# Docker Compose helpers — native toolchains remain primary for day-to-day work.
+# Docker Compose runs images produced by `docker buildx bake`.
+# Do not define competing Dockerfile build graphs here.
+
 services:
+  studio:
+    image: numbrane-studio:local
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./artifacts:/artifacts
+    # Mic stays in the browser (getUserMedia). Container only serves static Studio.
+
   docs:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: docs
-    profiles:
-      - docs
+    image: numbrane-docs:local
+    profiles: ["docs"]
+    ports:
+      - "8081:8080"
+
+  python:
+    image: numbrane-python:local
+    profiles: ["python"]
+    volumes:
+      - ./artifacts:/src/artifacts
+      - ./pieces:/src/pieces:ro
+    working_dir: /src/engines/python
