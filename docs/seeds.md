@@ -44,6 +44,14 @@ Continuation of **reaction-diffusion** and **slime-mold** advances the same stru
 
 Raster previews can be transformed into nutrient maps, emission densities, or displacement fields for further generative use (`numbrane_python.seeds.raster_maps`).
 
+## Raster → math
+
+```bash
+numbrane seed from-raster art.png --transform nutrient
+numbrane seed from-raster art.png --transform emission --piece particles/noodles
+numbrane seed from-raster art.png --transform displacement --piece fields/flow-hatching
+```
+
 ## Gallery & explore
 
 ```bash
@@ -56,10 +64,18 @@ Outputs under `artifacts/` (gitignored).
 
 ## LIVE
 
+Stateful LIVE adapters:
+
+- `reaction-diffusion/reaction-diffusion` — GPU Gray-Scott (ping-pong U/V)
+- `growth/slime-mold` — Physarum agents + trail field
+- `flagship/latticefall` — WASM particle lattice (falls back to GLSL)
+
 Optional: pass a Seed Artifact manifest URL into LIVE:
 
 ```text
 /live.html?set=pfl-default&seed=/path-or-url/to/manifest.json
 ```
 
-LIVE applies recipe seed/parameters; structured simulation continuation remains via `numbrane seed continue`.
+Structured arrays (`U.npy`/`V.npy`, agents/trail) load when present; other pieces apply recipe parameters.
+
+Offline `numbrane seed continue` supports RD, slime, differential growth, L-systems, noodles, Voronoi sites, and circle packing.

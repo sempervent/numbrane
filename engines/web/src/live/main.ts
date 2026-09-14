@@ -72,19 +72,27 @@ export async function bootLive(opts: {
   const seedUrl = params.get("seed") || params.get("seedArtifact");
   if (seedUrl && seedUrl.endsWith(".json")) {
     try {
-      const { fetchSeedManifest, applySeedToParams } = await import("./seedLoad");
+      const { fetchSeedManifest, applySeedToParams, seedArtifactBaseUrl } = await import(
+        "./seedLoad"
+      );
       const man = await fetchSeedManifest(seedUrl);
       const mapped = applySeedToParams(man);
-      session.setSeed(mapped.seed ?? session.runtime.getSeed());
+      session.setSeed(Number(mapped.seed) >>> 0);
+      const base = seedArtifactBaseUrl(seedUrl);
       const scene = session.runtime.getScene();
       if (scene) {
         for (const layer of scene.layers) {
           const piece = session.runtime.getPiece(layer.id);
           if (!piece) continue;
+          if (layer.piece === man.piece_id || scene.layers.length === 1) {
+            piece.setParameter("seedArtifact", base);
+          }
           for (const [k, v] of Object.entries(mapped)) {
             if (k === "seed" || k === "frame") continue;
             piece.setParameter(k, v);
           }
+          // re-init so stateful pieces reload U/V or agents
+          await piece.initialize({ piece: layer.piece }, Number(mapped.seed) >>> 0);
         }
       }
     } catch {

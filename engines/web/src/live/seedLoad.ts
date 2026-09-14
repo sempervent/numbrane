@@ -1,6 +1,5 @@
 /**
- * Load Seed Artifact manifests into LIVE (parameter/state hints).
- * Structured arrays remain offline-continued; LIVE consumes recipe seed + preview cues.
+ * Load Seed Artifact manifests into LIVE (parameters + sim state URLs).
  */
 
 export type SeedManifest = {
@@ -11,6 +10,7 @@ export type SeedManifest = {
   artifact_type?: string;
   preview?: { png?: string; svg?: string };
   content_digest?: string;
+  state_files?: Array<{ role: string; path: string; format: string }>;
 };
 
 export async function fetchSeedManifest(url: string): Promise<SeedManifest> {
@@ -19,10 +19,14 @@ export async function fetchSeedManifest(url: string): Promise<SeedManifest> {
   return (await res.json()) as SeedManifest;
 }
 
+export function seedArtifactBaseUrl(manifestUrl: string): string {
+  return manifestUrl.replace(/manifest\.json$/, "").replace(/\/?$/, "/");
+}
+
 export function applySeedToParams(
   manifest: SeedManifest,
-): Record<string, number> {
-  const params: Record<string, number> = {};
+): Record<string, number | string> {
+  const params: Record<string, number | string> = {};
   const recipe = (manifest.recipe || {}) as { parameters?: Record<string, unknown> };
   const p = recipe.parameters || {};
   for (const [k, v] of Object.entries(p)) {

@@ -16,6 +16,7 @@ uniform float u_mid;
 uniform float u_high;
 uniform float u_onset;
 uniform int u_mode; // 0 geom 1 field 2 fractal 3 growth 4 rd 5 tiling 6 particles 7 mashup
+uniform int u_submode; // within-family selector
 
 float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){
@@ -242,25 +243,38 @@ void main(){
   float construct=clamp(0.35+0.65*fract(u_beat*0.125)+0.2*u_energy,0.,1.);
   float v=0.;
   if(u_mode==0){
-    float g=metatron(uv*(1.05+0.08*sin(u_beatPhase*6.283)),construct);
-    g=max(g,packing(uv*1.2)*0.85*u_chaos);
-    g=max(g,seedOfLife(uv*(1.1),construct)*0.9);
-    v=g;
+    if(u_submode==1) v=metatron(uv*(1.05+0.08*sin(u_beatPhase*6.283)),construct);
+    else if(u_submode==2) v=packing(uv*1.2);
+    else v=seedOfLife(uv*(1.1),construct);
   }else if(u_mode==1){
-    v=mix(fieldFlow(uv),nebula(uv),clamp(u_chaos*0.7,0.,1.));
+    v=u_submode==1?nebula(uv):fieldFlow(uv);
   }else if(u_mode==2){
-    v=mix(escape(uv),attractor(uv),clamp(u_chaos,0.,1.));
+    if(u_submode==1) v=attractor(uv);
+    else if(u_submode==2){
+      // SDF-ish soft distance field from circle/box union
+      float d=min(length(uv)-0.45,max(abs(uv.x)-0.35,abs(uv.y)-0.2));
+      v=smoothstep(0.08,0.,abs(d))+0.25*escape(uv*0.7);
+    }else v=escape(uv);
   }else if(u_mode==3){
-    v=mix(growth(uv),mix(lsystem(uv),slime(uv),0.5),clamp(u_chaos,0.,0.8));
+    if(u_submode==1) v=lsystem(uv);
+    else if(u_submode==2) v=slime(uv);
+    else v=growth(uv);
   }else if(u_mode==4){
     v=rdView(uv);
   }else if(u_mode==5){
-    v=mix(truchet(uv),voronoi(uv),0.4+0.35*u_mid);
+    v=u_submode==1?voronoi(uv):truchet(uv);
   }else if(u_mode==6){
-    v=mix(particles(uv),slime(uv),0.35+0.2*u_low);
+    v=particles(uv);
   }else{
-    // mashup / latticefall-ish: lattice + field + fractal
-    v=max(metatron(uv*0.85,construct),max(fieldFlow(uv*0.9)*0.7,escape(uv)*0.65));
+    // mashup couplings — retain recognizable subsystem mixes
+    if(u_submode==0) v=max(attractor(uv),fieldFlow(uv)*0.6);
+    else if(u_submode==1) v=max(growth(uv),truchet(uv*0.8)*0.5);
+    else if(u_submode==2) v=max(voronoi(uv),nebula(uv)*0.55);
+    else if(u_submode==3) v=max(metatron(uv,construct),fieldFlow(uv)*0.45);
+    else if(u_submode==4) v=max(slime(uv),escape(uv)*0.4);
+    else if(u_submode==5) v=max(particles(uv),truchet(uv)*0.5);
+    else if(u_submode==7) v=max(metatron(uv*0.85,construct),particles(uv)*0.7);
+    else v=max(metatron(uv*0.85,construct),max(fieldFlow(uv*0.9)*0.7,escape(uv)*0.65));
   }
 
   v*=0.5+0.5*u_density;
