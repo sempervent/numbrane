@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/telemetry.schema.json",
+  "title": "NAP Telemetry",
+  "description": "Extensible visual characteristics for audiovisual coupling. Formulas are piece-specific.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["frame"],
+  "properties": {
+    "frame": { "type": "integer", "minimum": 0 },
+    "energy": { "type": "number", "minimum": 0, "maximum": 1 },
+    "texture": { "type": "number", "minimum": 0, "maximum": 1 },
+    "motion": { "type": "number", "minimum": 0, "maximum": 1 },
+    "spectral": { "type": "number", "minimum": 0, "maximum": 1 },
+    "extra": {
+      "type": "object",
+      "additionalProperties": { "type": "number" }
+    }
+  }
+}

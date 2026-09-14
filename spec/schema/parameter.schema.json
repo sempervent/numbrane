@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/parameter.schema.json",
+  "title": "NAP Parameter",
+  "description": "Wire-level parameter concepts. Piece-specific parameters may extend this taxonomy.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["path", "value"],
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "Dotted taxonomy path, e.g. geom.rings or seed.global",
+      "pattern": "^(meta|seed|output|composition|field|sim|geom|color|post|anim|audio|interaction)\\.[a-z0-9_.]+$"
+    },
+    "value": {
+      "description": "JSON-compatible value"
+    },
+    "unit": { "type": "string" },
+    "space": {
+      "type": "string",
+      "enum": ["normalized-screen", "pixel", "cartesian-2d", "complex-plane"]
+    }
+  }
+}

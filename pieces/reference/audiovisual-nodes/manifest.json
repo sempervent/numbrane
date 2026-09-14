@@ -1,0 +1,17 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/audiovisual-nodes",
+  "name": "Audiovisual Nodes",
+  "backend": "multi",
+  "version": "0.0.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": [
+    "json"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": true,
+    "audio": true
+  }
+}

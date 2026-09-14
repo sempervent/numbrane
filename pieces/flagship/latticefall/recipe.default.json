@@ -1,0 +1,54 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "flagship/latticefall",
+  "backend": "multi",
+  "seed": 42,
+  "parameters": {
+    "geometry.rings": 2,
+    "geometry.radius": 1.0,
+    "geometry.rotation_deg": 12.0,
+    "geometry.connection_policy": "metatron",
+    "field.scale": 0.55,
+    "field.strength": 1.05,
+    "field.warp": 0.18,
+    "field.octaves": 4,
+    "particles.count": 1400,
+    "particles.speed": 0.48,
+    "particles.drag": 0.038,
+    "particles.life": 4.2,
+    "particles.lattice_attraction": 0.9,
+    "particles.escape_force": 0.38,
+    "fractal.mode": "julia",
+    "fractal.power": 2.0,
+    "fractal.zoom": 1.2,
+    "fractal.chaos": 0.3,
+    "color.palette": "lattice-ember",
+    "color.exposure": 1.18,
+    "color.saturation": 0.88,
+    "audio.bpm": 96,
+    "audio.scale": "dorian",
+    "audio.density": 0.58,
+    "audio.reverb": 0.42,
+    "audio.delay": 0.24,
+    "interaction.strength": 0.7,
+    "interaction.radius": 0.48,
+    "composition.phase_timing": [0.14, 0.24, 0.26, 0.22, 0.14],
+    "duration_seconds": 48
+  },
+  "canvas": {
+    "width": 1280,
+    "height": 720,
+    "background": "#050608"
+  },
+  "time": {
+    "frame": 0,
+    "fps": 60,
+    "mode": "deterministic"
+  },
+  "events": [],
+  "expected_artifacts": [
+    "json",
+    "geometry-ir",
+    "webm"
+  ]
+}

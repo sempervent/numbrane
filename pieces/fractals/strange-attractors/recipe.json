@@ -1,0 +1,22 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "fractals/strange-attractors",
+  "backend": "python",
+  "seed": 42,
+  "parameters": {
+    "output.width": 256,
+    "output.height": 256
+  },
+  "canvas": {
+    "width": 256,
+    "height": 256
+  },
+  "time": {
+    "frame": 0,
+    "fps": 60,
+    "mode": "deterministic"
+  },
+  "expected_artifacts": [
+    "png"
+  ]
+}

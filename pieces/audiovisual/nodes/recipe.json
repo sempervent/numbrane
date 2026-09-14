@@ -1,0 +1,30 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "audiovisual/nodes",
+  "backend": "web",
+  "seed": 42,
+  "parameters": {
+    "mode": "plasma",
+    "bpm": 90,
+    "complexity": 24,
+    "mutation": 0.2,
+    "chaos": 0.35,
+    "palette": 200,
+    "exposure": 1.2,
+    "harmony": "ambient"
+  },
+  "canvas": {
+    "width": 1280,
+    "height": 720,
+    "background": "#050607"
+  },
+  "time": {
+    "frame": 0,
+    "fps": 60,
+    "mode": "deterministic"
+  },
+  "events": [],
+  "expected_artifacts": [
+    "json"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "landscape/noise-landscape",
+  "backend": "python",
+  "seed": 42,
+  "parameters": {
+    "field.size": 64,
+    "field.scale": 16.0,
+    "field.octaves": 3,
+    "sim.particles": 20
+  },
+  "expected_artifacts": [
+    "png"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "landscape/noise-landscape",
+  "name": "Noise Landscape",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "notes": "GIS claim not implemented upstream; not fabricated."
+  },
+  "supported_artifacts": [
+    "png"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": false,
+    "interactive": false,
+    "audio": false
+  }
+}

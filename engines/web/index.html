@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
+    <title>NUMBRANE web — audiovisual nodes</title>
+    <style>
+      :root {
+        --bg: #050607;
+        --hud: #0a0c10;
+        --hud-border: #171a22;
+        --ink: #e8f6ff;
+        --neon: #8bf6ff;
+        --neon-alt: #31ff8b;
+        --accent: #ff3bd1;
+      }
+      html,
+      body,
+      #app {
+        height: 100%;
+        margin: 0;
+        overflow: hidden;
+        background: var(--bg);
+      }
+      body {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+        color: var(--ink);
+        letter-spacing: 0.02em;
+        text-shadow: 0 0 6px rgba(139, 246, 255, 0.2);
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div id="hud"></div>
+      <div id="canvas"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

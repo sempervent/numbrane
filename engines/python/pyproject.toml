@@ -1,0 +1,61 @@
+[project]
+name = "numbrane-python"
+version = "0.1.0"
+description = "NUMBRANE Python engine — reference CPU implementations and contract tests"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "AGPL-3.0-only" }
+authors = [{ name = "NUMBRANE contributors" }]
+dependencies = [
+  "numpy>=1.24.0",
+  "pydantic>=2.0.0",
+  "pydantic-settings>=2.0.0",
+  "pillow>=10.0.0",
+  "imageio>=2.31.0",
+  "pyyaml>=6.0",
+  "scipy>=1.10.0",
+  "platformdirs>=3.0.0",
+  "typer>=0.9.0",
+  "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+render = ["pillow>=10.0.0", "imageio>=2.31.0"]
+cli = ["typer>=0.9.0", "rich>=13.0.0"]
+docs = ["mkdocs-material>=9.5"]
+dev = ["pytest>=8.0", "ruff>=0.6", "jsonschema>=4.23"]
+
+[project.scripts]
+numbrane-python = "numbrane_python.cli.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/numbrane_python"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/numbrane_python/sketches/**" = ["E501", "I001", "UP"]
+"src/numbrane_python/cli/**" = ["E501", "F401", "F841"]
+"src/numbrane_python/library/**" = ["E501"]
+"src/numbrane_python/meta/**" = ["E501"]
+"src/numbrane_python/compose/**" = ["E501"]
+"src/numbrane_python/paramspace/**" = ["E501"]
+"src/numbrane_python/interpret/**" = ["E501"]
+"src/numbrane_python/fields/**" = ["E501"]
+"src/numbrane_python/sim/**" = ["E501"]
+"src/numbrane_python/render/**" = ["E501"]
+"src/numbrane_python/params/**" = ["E501"]
+"src/numbrane_python/core/**" = ["E501"]

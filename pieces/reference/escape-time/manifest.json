@@ -1,0 +1,20 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/escape-time",
+  "name": "Escape-Time Fractal",
+  "backend": "web",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "notes": "GLSL escape.frag"
+  },
+  "supported_artifacts": [
+    "webm"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": true,
+    "audio": false
+  }
+}

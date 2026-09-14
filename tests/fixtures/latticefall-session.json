@@ -1,0 +1,35 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "flagship/latticefall",
+  "seed": 42,
+  "fps": 60,
+  "recipe": "pieces/flagship/latticefall/recipe.default.json",
+  "notes": "Short representative interaction for CI replay / digest checks.",
+  "events": [
+    {
+      "type": "pointer.down",
+      "frame": 10,
+      "pointer": { "x": 0.25, "y": -0.15, "space": "cartesian-2d" }
+    },
+    {
+      "type": "pointer.move",
+      "frame": 40,
+      "pointer": { "x": -0.4, "y": 0.35, "space": "cartesian-2d" }
+    },
+    {
+      "type": "pointer.up",
+      "frame": 55,
+      "pointer": { "x": -0.4, "y": 0.35, "space": "cartesian-2d" }
+    },
+    {
+      "type": "parameter.change",
+      "frame": 70,
+      "parameter": { "path": "chaos", "value": 0.62 }
+    },
+    {
+      "type": "parameter.change",
+      "frame": 90,
+      "parameter": { "path": "field.strength", "value": 1.35 }
+    }
+  ]
+}

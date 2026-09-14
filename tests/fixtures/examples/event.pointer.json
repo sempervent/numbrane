@@ -1,0 +1,10 @@
+{
+  "type": "pointer.down",
+  "frame": 12,
+  "pointer": {
+    "x": 0.42,
+    "y": 0.55,
+    "space": "normalized-screen",
+    "button": 0
+  }
+}

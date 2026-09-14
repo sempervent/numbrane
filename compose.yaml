@@ -1,0 +1,9 @@
+# Docker Compose helpers — native toolchains remain primary for day-to-day work.
+services:
+  docs:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: docs
+    profiles:
+      - docs

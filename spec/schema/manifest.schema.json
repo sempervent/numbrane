@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/manifest.schema.json",
+  "title": "NAP Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "piece_id",
+    "name",
+    "backend",
+    "version",
+    "capabilities"
+  ],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "0.1.0" },
+    "piece_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "backend": {
+      "type": "string",
+      "enum": ["python", "web", "rust", "glsl", "multi"]
+    },
+    "version": { "type": "string", "minLength": 1 },
+    "author": { "type": "string" },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "source_repo": { "type": "string" },
+        "source_sha": { "type": "string" },
+        "notes": { "type": "string" }
+      }
+    },
+    "parameter_schema_ref": { "type": "string" },
+    "supported_artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["geometry-ir", "svg", "png", "json", "wav", "webm"]
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["deterministic", "animation", "interactive", "audio"],
+      "properties": {
+        "deterministic": { "type": "boolean" },
+        "animation": { "type": "boolean" },
+        "interactive": { "type": "boolean" },
+        "audio": { "type": "boolean" },
+        "webgl": {
+          "type": "boolean",
+          "description": "Piece requires WebGL2 for its primary visual path."
+        },
+        "wasm": {
+          "type": "boolean",
+          "description": "Piece requires WebAssembly for a live numerical subsystem."
+        },
+        "replay": {
+          "type": "boolean",
+          "description": "Piece supports NAP event-stream record and deterministic replay."
+        }
+      }
+    }
+  }
+}

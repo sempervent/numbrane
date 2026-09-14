@@ -1,0 +1,13 @@
+[package]
+name = "numbrane-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NUMBRANE canonical CLI (minimal scaffold)"
+
+[[bin]]
+name = "numbrane"
+path = "src/main.rs"
+
+[dependencies]
+numbrane-core = { path = "../numbrane-core" }
