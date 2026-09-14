@@ -1,0 +1,83 @@
+# See https://pre-commit.com
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: ^site/
+      - id: end-of-file-fixer
+        exclude: ^site/
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: detect-private-key
+      - id: check-json
+        exclude: ^(site/|engines/.*/package-lock\.json)
+      - id: check-toml
+      - id: check-yaml
+        args: ["--unsafe"]
+
+  - repo: local
+    hooks:
+      - id: ryl
+        name: ryl (YAML)
+        entry: ryl check
+        language: system
+        types: [yaml]
+        exclude: ^site/
+
+      - id: taplo-lint
+        name: taplo lint
+        entry: taplo lint
+        language: system
+        types: [toml]
+        pass_filenames: false
+
+      - id: taplo-fmt
+        name: taplo format --check
+        entry: taplo format --check
+        language: system
+        types: [toml]
+        pass_filenames: false
+
+      - id: ruff-format
+        name: ruff format (python authored)
+        entry: bash tools/ruff_format_check.sh
+        language: system
+        pass_filenames: false
+        files: ^(engines/python/src/numbrane_python/(rng\.py|geometry|landscape|pieces|nap|__init__\.py)|engines/python/tests/)
+
+      - id: ruff-check
+        name: ruff check (python authored)
+        entry: bash tools/ruff_check_authored.sh
+        language: system
+        pass_filenames: false
+        files: ^(engines/python/src/numbrane_python/(rng\.py|geometry|landscape|pieces|nap|__init__\.py)|engines/python/tests/)
+
+      - id: rustfmt
+        name: cargo fmt --check
+        entry: bash -c 'cd engines/rust && cargo fmt --all -- --check'
+        language: system
+        types: [rust]
+        pass_filenames: false
+        files: ^engines/rust/
+
+      - id: json-schema-lite
+        name: NAP JSON Schema (lite)
+        entry: bash tools/lint_json.sh
+        language: system
+        files: \.(json)$
+        pass_filenames: false
+        exclude: ^site/
+
+      # pre-push: lightweight local CI via just
+      - id: ci-lite
+        name: just ci-lite
+        entry: just ci-lite
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

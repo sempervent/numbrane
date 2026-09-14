@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_BUILD_JOBS: "8"
+  PATH: /home/runner/.local/bin:/home/runner/.cargo/bin:${{ env.PATH }}
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: extractions/setup-just@v2
+
+      - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: engines/web/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engines/rust
+
+      - name: Install data linters
+        run: |
+          cargo install --locked taplo-cli ryl
+          uv tool install check-jsonschema
+
+      - name: Bootstrap
+        run: just bootstrap
+
+      - name: Build LATTICEFALL WASM
+        run: just latticefall-build
+
+      - name: Install Playwright Chromium
+        working-directory: engines/web
+        run: npx playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "0"
+
+      - name: Full CI
+        run: just ci
+        env:
+          PW_CHROMIUM_ARGS: "--use-angle=swiftshader"
+
+  lint-data:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: extractions/setup-just@v2
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v4
+      - run: |
+          cargo install --locked taplo-cli ryl
+          uv tool install check-jsonschema
+      - run: just lint-data

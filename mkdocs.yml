@@ -1,0 +1,36 @@
+site_name: NUMBRANE
+site_description: Polyglot generative art from mathematics and algorithms — not generative AI
+repo_url: https://github.com/sempervent/numbrane
+theme:
+  name: material
+  palette:
+    - scheme: slate
+      primary: blue grey
+      toggle:
+        icon: material/brightness-4
+        name: Dark
+    - scheme: default
+      primary: blue grey
+      toggle:
+        icon: material/brightness-7
+        name: Light
+nav:
+  - Home: index.md
+  - Principles: principles.md
+  - Architecture: architecture.md
+  - Development: development.md
+  - Determinism: determinism.md
+  - Art Protocol: art-protocol.md
+  - Protocol summary: protocol.md
+  - Pieces: pieces.md
+  - Python engine: python-engine.md
+  - Web engine: web-engine.md
+  - Rust engine: rust-engine.md
+docs_dir: docs
+site_dir: site
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.superfences

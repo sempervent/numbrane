@@ -1,0 +1,279 @@
+# NUMBRANE justfile — canonical developer command surface.
+# Run `just` (no args) to list recipes. Make is a temporary compatibility shim.
+
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+set dotenv-load := false
+
+export PATH := env_var_or_default("HOME", "") + "/.local/bin:" + env_var_or_default("HOME", "") + "/.cargo/bin:" + env_var("PATH")
+export CARGO_BUILD_JOBS := "8"
+
+root := justfile_directory()
+
+# List available recipes (default).
+default:
+    @just --list --unsorted
+
+# ── bootstrap / doctor ───────────────────────────────────────────────
+
+[group('setup')]
+bootstrap:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
+    echo "==> Python (uv)"
+    (cd "{{root}}/engines/python" && uv sync --extra dev --extra docs --extra render --extra cli)
+    echo "==> Web (npm)"
+    (cd "{{root}}/engines/web" && npm install)
+    echo "==> Rust (cargo fetch)"
+    (cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo fetch)
+    echo "==> LATTICEFALL WASM (optional; requires wasm32 + wasm-pack)"
+    if command -v wasm-pack >/dev/null 2>&1 || command -v rustup >/dev/null 2>&1; then
+      bash "{{root}}/engines/rust/scripts/build-wasm.sh" || echo "  (wasm build skipped — run: just latticefall-build)"
+    else
+      echo "  skip wasm (install rustup/wasm-pack; then: just latticefall-build)"
+    fi
+    echo "==> Optional tool hints (install if missing)"
+    command -v ryl >/dev/null || echo "  install ryl: uv tool install ryl"
+    command -v taplo >/dev/null || echo "  install taplo: cargo install taplo-cli --locked"
+    command -v check-jsonschema >/dev/null || echo "  install check-jsonschema: uv tool install check-jsonschema"
+    command -v pre-commit >/dev/null || echo "  install pre-commit: brew install pre-commit"
+    echo "bootstrap complete"
+
+[group('setup')]
+doctor:
+    bash "{{root}}/tools/doctor.sh"
+
+[group('setup')]
+precommit-install:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    pre-commit install --hook-type pre-commit --hook-type pre-push
+    echo "Installed git hooks: pre-commit + pre-push"
+
+[group('setup')]
+precommit-run:
+    pre-commit run --all-files
+
+# ── format ───────────────────────────────────────────────────────────
+
+[group('format')]
+fmt: fmt-python fmt-rust fmt-toml
+    @echo "fmt ok"
+
+[group('format')]
+fmt-python:
+    cd "{{root}}/engines/python" && uv run ruff format src tests ../../tools ../../tests
+
+[group('format')]
+fmt-rust:
+    cd "{{root}}/engines/rust" && cargo fmt --all
+
+[group('format')]
+fmt-toml:
+    taplo format
+
+[group('format')]
+fmt-check: fmt-check-python fmt-check-rust fmt-check-toml
+    @echo "fmt-check ok"
+
+[group('format')]
+fmt-check-python:
+    # Format-check NUMBRANE-authored modules; adapted library style debt is tracked separately.
+    cd "{{root}}/engines/python" && uv run ruff format --check src/numbrane_python/rng.py src/numbrane_python/geometry src/numbrane_python/landscape src/numbrane_python/pieces src/numbrane_python/nap src/numbrane_python/__init__.py tests
+
+[group('format')]
+fmt-check-rust:
+    cd "{{root}}/engines/rust" && cargo fmt --all -- --check
+
+[group('format')]
+fmt-check-toml:
+    taplo format --check
+
+# ── lint ─────────────────────────────────────────────────────────────
+
+[group('lint')]
+lint: lint-python lint-web lint-rust lint-data
+    @echo "lint ok"
+
+[group('lint')]
+lint-python:
+    # Correctness: no undefined names anywhere in the maintained Python engine
+    cd "{{root}}/engines/python" && uv run ruff check src/numbrane_python --select F821
+    cd "{{root}}/engines/python" && uv run ruff check src/numbrane_python/rng.py src/numbrane_python/geometry src/numbrane_python/landscape src/numbrane_python/pieces src/numbrane_python/nap src/numbrane_python/__init__.py tests
+    cd "{{root}}/engines/python" && uv run ruff format --check src/numbrane_python/rng.py src/numbrane_python/geometry src/numbrane_python/landscape src/numbrane_python/pieces src/numbrane_python/nap src/numbrane_python/__init__.py tests
+
+[group('lint')]
+lint-web:
+    cd "{{root}}/engines/web" && npm run typecheck
+
+[group('lint')]
+lint-rust:
+    cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo-clippy --workspace --all-targets -- -D warnings
+    cd "{{root}}/engines/rust" && cargo fmt --all -- --check
+
+[group('lint')]
+lint-data: lint-yaml lint-toml lint-json
+    @echo "lint-data ok"
+
+[group('lint')]
+lint-yaml:
+    ryl check "{{root}}"
+
+[group('lint')]
+lint-toml:
+    taplo lint
+    taplo format --check
+
+[group('lint')]
+lint-json:
+    bash "{{root}}/tools/lint_json.sh"
+
+# ── test ─────────────────────────────────────────────────────────────
+
+[group('test')]
+test: test-python test-web test-rust test-contract test-schema
+    @echo "test ok"
+
+[group('test')]
+test-python:
+    cd "{{root}}/engines/python" && uv run pytest -q
+
+[group('test')]
+test-web:
+    cd "{{root}}/engines/web" && npm test
+
+[group('test')]
+test-rust:
+    cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo test --workspace
+
+[group('test')]
+test-contract:
+    cd "{{root}}/engines/python" && uv run pytest ../../tests/contract -q
+
+[group('test')]
+test-schema:
+    cd "{{root}}/engines/python" && uv run pytest tests/test_schemas.py -q
+    bash "{{root}}/tools/lint_json.sh"
+
+[group('test')]
+test-golden:
+    cd "{{root}}/engines/python" && uv run pytest ../../tests/golden -q
+
+[group('test')]
+smoke:
+    bash "{{root}}/tools/smoke.sh"
+
+# ── docs / build / dev ───────────────────────────────────────────────
+
+[group('docs')]
+docs:
+    cd "{{root}}/engines/python" && uv run mkdocs build -f ../../mkdocs.yml
+
+[group('docs')]
+docs-serve:
+    cd "{{root}}/engines/python" && uv run mkdocs serve -f ../../mkdocs.yml -a 127.0.0.1:8000
+
+[group('build')]
+build: build-python build-web build-rust
+    @echo "build ok"
+
+[group('build')]
+build-python:
+    cd "{{root}}/engines/python" && uv build
+
+[group('build')]
+build-web:
+    cd "{{root}}/engines/web" && npm run build
+
+[group('build')]
+build-rust:
+    cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo build --workspace
+
+# Build LATTICEFALL numbrane-wasm → engines/web/src/wasm/pkg (gitignored; generate in CI/bootstrap).
+[group('build')]
+latticefall-build:
+    bash "{{root}}/engines/rust/scripts/build-wasm.sh"
+
+# Open LATTICEFALL live (requires wasm build).
+[group('pieces')]
+latticefall: latticefall-build
+    cd "{{root}}/engines/web" && npm run dev -- --open /latticefall.html
+
+[group('pieces')]
+latticefall-test: latticefall-build
+    cd "{{root}}/engines/web" && npm run test:latticefall
+    cd "{{root}}/engines/python" && uv run pytest tests/test_latticefall.py -q
+    cd "{{root}}/engines/python" && uv run pytest ../../tests/contract/test_latticefall_contract.py -q
+    cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo test -p numbrane-core --lib
+
+[group('pieces')]
+latticefall-smoke: latticefall-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npm run test:e2e
+
+[group('pieces')]
+latticefall-replay session="tests/fixtures/latticefall-session.json": latticefall-build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test tests/e2e/latticefall.spec.ts
+
+[group('pieces')]
+latticefall-record:
+    @echo "Interactive record: just latticefall  (HUD exports via window.__LATTICEFALL__.exportEvents())"
+    @echo "Save JSON under artifacts/ and replay with: just latticefall-replay path/to/events.json"
+
+# Repository hygiene (whole-tree checks). Distinct from pre-commit (staged/tracked files only).
+[group('ci')]
+repo-audit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "==> staged vs whole-repo checks"
+    echo "pre-commit: operates on tracked/staged paths only (fast local gate)."
+    echo "just ci-lite: formats/lints/tests the maintained repository tree."
+    cd "{{root}}/engines/python" && uv run ruff check src/numbrane_python --select F821
+    echo "repo-audit ok"
+
+[group('dev')]
+dev: dev-web
+
+[group('dev')]
+dev-web piece="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [[ "{{piece}}" == "latticefall" ]]; then
+      just latticefall-build
+      cd "{{root}}/engines/web" && npm run dev -- --open /latticefall.html
+    else
+      cd "{{root}}/engines/web" && npm run dev
+    fi
+
+# ── CI ───────────────────────────────────────────────────────────────
+
+[group('ci')]
+ci-lite: fmt-check lint test
+    @echo "ci-lite ok"
+
+[group('ci')]
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke
+    @echo "ci ok"
+
+# ── pieces / clean ───────────────────────────────────────────────────
+
+[group('pieces')]
+pieces:
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py pieces
+
+[group('pieces')]
+render piece seed="42":
+    cd "{{root}}/engines/python" && uv run python ../../tools/numbrane_cli.py render {{piece}} --seed {{seed}}
+
+[group('clean')]
+clean:
+    rm -rf "{{root}}/site" "{{root}}/engines/python/.pytest_cache" "{{root}}/engines/web/dist"
+    rm -rf "{{root}}/.pytest_cache" "{{root}}/artifacts"
+    find "{{root}}" -type d -name '__pycache__' -not -path '*/.venv/*' -not -path '*/node_modules/*' -exec rm -rf {} + 2>/dev/null || true
