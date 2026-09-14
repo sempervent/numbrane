@@ -34,6 +34,18 @@ just latticefall-build && just latticefall
 just latticefall-test && just latticefall-smoke
 ```
 
+## NUMBRANE LIVE
+
+Realtime visual performance instrument (audio + MIDI + scenes → OBS):
+
+```bash
+just live              # control UI + PFL set
+just live-pfl          # same, opens pfl-default
+just live-test && just live-smoke && just live-e2e
+```
+
+See `docs/live.md`, `docs/midi.md`, `docs/obs.md`, `docs/audio-reactivity.md`.
+
 ## Architecture
 
 ```text

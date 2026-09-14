@@ -62,3 +62,7 @@ echo "ok -- validation done"
 check-jsonschema --schemafile spec/schema/recipe.schema.json \
   $(find pieces -name 'recipe*.json' | sort)
 echo "json-schema fixtures: ok"
+if ls pieces/live/*/set.json >/dev/null 2>&1; then
+  check-jsonschema --schemafile spec/schema/live-set.schema.json $(find pieces/live -name 'set.json' | sort)
+  echo "json-schema live-sets: ok"
+fi
