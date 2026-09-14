@@ -315,6 +315,10 @@ async function main(): Promise<void> {
   await bootLive({ root: hud, canvas, outputOnly: false });
 }
 
-if (typeof document !== "undefined" && document.querySelector("#stage")) {
+const isControlPage =
+  typeof document !== "undefined" &&
+  document.querySelector("#stage") != null &&
+  !location.pathname.includes("live-output");
+if (isControlPage) {
   void main();
 }

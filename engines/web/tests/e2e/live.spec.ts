@@ -95,11 +95,17 @@ test.describe("NUMBRANE LIVE e2e", () => {
   });
 
   test("OBS output route has no chrome", async ({ page }) => {
-    await page.goto("/live-output.html?set=pfl-default&alpha=1");
+    await page.goto("/live-output.html?set=pfl-default&alpha=1&output=1");
     await page.waitForFunction(() => Boolean(window.__NUMBRANE_LIVE__));
-    const hudDisplay = await page.locator("#hud").evaluate((n) => getComputedStyle(n).display);
+    const hudDisplay = await page
+      .locator("body > #hud")
+      .evaluate((n) => getComputedStyle(n).display);
     expect(hudDisplay).toBe("none");
     await expect(page.locator("#stage")).toBeVisible();
+    const hasChrome = await page.evaluate(() =>
+      Boolean(document.body.innerText.includes("NUMBRANE LIVE")),
+    );
+    expect(hasChrome).toBe(false);
   });
 
   test("live shaders reachable", async ({ page }) => {
