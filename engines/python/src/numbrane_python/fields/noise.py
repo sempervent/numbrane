@@ -18,7 +18,7 @@ def hash_coords(coords: np.ndarray, seed: int = 0) -> np.ndarray:
     hash_val = coords_int[..., 0] * 73856093
     for i in range(1, coords_int.shape[-1]):
         hash_val ^= coords_int[..., i] * (19349663 + i * 83492791)
-    hash_val ^= np.int64(seed) * np.int64(50331653)
+    hash_val ^= np.int64(int(seed) & 0x7FFFFFFF) * np.int64(50331653)
     hash_val = hash_val & np.int64(0x7FFFFFFF)
     return (hash_val % 1000000) / 1000000.0
 
