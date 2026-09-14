@@ -1,0 +1,24 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/circle-lattice",
+  "name": "Circle Lattice",
+  "backend": "multi",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "source_repo": "https://github.com/sempervent/generative",
+    "source_sha": "76849736e644b755b722b0ee0ab4b055b540d2c0",
+    "notes": "Hex circle lattice inspired by Seed of Life; reference probe only."
+  },
+  "parameter_schema_ref": "pieces/reference/circle-lattice/parameters.md",
+  "supported_artifacts": [
+    "geometry-ir",
+    "svg"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": false,
+    "interactive": false,
+    "audio": false
+  }
+}

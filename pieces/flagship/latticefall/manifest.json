@@ -1,0 +1,25 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "flagship/latticefall",
+  "name": "LATTICEFALL",
+  "backend": "multi",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "provenance": {
+    "notes": "Flagship polyglot composition: Python world build, Rust/WASM particles, WebGL+audio runtime."
+  },
+  "supported_artifacts": [
+    "geometry-ir",
+    "json",
+    "webm"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": true,
+    "audio": true,
+    "webgl": true,
+    "wasm": true,
+    "replay": true
+  }
+}

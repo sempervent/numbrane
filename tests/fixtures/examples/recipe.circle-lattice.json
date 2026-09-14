@@ -1,0 +1,24 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "reference/circle-lattice",
+  "backend": "multi",
+  "seed": 42,
+  "parameters": {
+    "geom.radius": 1.0,
+    "geom.rings": 1,
+    "geom.rotation_deg": 0.0
+  },
+  "canvas": {
+    "width": 512,
+    "height": 512,
+    "background": "#0b0d10"
+  },
+  "time": {
+    "frame": 0,
+    "fps": 60,
+    "mode": "deterministic"
+  },
+  "expected_artifacts": [
+    "geometry-ir"
+  ]
+}
