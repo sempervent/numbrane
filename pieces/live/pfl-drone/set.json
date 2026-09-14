@@ -1,0 +1,64 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-drone",
+  "name": "PFL / Drone",
+  "bpm": 72,
+  "default_transition": { "type": "crossfade", "duration_beats": 8 },
+  "scenes": [
+    {
+      "id": "drone-a",
+      "name": "Nebula Field",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fields/nebula",
+          "opacity": 1,
+          "parameters": { "chaos": 0.25, "density": 0.65, "hue": 0.58 }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.energy",
+          "destination": "layer.L0.density",
+          "amount": 0.4,
+          "min": 0.2,
+          "max": 1
+        },
+        {
+          "id": "m2",
+          "source": "audio.low",
+          "destination": "layer.L0.chaos",
+          "amount": 0.3,
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "post": { "bloom": 0.35, "feedback": 0.12 }
+    },
+    {
+      "id": "drone-b",
+      "name": "Flow Hatch",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fields/flow-hatching",
+          "opacity": 1,
+          "parameters": { "density": 0.7, "chaos": 0.2 }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.flux",
+          "destination": "layer.L0.chaos",
+          "amount": 0.35,
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "post": { "bloom": 0.2, "feedback": 0.08 }
+    }
+  ],
+  "cues": []
+}

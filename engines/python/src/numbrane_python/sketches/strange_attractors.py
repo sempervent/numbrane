@@ -67,6 +67,7 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
 
     # Density map
     density = np.zeros((ctx.height, ctx.width), dtype=np.float32)
+    samples: list[tuple[float, float]] = []
 
     # Integration
     for i in range(config.steps + config.burn_in):
@@ -108,12 +109,22 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         else:  # yz
             px, py = y, z
 
-        # Map to screen coordinates
-        # Normalize and center
-        # (Simplified - would need proper scaling)
-        screen_x = int((px + 50) / 100 * ctx.width)
-        screen_y = int((py + 50) / 100 * ctx.height)
+        samples.append((px, py))
 
+    if not samples:
+        samples = [(0.0, 0.0)]
+    xs = np.array([p[0] for p in samples], dtype=np.float64)
+    ys = np.array([p[1] for p in samples], dtype=np.float64)
+    min_x, max_x = float(xs.min()), float(xs.max())
+    min_y, max_y = float(ys.min()), float(ys.max())
+    span_x = max(max_x - min_x, 1e-6)
+    span_y = max(max_y - min_y, 1e-6)
+    # square framing with margin
+    span = max(span_x, span_y) * 1.15
+    cx, cy = (min_x + max_x) * 0.5, (min_y + max_y) * 0.5
+    for px, py in samples:
+        screen_x = int(((px - cx) / span + 0.5) * ctx.width)
+        screen_y = int(((py - cy) / span + 0.5) * ctx.height)
         if 0 <= screen_x < ctx.width and 0 <= screen_y < ctx.height:
             density[screen_y, screen_x] += 1.0
 

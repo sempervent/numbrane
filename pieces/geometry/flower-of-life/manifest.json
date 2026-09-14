@@ -1,0 +1,19 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "geometry/flower-of-life",
+  "name": "Flower of Life",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": ["geometry-ir"],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": false,
+    "audio": true,
+    "still": true,
+    "animated": true,
+    "realtime": true,
+    "audio_reactive": true
+  }
+}

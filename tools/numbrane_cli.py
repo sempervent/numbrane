@@ -35,6 +35,9 @@ SKETCH_MAP = {
 GEOM_SVG_PIECES = {
     "geometry/seed-of-life",
     "geometry/metatron",
+    "geometry/flower-of-life",
+    "geometry/sri-yantra",
+    "geometry/isometric",
     "reference/circle-lattice",
     "geometry/circle-lattice",
 }
@@ -184,6 +187,22 @@ def cmd_render(args: argparse.Namespace) -> int:
                 r, levels=int(recipe.get("parameters", {}).get("geom.levels", 1))
             )
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
+        elif "flower-of-life" in piece or "sri-yantra" in piece or "isometric" in piece:
+            from numbrane_python.geometry.sacred import build_sacred_geometry_ir
+
+            kind = (
+                "flower-of-life"
+                if "flower" in piece
+                else "sri-yantra"
+                if "sri" in piece
+                else "isometric"
+            )
+            ir = build_sacred_geometry_ir(
+                kind,
+                radius=r,
+                layers=int(recipe.get("parameters", {}).get("geom.levels", 3)),
+                scale=float(recipe.get("parameters", {}).get("geom.scale", 1.0)),
+            )
         else:
             ir = gen_lattice(recipe)
         if fmt == "svg":
