@@ -1,0 +1,104 @@
+#app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+}
+
+#app::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.03), rgba(0, 0, 0, 0.07)) 0 0 / 100% 3px,
+    radial-gradient(1200px 600px at 50% 100%, rgba(49, 255, 139, 0.04), transparent 60%),
+    radial-gradient(1200px 600px at 0% 0%, rgba(139, 246, 255, 0.03), transparent 60%);
+  mix-blend-mode: screen;
+}
+
+#hud {
+  background: var(--hud);
+  color: var(--ink);
+  padding: 16px;
+  border-right: 1px solid var(--hud-border);
+  box-shadow: inset 0 0 0 1px rgba(139, 246, 255, 0.05);
+}
+
+#hud h1 {
+  font-size: 18px;
+  margin: 0 0 12px;
+  letter-spacing: 0.12em;
+  color: var(--neon);
+  text-shadow: 0 0 8px rgba(139, 246, 255, 0.6);
+}
+
+.control {
+  margin: 12px 0;
+}
+.control label {
+  display: block;
+  font-size: 12px;
+  opacity: 0.85;
+  margin-bottom: 6px;
+  color: var(--neon-alt);
+  text-shadow: 0 0 4px rgba(49, 255, 139, 0.5);
+}
+.control input[type="range"] {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 4px;
+  background: #0f1218;
+  border: 1px solid #1d2330;
+}
+.control input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 8px rgba(255, 59, 209, 0.8);
+  border: 1px solid #2a0b21;
+}
+
+.select {
+  width: 100%;
+  padding: 6px;
+  background: #0f1218;
+  color: var(--ink);
+  border: 1px solid #262a33;
+}
+
+#canvas {
+  position: relative;
+  cursor: crosshair;
+}
+
+#gate {
+  position: absolute;
+  inset: 0 0 0 320px;
+  display: grid;
+  place-items: center;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(0, 255, 178, 0.06), transparent 40%),
+    rgba(5, 6, 7, 0.92);
+  z-index: 10;
+}
+#gate button {
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.16em;
+  padding: 12px 18px;
+  color: var(--bg);
+  background: var(--neon);
+  border: 1px solid #0b3f46;
+  box-shadow:
+    0 0 18px rgba(139, 246, 255, 0.8),
+    inset 0 0 12px rgba(255, 255, 255, 0.4);
+  cursor: pointer;
+}
+#gate button:active {
+  transform: translateY(1px);
+  box-shadow:
+    0 0 8px rgba(139, 246, 255, 0.6),
+    inset 0 0 6px rgba(255, 255, 255, 0.3);
+}
