@@ -6,6 +6,7 @@ import { defineConfig } from "vitest/config";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const shadersDir = resolve(root, "shaders");
+const setsDir = resolve(root, "../../pieces/live");
 
 /** Serve and emit GLSL from engines/web/shaders at /shaders/*. */
 function shadersStaticPlugin(): Plugin {
@@ -45,8 +46,46 @@ function shadersStaticPlugin(): Plugin {
   };
 }
 
+/** Serve live performance sets from pieces/live/<id>/set.json as /sets/<id>.json */
+function liveSetsPlugin(): Plugin {
+  return {
+    name: "numbrane-live-sets",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url?.split("?")[0] ?? "";
+        if (!url.startsWith("/sets/") || !url.endsWith(".json")) {
+          next();
+          return;
+        }
+        const id = url.slice("/sets/".length, url.length - ".json".length);
+        if (!id || id.includes("..") || id.includes("/")) {
+          next();
+          return;
+        }
+        const file = resolve(setsDir, id, "set.json");
+        if (!file.startsWith(setsDir) || !existsSync(file)) {
+          res.statusCode = 404;
+          res.end("set not found");
+          return;
+        }
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(readFileSync(file));
+      });
+    },
+    writeBundle(options) {
+      if (!options.dir || !existsSync(setsDir)) return;
+      const out = resolve(options.dir, "sets");
+      mkdirSync(out, { recursive: true });
+      for (const name of readdirSync(setsDir)) {
+        const src = resolve(setsDir, name, "set.json");
+        if (existsSync(src)) copyFileSync(src, resolve(out, `${name}.json`));
+      }
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [shadersStaticPlugin()],
+  plugins: [shadersStaticPlugin(), liveSetsPlugin()],
   server: {
     host: "0.0.0.0",
     port: 5173,
@@ -56,6 +95,8 @@ export default defineConfig({
       input: {
         main: resolve(root, "index.html"),
         latticefall: resolve(root, "latticefall.html"),
+        live: resolve(root, "live.html"),
+        "live-output": resolve(root, "live-output.html"),
       },
     },
   },

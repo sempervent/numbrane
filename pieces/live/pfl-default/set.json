@@ -1,0 +1,335 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-default",
+  "name": "PFL / Dirty Drone",
+  "bpm": 120,
+  "default_transition": {
+    "type": "crossfade",
+    "duration_beats": 4
+  },
+  "scenes": [
+    {
+      "id": "void",
+      "name": "01 VOID",
+      "layers": [
+        {
+          "id": "geom",
+          "piece": "geometry/seed-of-life",
+          "opacity": 0.85,
+          "blend": "normal",
+          "parameters": { "chaos": 0.05, "density": 0.35, "zoom": 1.1 },
+          "seed": 7
+        }
+      ],
+      "post": {
+        "exposure": 0.85,
+        "saturation": 0.55,
+        "vignette": 0.55,
+        "feedback": 0.15,
+        "bloom": 0.08,
+        "grain": 0.12
+      },
+      "modulation": [
+        {
+          "id": "void-energy",
+          "source": "audio.energy",
+          "destination": "layer.geom.density",
+          "amount": 0.4,
+          "offset": 0.3,
+          "min": 0.2,
+          "max": 0.8,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.4
+        }
+      ]
+    },
+    {
+      "id": "signal",
+      "name": "02 SIGNAL",
+      "layers": [
+        {
+          "id": "field",
+          "piece": "fields/flow-hatching",
+          "opacity": 0.9,
+          "blend": "screen",
+          "parameters": { "chaos": 0.25, "density": 0.6 },
+          "seed": 11
+        },
+        {
+          "id": "parts",
+          "piece": "particles/noodles",
+          "opacity": 0.55,
+          "blend": "add",
+          "parameters": { "density": 0.7 },
+          "seed": 13
+        }
+      ],
+      "post": {
+        "exposure": 1.05,
+        "feedback": 0.28,
+        "feedback_zoom": 1.015,
+        "bloom": 0.2,
+        "chromatic": 0.4
+      },
+      "modulation": [
+        {
+          "id": "sig-low",
+          "source": "audio.low",
+          "destination": "layer.field.chaos",
+          "amount": 0.5,
+          "offset": 0.2,
+          "min": 0,
+          "max": 1,
+          "curve": 0.8,
+          "invert": false,
+          "smoothing": 0.25
+        },
+        {
+          "id": "sig-onset",
+          "source": "env.flash",
+          "destination": "post.exposure",
+          "amount": 0.35,
+          "offset": 0.9,
+          "min": 0.8,
+          "max": 1.4,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.1
+        }
+      ],
+      "transition": { "type": "dissolve", "duration_beats": 2 }
+    },
+    {
+      "id": "bloom",
+      "name": "03 BLOOM",
+      "layers": [
+        {
+          "id": "growth",
+          "piece": "growth/differential-growth",
+          "opacity": 0.8,
+          "blend": "normal",
+          "parameters": { "density": 0.65, "chaos": 0.2 },
+          "seed": 17
+        },
+        {
+          "id": "rd",
+          "piece": "reaction-diffusion/reaction-diffusion",
+          "opacity": 0.45,
+          "blend": "multiply",
+          "parameters": { "density": 0.5 },
+          "seed": 19
+        }
+      ],
+      "post": {
+        "exposure": 1.0,
+        "saturation": 0.85,
+        "feedback": 0.35,
+        "bloom": 0.35,
+        "hue_shift": 0.02
+      },
+      "modulation": [
+        {
+          "id": "bloom-mid",
+          "source": "audio.mid",
+          "destination": "layer.growth.density",
+          "amount": 0.45,
+          "offset": 0.4,
+          "min": 0.3,
+          "max": 1,
+          "curve": 1.2,
+          "invert": false,
+          "smoothing": 0.3
+        },
+        {
+          "id": "bloom-lfo",
+          "source": "lfo.slow",
+          "destination": "post.hue_shift",
+          "amount": 0.08,
+          "offset": 0,
+          "min": -0.05,
+          "max": 0.08,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.5
+        }
+      ],
+      "transition": { "type": "voronoi-fracture", "duration_beats": 4 }
+    },
+    {
+      "id": "machine",
+      "name": "04 MACHINE",
+      "layers": [
+        {
+          "id": "tile",
+          "piece": "tiling/truchet-tiles",
+          "opacity": 0.75,
+          "blend": "normal",
+          "parameters": { "density": 0.7, "rotation": 0 },
+          "seed": 23
+        },
+        {
+          "id": "pack",
+          "piece": "geometry/circle-packing",
+          "opacity": 0.5,
+          "blend": "difference",
+          "parameters": { "chaos": 0.15 },
+          "seed": 29
+        }
+      ],
+      "post": {
+        "contrast": 1.15,
+        "feedback": 0.2,
+        "feedback_rotation": 0.002,
+        "grain": 0.05
+      },
+      "modulation": [
+        {
+          "id": "mach-beat",
+          "source": "transport.beatPhase",
+          "destination": "layer.tile.rotation",
+          "amount": 0.15,
+          "offset": 0,
+          "min": -0.2,
+          "max": 0.2,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.05
+        },
+        {
+          "id": "mach-high",
+          "source": "audio.high",
+          "destination": "layer.pack.chaos",
+          "amount": 0.5,
+          "offset": 0.1,
+          "min": 0,
+          "max": 1,
+          "curve": 1.4,
+          "invert": false,
+          "smoothing": 0.2
+        }
+      ]
+    },
+    {
+      "id": "collapse",
+      "name": "05 COLLAPSE",
+      "layers": [
+        {
+          "id": "lf",
+          "piece": "flagship/latticefall",
+          "opacity": 1.0,
+          "blend": "normal",
+          "parameters": { "chaos": 0.45, "density": 0.85, "zoom": 1.15 },
+          "seed": 42
+        },
+        {
+          "id": "esc",
+          "piece": "fractals/escape-time",
+          "opacity": 0.4,
+          "blend": "screen",
+          "parameters": { "chaos": 0.5, "zoom": 1.3 },
+          "seed": 31
+        }
+      ],
+      "post": {
+        "exposure": 1.15,
+        "feedback": 0.4,
+        "feedback_zoom": 1.02,
+        "bloom": 0.4,
+        "chromatic": 0.7,
+        "saturation": 0.9
+      },
+      "modulation": [
+        {
+          "id": "col-energy",
+          "source": "audio.energy",
+          "destination": "layer.lf.chaos",
+          "amount": 0.55,
+          "offset": 0.3,
+          "min": 0.1,
+          "max": 1,
+          "curve": 0.9,
+          "invert": false,
+          "smoothing": 0.2
+        },
+        {
+          "id": "col-centroid",
+          "source": "audio.centroid",
+          "destination": "post.chromatic",
+          "amount": 0.8,
+          "offset": 0.2,
+          "min": 0,
+          "max": 1.5,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.35
+        },
+        {
+          "id": "col-onset",
+          "source": "env.flash",
+          "destination": "post.bloom",
+          "amount": 0.5,
+          "offset": 0.3,
+          "min": 0.2,
+          "max": 0.9,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.05
+        }
+      ],
+      "transition": { "type": "fade-through-black", "duration_beats": 2 }
+    },
+    {
+      "id": "afterimage",
+      "name": "06 AFTERIMAGE",
+      "layers": [
+        {
+          "id": "attr",
+          "piece": "fractals/strange-attractors",
+          "opacity": 0.7,
+          "blend": "add",
+          "parameters": { "density": 0.4, "chaos": 0.25 },
+          "seed": 37
+        },
+        {
+          "id": "meta",
+          "piece": "geometry/metatron",
+          "opacity": 0.35,
+          "blend": "screen",
+          "parameters": { "density": 0.3 },
+          "seed": 41
+        }
+      ],
+      "post": {
+        "exposure": 0.75,
+        "feedback": 0.55,
+        "feedback_zoom": 1.008,
+        "vignette": 0.7,
+        "saturation": 0.4,
+        "grain": 0.2
+      },
+      "modulation": [
+        {
+          "id": "aft-flux",
+          "source": "audio.flux",
+          "destination": "layer.attr.density",
+          "amount": 0.4,
+          "offset": 0.25,
+          "min": 0.15,
+          "max": 0.7,
+          "curve": 1,
+          "invert": false,
+          "smoothing": 0.45
+        }
+      ],
+      "transition": { "type": "wipe", "duration_beats": 4 }
+    }
+  ],
+  "cues": [
+    { "id": "next", "action": "next_scene", "midi": { "type": "note", "channel": 1, "number": 60 } },
+    { "id": "prev", "action": "prev_scene", "midi": { "type": "note", "channel": 1, "number": 58 } },
+    { "id": "black", "action": "blackout", "midi": { "type": "note", "channel": 1, "number": 36 } },
+    { "id": "panic", "action": "panic", "midi": { "type": "note", "channel": 1, "number": 37 } },
+    { "id": "rec", "action": "record_toggle", "midi": { "type": "note", "channel": 1, "number": 39 } }
+  ]
+}
