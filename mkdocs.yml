@@ -23,6 +23,11 @@ nav:
   - Art Protocol: art-protocol.md
   - Protocol summary: protocol.md
   - Pieces: pieces.md
+  - NUMBRANE LIVE: live.md
+  - Audio reactivity: audio-reactivity.md
+  - MIDI: midi.md
+  - OBS: obs.md
+  - Performance recording: performance-recording.md
   - Python engine: python-engine.md
   - Web engine: web-engine.md
   - Rust engine: rust-engine.md

@@ -11,9 +11,15 @@ just render reference/circle-lattice seed=42
 just render flagship/latticefall seed=42
 just latticefall          # flagship live WebGL + WASM + Tone
 just latticefall-smoke    # Playwright WebGL/WASM/replay digests
+just live                 # NUMBRANE LIVE performance runtime
+just live-pfl             # load pfl-default set
 just dev-web              # audiovisual/nodes, escape-time shaders
 just dev-web latticefall  # same as just latticefall
 ```
+
+Manifests declare live capabilities: `still`, `animated`, `realtime`, `audio_reactive`, `interactive`.
+
+Performance Sets live under `pieces/live/<set-id>/set.json` (NAP live-set schema).
 
 ## Flagship
 

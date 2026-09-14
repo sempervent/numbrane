@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NUMBRANE LIVE</title>
+    <style>
+      :root {
+        --bg: #07080c;
+        --panel: #0c0e14;
+        --line: #1a1e2a;
+        --ink: #e6eaf2;
+        --mute: #8b93a7;
+        --accent: #6ec8ff;
+      }
+      * { box-sizing: border-box; }
+      html, body, #app { height: 100%; margin: 0; background: var(--bg); color: var(--ink); }
+      body { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
+      #app { display: grid; grid-template-columns: 300px 1fr; }
+      #hud {
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+        padding: 0.85rem;
+        overflow: auto;
+      }
+      #hud h1 { font-size: 14px; letter-spacing: 0.08em; margin: 0 0 0.25rem; color: var(--accent); }
+      #hud .sub { color: var(--mute); margin: 0 0 0.75rem; }
+      #hud button, #hud select, #hud input {
+        display: block; width: 100%; margin: 0.25rem 0 0.5rem;
+        background: #12151e; color: var(--ink); border: 1px solid var(--line); padding: 0.4rem;
+      }
+      #hud .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.35rem; }
+      #hud .row button { width: auto; }
+      #hud .scenes button { text-align: left; }
+      #hud .meters .bar {
+        height: 8px; background: var(--accent); width: 0%; margin-bottom: 0.75rem;
+      }
+      #hud h2 { font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--mute); margin: 0.9rem 0 0.35rem; }
+      #hud .section { margin-bottom: 0.25rem; }
+      #hud .muted { color: var(--mute); margin: 0 0 0.4rem; line-height: 1.35; }
+      #hud .runtime { white-space: pre-wrap; color: var(--ink); font-size: 11px; max-height: none; margin: 0 0 0.5rem; }
+      #hud .audio-status { color: var(--accent); margin: 0.25rem 0 0.5rem; }
+      #hud button.primary { border-color: var(--accent); color: var(--accent); }
+      #hud a { color: var(--accent); display: block; margin: 0.4rem 0; }
+      #hud .keys { color: var(--mute); font-size: 10px; line-height: 1.4; }
+      #view { position: relative; min-height: 100%; background: #000; }
+      #stage { width: 100%; height: 100%; display: block; object-fit: contain; }
+      @media (max-width: 800px) {
+        #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+        #hud { max-height: 45vh; border-right: none; border-bottom: 1px solid var(--line); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="hud"></aside>
+      <div id="view"><canvas id="stage"></canvas></div>
+    </div>
+    <script type="module" src="/src/live/main.ts"></script>
+  </body>
+</html>

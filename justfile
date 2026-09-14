@@ -227,6 +227,44 @@ latticefall-record:
     @echo "Interactive record: just latticefall  (HUD exports via window.__LATTICEFALL__.exportEvents())"
     @echo "Save JSON under artifacts/ and replay with: just latticefall-replay path/to/events.json"
 
+# ── NUMBRANE LIVE ────────────────────────────────────────────────────
+
+[group('live')]
+live:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    echo "NUMBRANE LIVE → http://127.0.0.1:5173/live.html?set=pfl-default"
+    echo "OBS output   → http://127.0.0.1:5173/live-output.html?set=pfl-default"
+    npm run dev -- --host 127.0.0.1 --port 5173 --open /live.html?set=pfl-default
+
+[group('live')]
+live-pfl: live
+
+[group('live')]
+live-build:
+    cd "{{root}}/engines/web" && npm run build
+
+[group('live')]
+live-test:
+    cd "{{root}}/engines/web" && npm run test:live
+
+[group('live')]
+live-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npx tsx tests/live_smoke.ts
+    npm run test -- tests/live_smoke.test.ts
+
+[group('live')]
+live-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test tests/e2e/live.spec.ts
+
 # Repository hygiene (whole-tree checks). Distinct from pre-commit (staged/tracked files only).
 [group('ci')]
 repo-audit:
@@ -259,7 +297,7 @@ ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
 [group('ci')]
-ci: ci-lite test-golden docs build latticefall-build latticefall-smoke
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e
     @echo "ci ok"
 
 # ── pieces / clean ───────────────────────────────────────────────────
