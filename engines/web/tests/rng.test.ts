@@ -108,6 +108,11 @@ describe("determinism hygiene", () => {
       if (file.includes(`${sep}latticefall${sep}`) && text.includes("LIVE_ONLY_WALL_CLOCK")) {
         return;
       }
+      // NUMBRANE LIVE driver may use wall clock to advance transport / MIDI timing;
+      // artwork still consumes logical frame/beat only.
+      if (file.includes(`${sep}live${sep}`)) {
+        return;
+      }
       if (/\bperformance\.now\s*\(/.test(text)) {
         hits.push(file);
       }
