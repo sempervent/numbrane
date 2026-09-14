@@ -1,0 +1,138 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://numbrane.dev/schema/live-set.schema.json",
+  "title": "NAP Live Performance Set",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["protocol_version", "set_id", "name", "scenes"],
+  "properties": {
+    "protocol_version": { "type": "string", "const": "0.1.0" },
+    "set_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "bpm": { "type": "number", "minimum": 1 },
+    "default_transition": { "$ref": "#/$defs/transition" },
+    "scenes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scene" }
+    },
+    "cues": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/cue" }
+    }
+  },
+  "$defs": {
+    "transition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["cut", "crossfade", "fade-through-black", "dissolve", "wipe", "voronoi-fracture"]
+        },
+        "duration_beats": { "type": "number", "minimum": 0 },
+        "duration_bars": { "type": "number", "minimum": 0 },
+        "duration_seconds": { "type": "number", "minimum": 0 }
+      }
+    },
+    "layer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "piece"],
+      "properties": {
+        "id": { "type": "string" },
+        "piece": { "type": "string" },
+        "opacity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "blend": {
+          "type": "string",
+          "enum": ["normal", "add", "multiply", "screen", "difference", "lighten", "darken"]
+        },
+        "transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" },
+            "scale": { "type": "number" },
+            "rotation": { "type": "number" }
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "seed": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "scene": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "layers"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "layers": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/layer" }
+        },
+        "post": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "exposure": { "type": "number" },
+            "contrast": { "type": "number" },
+            "saturation": { "type": "number" },
+            "hue_shift": { "type": "number" },
+            "vignette": { "type": "number" },
+            "bloom": { "type": "number" },
+            "feedback": { "type": "number" },
+            "feedback_zoom": { "type": "number" },
+            "feedback_rotation": { "type": "number" },
+            "chromatic": { "type": "number" },
+            "grain": { "type": "number" }
+          }
+        },
+        "modulation": {
+          "type": "array",
+          "items": { "type": "object", "additionalProperties": true }
+        },
+        "transition": { "$ref": "#/$defs/transition" }
+      }
+    },
+    "cue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "action"],
+      "properties": {
+        "id": { "type": "string" },
+        "action": {
+          "type": "string",
+          "enum": [
+            "next_scene",
+            "prev_scene",
+            "goto_scene",
+            "blackout",
+            "panic",
+            "reload",
+            "record_toggle"
+          ]
+        },
+        "scene_id": { "type": "string" },
+        "midi": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "type": { "type": "string", "enum": ["note", "cc"] },
+            "channel": { "type": "integer", "minimum": 1, "maximum": 16 },
+            "number": { "type": "integer", "minimum": 0, "maximum": 127 }
+          }
+        }
+      }
+    }
+  }
+}

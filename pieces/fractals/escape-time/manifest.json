@@ -11,7 +11,11 @@
   "capabilities": {
     "deterministic": true,
     "animation": true,
-    "interactive": true,
-    "audio": false
+    "interactive": false,
+    "audio": false,
+    "still": true,
+    "animated": true,
+    "realtime": true,
+    "audio_reactive": true
   }
 }

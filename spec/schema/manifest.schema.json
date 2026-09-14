@@ -62,6 +62,22 @@
         "replay": {
           "type": "boolean",
           "description": "Piece supports NAP event-stream record and deterministic replay."
+        },
+        "still": {
+          "type": "boolean",
+          "description": "Piece can render a deterministic still at a logical frame."
+        },
+        "animated": {
+          "type": "boolean",
+          "description": "Piece has meaningful temporal evolution over logical frames."
+        },
+        "realtime": {
+          "type": "boolean",
+          "description": "Piece can run in NUMBRANE LIVE at interactive frame rates."
+        },
+        "audio_reactive": {
+          "type": "boolean",
+          "description": "Piece exposes parameters suitable for live audio modulation."
         }
       }
     }

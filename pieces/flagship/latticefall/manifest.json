@@ -20,6 +20,10 @@
     "audio": true,
     "webgl": true,
     "wasm": true,
-    "replay": true
+    "replay": true,
+    "still": true,
+    "animated": true,
+    "realtime": true,
+    "audio_reactive": true
   }
 }

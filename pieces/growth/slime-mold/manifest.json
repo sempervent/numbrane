@@ -12,6 +12,10 @@
     "deterministic": true,
     "animation": true,
     "interactive": false,
-    "audio": false
+    "audio": false,
+    "still": true,
+    "animated": true,
+    "realtime": true,
+    "audio_reactive": true
   }
 }
