@@ -218,11 +218,20 @@ def cmd_render(args: argparse.Namespace) -> int:
             ir = geometry_ir_from_centers(centers, r)
             ir["meta"] = {"kind": "seed-of-life", "seed": seed}
         elif "metatron" in piece:
+            from numbrane_python.composition.grammar import apply_geometry_composition
+
+            comp_mode = str(
+                recipe.get("parameters", {}).get(
+                    "composition_mode",
+                    recipe.get("parameters", {}).get("comp.mode", "canonical"),
+                )
+            )
             centers = flower_of_life_centers(r, levels=max(1, levels + (seed % 2)))
             c, s = math.cos(rot), math.sin(rot)
             centers = [(x * c - y * s, x * s + y * c) for x, y in centers]
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
             ir["meta"] = {"kind": "metatron", "seed": seed, "nodes": len(centers)}
+            ir = apply_geometry_composition(ir, comp_mode, seed=seed)
         elif "flower-of-life" in piece or "sri-yantra" in piece or "isometric" in piece:
             from numbrane_python.geometry.sacred import build_sacred_geometry_ir
 
@@ -233,12 +242,19 @@ def cmd_render(args: argparse.Namespace) -> int:
                 if "sri" in piece
                 else "isometric"
             )
+            comp_mode = str(
+                recipe.get("parameters", {}).get(
+                    "composition_mode",
+                    recipe.get("parameters", {}).get("comp.mode", "canonical"),
+                )
+            )
             ir = build_sacred_geometry_ir(
                 kind,
                 radius=r,
                 layers=int(recipe.get("parameters", {}).get("geom.levels", 3)),
                 scale=float(recipe.get("parameters", {}).get("geom.scale", 1.0)),
                 seed=seed,
+                composition_mode=comp_mode,
             )
         else:
             ir = gen_lattice(recipe)

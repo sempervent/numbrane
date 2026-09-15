@@ -2,18 +2,28 @@
   "protocol_version": "0.1.0",
   "set_id": "pfl-ritual",
   "name": "PFL / Ritual",
-  "bpm": 96,
-  "default_transition": { "type": "crossfade", "duration_beats": 4 },
+  "bpm": 92,
+  "default_transition": {
+    "type": "crossfade",
+    "duration_beats": 4
+  },
   "scenes": [
     {
       "id": "ritual-meta",
-      "name": "Metatron",
+      "name": "Metatron construction",
       "layers": [
         {
           "id": "L0",
           "piece": "geometry/metatron",
           "opacity": 1,
-          "parameters": { "density": 0.8, "hue": 0.48 }
+          "parameters": {
+            "density": 0.62,
+            "chaos": 0.08,
+            "hue": 0.08,
+            "composition_mode": "construction",
+            "pfl_style": "pfl-ritual",
+            "palette": "bone-black"
+          }
         }
       ],
       "modulation": [
@@ -21,43 +31,75 @@
           "id": "m1",
           "source": "audio.onset",
           "destination": "layer.L0.density",
-          "amount": 0.45,
-          "min": 0.2,
-          "max": 1
+          "amount": 0.35,
+          "min": 0.3,
+          "max": 0.95
         },
         {
           "id": "m2",
           "source": "audio.low",
           "destination": "layer.L0.chaos",
-          "amount": 0.35,
+          "amount": 0.2,
           "min": 0,
-          "max": 1
+          "max": 0.45
         }
       ],
-      "post": { "bloom": 0.15, "chromatic": 0.05 }
+      "post": {
+        "bloom": 0.12,
+        "chromatic": 0.04,
+        "vignette": 0.22
+      }
     },
     {
-      "id": "ritual-yantra",
-      "name": "Sri Yantra",
+      "id": "ritual-yantra-rd",
+      "name": "Yantra over lace",
       "layers": [
         {
           "id": "L0",
-          "piece": "geometry/sri-yantra",
+          "piece": "reaction-diffusion/reaction-diffusion",
           "opacity": 1,
-          "parameters": { "density": 0.75, "hue": 0.42 }
+          "parameters": {
+            "density": 0.7,
+            "evolved_preset": "lace",
+            "initial_condition": "ring",
+            "pfl_style": "pfl-ritual",
+            "palette": "bone-black"
+          }
+        },
+        {
+          "id": "L1",
+          "piece": "geometry/sri-yantra",
+          "opacity": 0.48,
+          "blend": "screen",
+          "parameters": {
+            "density": 0.55,
+            "composition_mode": "canonical",
+            "pfl_style": "pfl-ritual"
+          }
         }
       ],
       "modulation": [
         {
           "id": "m1",
           "source": "audio.energy",
-          "destination": "layer.L0.hue",
+          "destination": "layer.L0.density",
           "amount": 0.25,
-          "min": 0,
+          "min": 0.4,
           "max": 1
+        },
+        {
+          "id": "m2",
+          "source": "audio.onset",
+          "destination": "layer.L0.chaos",
+          "amount": 0.3,
+          "min": 0,
+          "max": 0.7
         }
       ],
-      "post": { "bloom": 0.12 }
+      "post": {
+        "bloom": 0.1,
+        "vignette": 0.2
+      }
     }
   ],
   "cues": []

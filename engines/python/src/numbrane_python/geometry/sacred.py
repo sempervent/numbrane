@@ -72,8 +72,11 @@ def build_sacred_geometry_ir(
     layers: int = 3,
     scale: float = 1.0,
     seed: int = 42,
+    composition_mode: str = "canonical",
 ) -> dict[str, Any]:
     """Build sacred geometry IR. Seed applies bounded rotation / layer / scale variation."""
+    from numbrane_python.composition.grammar import apply_geometry_composition
+
     rot = ((seed & 0xFFFFFFFF) % 360) * (math.pi / 180.0) * 0.12
     layer_nudge = (seed % 3) - 1
     scale_nudge = 0.92 + ((seed % 17) / 17.0) * 0.16
@@ -87,7 +90,7 @@ def build_sacred_geometry_ir(
         centers = [_rotate_xy(x, y) for x, y in flower_of_life_layers(radius * scale_nudge, lyr)]
         ir = geometry_ir_from_centers(centers, radius)
         ir["meta"] = {"kind": "flower-of-life", "layers": lyr, "seed": seed, "rotation": rot}
-        return ir
+        return apply_geometry_composition(ir, composition_mode, seed=seed)
     if kind in {"sri-yantra", "geometry/sri-yantra"}:
         tri = sri_yantra_triangles(scale * scale_nudge)
         primitives: list[dict[str, Any]] = []
@@ -97,18 +100,19 @@ def build_sacred_geometry_ir(
                 x2, y2 = _rotate_xy(*poly[i + 1])
                 primitives.append({"kind": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2})
         primitives.append({"kind": "circle", "cx": 0.0, "cy": 0.0, "r": scale * scale_nudge})
-        return {
+        ir = {
             "protocol_version": "0.1.0",
             "kind": "sri-yantra",
             "primitives": primitives,
             "meta": {**tri, "seed": seed, "rotation": rot},
         }
+        return apply_geometry_composition(ir, composition_mode, seed=seed)
     if kind in {"isometric", "geometry/isometric"}:
         n = 6 + (seed % 3)
         centers = [_rotate_xy(x, y) for x, y in isometric_nodes(cols=n, rows=n)]
         ir = geometry_ir_from_centers(centers, radius * 0.35)
         ir["meta"] = {"kind": "isometric", "seed": seed, "n": n}
-        return ir
+        return apply_geometry_composition(ir, composition_mode, seed=seed)
     raise ValueError(f"unknown sacred geometry kind: {kind}")
 
 

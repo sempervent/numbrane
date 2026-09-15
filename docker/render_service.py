@@ -57,26 +57,34 @@ def _digest(obj: Any) -> str:
 
 
 def _apply_preview_budgets(piece: str, params: dict[str, Any], quality: str) -> dict[str, Any]:
-    """Same algorithm, lower budget for preview quality."""
+    """Same algorithm, lower budget for draft/preview quality. Final = full complexity."""
     out = dict(params)
-    if quality != "preview":
+    if quality == "final":
         return out
+    # draft is a coarser budget than preview; both preserve mathematics
+    draft = quality == "draft"
     if piece == "fields/flow-hatching":
-        out["line_spacing"] = max(float(out.get("line_spacing", 4)), 7.0)
-        out["streamline_steps"] = min(int(out.get("streamline_steps", 24)), 12)
-        out["density"] = min(float(out.get("density", 1.0)), 0.55)
+        out["line_spacing"] = max(float(out.get("line_spacing", 4)), 14.0 if draft else 9.0)
+        out["streamline_steps"] = min(int(out.get("streamline_steps", 24)), 6 if draft else 10)
+        out["density"] = min(float(out.get("density", 1.0)), 0.28 if draft else 0.42)
+        out["field_octaves"] = min(int(out.get("field_octaves", 4)), 2 if draft else 3)
     if piece == "particles/noodles":
-        out["num_particles"] = min(int(out.get("num_particles", 200)), 40)
-        out["max_steps"] = min(int(out.get("max_steps", 2000)), 180)
-        out["field_octaves"] = min(int(out.get("field_octaves", 4)), 2)
+        out["num_particles"] = min(int(out.get("num_particles", 200)), 18 if draft else 40)
+        out["max_steps"] = min(int(out.get("max_steps", 2000)), 80 if draft else 180)
+        out["field_octaves"] = min(int(out.get("field_octaves", 4)), 1 if draft else 2)
     if piece.startswith("reaction-diffusion"):
-        out["iterations"] = min(int(out.get("iterations", 400)), 220)
+        out["iterations"] = min(int(out.get("iterations", 400)), 80 if draft else 220)
     if piece == "growth/slime-mold":
-        out["steps"] = min(int(out.get("steps", 200)), 120)
+        out["steps"] = min(int(out.get("steps", 200)), 50 if draft else 120)
+    if piece == "growth/differential-growth":
+        out["steps"] = min(int(out.get("steps", 200)), 40 if draft else 100)
     if piece == "fractals/strange-attractors":
-        out["steps"] = min(int(out.get("steps", 80000)), 40000)
+        out["steps"] = min(int(out.get("steps", 80000)), 12_000 if draft else 40_000)
+        out["burn_in"] = min(int(out.get("burn_in", 1000)), 200 if draft else 600)
     if "voronoi" in piece:
-        out["num_points"] = min(int(out.get("num_points", 50)), 40)
+        out["num_points"] = min(int(out.get("num_points", 50)), 24 if draft else 40)
+    if "truchet" in piece:
+        out["tile_scale"] = max(float(out.get("tile_scale", 1.0)), 1.6 if draft else 1.25)
     return out
 
 
@@ -102,7 +110,7 @@ class RenderBody(BaseModel):
     height: int = Field(default=1080, ge=64, le=8192)
     frame: int = Field(default=0, ge=0, le=100_000)
     format: Literal["png", "svg"] = "png"
-    quality: Literal["preview", "final"] = "preview"
+    quality: Literal["draft", "preview", "final"] = "preview"
     parameters: dict[str, Any] = Field(default_factory=dict)
     recipe: dict[str, Any] = Field(default_factory=dict)
 

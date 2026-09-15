@@ -4,6 +4,20 @@ from __future__ import annotations
 
 from typing import Any
 
+import math
+
+
+def _geometry_framing(meta: dict[str, Any]) -> dict[str, float]:
+    """Read composition framing hints stored on geometry IR meta."""
+    return {
+        "margin": float(meta.get("margin", 1.2)),
+        "center_bias": float(meta.get("center_bias", 0.5)),
+        "off_center_x": float(meta.get("off_center_x", 0.0)),
+        "off_center_y": float(meta.get("off_center_y", 0.0)),
+        "rotation": float(meta.get("rotation", 0.0)),
+        "view_zoom": float(meta.get("view_zoom", 1.0)),
+    }
+
 
 def geometry_ir_to_svg(
     ir: dict[str, Any],
@@ -56,18 +70,43 @@ def geometry_ir_to_svg(
         pts = [(0.0, 0.0)]
         radii = [1.0]
 
+    meta = dict(ir.get("meta") or {})
+    frame = _geometry_framing(meta)
     max_r = max(radii) if radii else 1.0
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     pad = max_r * 1.25
     min_x, max_x = min(xs) - pad, max(xs) + pad
     min_y, max_y = min(ys) - pad, max(ys) + pad
+    span_x = max(max_x - min_x, 1e-6)
+    span_y = max(max_y - min_y, 1e-6)
+    mid_x = (min_x + max_x) * 0.5
+    mid_y = (min_y + max_y) * 0.5
+    margin = frame["margin"] / max(frame["view_zoom"], 0.5)
+    span_x *= margin
+    span_y *= margin
+    bias = max(0.0, min(1.0, frame["center_bias"]))
+    span_x *= 0.85 + 0.3 * (1.0 - bias)
+    span_y *= 0.85 + 0.3 * (1.0 - bias)
+    min_x = mid_x - span_x * 0.5 + frame["off_center_x"] * span_x
+    max_x = mid_x + span_x * 0.5 + frame["off_center_x"] * span_x
+    min_y = mid_y - span_y * 0.5 + frame["off_center_y"] * span_y
+    max_y = mid_y + span_y * 0.5 + frame["off_center_y"] * span_y
     span = max(max_x - min_x, max_y - min_y, 1e-6)
+    rot = frame["rotation"]
 
     def tx(x: float, y: float) -> tuple[float, float]:
-        nx = (x - min_x) / span * (width - 40) + 20
-        ny = height - ((y - min_y) / span * (height - 40) + 20)
-        return nx, ny
+        nx = (x - min_x) / span
+        ny = (y - min_y) / span
+        if abs(rot) > 1e-6:
+            cx, cy = 0.5, 0.5
+            c, s = math.cos(rot), math.sin(rot)
+            rx = (nx - cx) * c - (ny - cy) * s + cx
+            ry = (nx - cx) * s + (ny - cy) * c + cy
+            nx, ny = rx, ry
+        px = nx * (width - 40) + 20
+        py = height - (ny * (height - 40) + 20)
+        return px, py
 
     scale = (width - 40) / span
     parts = [
@@ -82,9 +121,11 @@ def geometry_ir_to_svg(
             x2, y2 = tx(float(p["x2"]), float(p["y2"]))
             sw = stroke_width
             col = p.get("stroke") or stroke
+            opacity = p.get("opacity")
+            op_attr = f' opacity="{float(opacity):.3f}"' if opacity is not None else ""
             parts.append(
                 f'<line x1="{x1:.3f}" y1="{y1:.3f}" x2="{x2:.3f}" y2="{y2:.3f}" '
-                f'stroke="{col}" stroke-width="{sw}" fill="none"/>'
+                f'stroke="{col}" stroke-width="{sw}" fill="none"{op_attr}/>'
             )
         elif p.get("kind") == "circle":
             cx, cy = tx(float(p["cx"]), float(p["cy"]))
@@ -182,19 +223,44 @@ def geometry_ir_to_png(
     if not pts:
         return img
 
+    meta = dict(ir.get("meta") or {})
+    frame = _geometry_framing(meta)
     max_r = max(radii) if radii else 1.0
     xs = [p[0] for p in pts]
     ys = [p[1] for p in pts]
     pad = max_r * 1.25
     min_x, max_x = min(xs) - pad, max(xs) + pad
     min_y, max_y = min(ys) - pad, max(ys) + pad
+    span_x = max(max_x - min_x, 1e-6)
+    span_y = max(max_y - min_y, 1e-6)
+    mid_x = (min_x + max_x) * 0.5
+    mid_y = (min_y + max_y) * 0.5
+    margin = frame["margin"] / max(frame["view_zoom"], 0.5)
+    span_x *= margin
+    span_y *= margin
+    bias = max(0.0, min(1.0, frame["center_bias"]))
+    span_x *= 0.85 + 0.3 * (1.0 - bias)
+    span_y *= 0.85 + 0.3 * (1.0 - bias)
+    min_x = mid_x - span_x * 0.5 + frame["off_center_x"] * span_x
+    max_x = mid_x + span_x * 0.5 + frame["off_center_x"] * span_x
+    min_y = mid_y - span_y * 0.5 + frame["off_center_y"] * span_y
+    max_y = mid_y + span_y * 0.5 + frame["off_center_y"] * span_y
     span = max(max_x - min_x, max_y - min_y, 1e-6)
+    rot = frame["rotation"]
     scale = (width - 40) / span
 
     def tx(x: float, y: float) -> tuple[float, float]:
-        nx = (x - min_x) / span * (width - 40) + 20
-        ny = height - ((y - min_y) / span * (height - 40) + 20)
-        return nx, ny
+        nx = (x - min_x) / span
+        ny = (y - min_y) / span
+        if abs(rot) > 1e-6:
+            cx, cy = 0.5, 0.5
+            c, s = math.cos(rot), math.sin(rot)
+            rx = (nx - cx) * c - (ny - cy) * s + cx
+            ry = (nx - cx) * s + (ny - cy) * c + cy
+            nx, ny = rx, ry
+        px = nx * (width - 40) + 20
+        py = height - (ny * (height - 40) + 20)
+        return px, py
 
     sw = max(1, int(stroke_width))
     for p in primitives:

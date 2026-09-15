@@ -1,0 +1,100 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-organism",
+  "name": "PFL / Organism",
+  "bpm": 86,
+  "default_transition": {
+    "type": "crossfade",
+    "duration_beats": 6
+  },
+  "scenes": [
+    {
+      "id": "org-slime",
+      "name": "Constellation slime",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "growth/slime-mold",
+          "opacity": 1,
+          "parameters": {
+            "density": 0.7,
+            "chaos": 0.3,
+            "nutrient_layout": "constellation",
+            "pfl_style": "pfl-organism",
+            "palette": "muted-mineral"
+          }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.low",
+          "destination": "layer.L0.stepSize",
+          "amount": 0.3,
+          "min": 0.6,
+          "max": 1.8
+        },
+        {
+          "id": "m2",
+          "source": "audio.mid",
+          "destination": "layer.L0.sensorDistance",
+          "amount": 0.28,
+          "min": 0.5,
+          "max": 2
+        },
+        {
+          "id": "m3",
+          "source": "audio.onset",
+          "destination": "layer.L0.deposit",
+          "amount": 0.32,
+          "min": 0.5,
+          "max": 2
+        }
+      ],
+      "post": {
+        "bloom": 0.16,
+        "feedback": 0.08
+      }
+    },
+    {
+      "id": "org-growth",
+      "name": "Differential islands",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "growth/differential-growth",
+          "opacity": 1,
+          "parameters": {
+            "density": 0.75,
+            "initial_topology": "islands",
+            "pfl_style": "pfl-organism",
+            "palette": "muted-mineral"
+          }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.energy",
+          "destination": "layer.L0.growth_rate",
+          "amount": 0.3,
+          "min": 0.2,
+          "max": 1.4
+        },
+        {
+          "id": "m2",
+          "source": "audio.onset",
+          "destination": "layer.L0.density",
+          "amount": 0.25,
+          "min": 0.4,
+          "max": 1.1
+        }
+      ],
+      "post": {
+        "bloom": 0.14,
+        "vignette": 0.12
+      }
+    }
+  ],
+  "cues": []
+}

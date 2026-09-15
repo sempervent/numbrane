@@ -19,11 +19,12 @@ const PRESETS: Record<string, ArtisticPreset[]> = {
     { id: "sparse", label: "sparse", parameters: { density: 0.4, chaos: 0.1, zoom: 1 } },
   ],
   "fractals/strange-attractors": [
-    { id: "fine-line", label: "fine-line", parameters: { density: 0.55, chaos: 0.2, exposure: 1.2 } },
-    { id: "dense-cloud", label: "dense-cloud", parameters: { density: 0.9, chaos: 0.35, exposure: 1.4 } },
-    { id: "calligraphic", label: "calligraphic", parameters: { density: 0.65, chaos: 0.4, hue: 0.08 } },
-    { id: "symmetry", label: "symmetry", parameters: { density: 0.7, chaos: 0.15, rotation: 0 } },
-    { id: "long-exposure", label: "long-exposure", parameters: { density: 0.85, chaos: 0.25, exposure: 1.6 } },
+    { id: "fine-line", label: "fine-line", parameters: { density: 0.55, chaos: 0.2, exposure: 1.2, render_mode: "fine-ink" } },
+    { id: "dense-cloud", label: "dense-cloud", parameters: { density: 0.9, chaos: 0.35, exposure: 1.4, render_mode: "dense-ink" } },
+    { id: "calligraphic", label: "calligraphic", parameters: { density: 0.65, chaos: 0.4, hue: 0.08, render_mode: "calligraphic" } },
+    { id: "long-exposure", label: "long-exposure", parameters: { density: 0.85, chaos: 0.25, exposure: 1.6, render_mode: "long-exposure" } },
+    { id: "ghost", label: "ghost", parameters: { density: 0.5, chaos: 0.2, render_mode: "ghost", pfl_style: "pfl-afterimage" } },
+    { id: "technical", label: "technical", parameters: { density: 0.7, chaos: 0.15, render_mode: "technical", pfl_style: "pfl-machine" } },
   ],
   "reaction-diffusion/reaction-diffusion": [
     { id: "coral", label: "coral", parameters: { f: 0.055, k: 0.062, density: 0.8 } },
@@ -75,38 +76,92 @@ export type AnimArc = {
   apply: (params: Record<string, number>, t01: number) => Record<string, number>;
 };
 
+/** Piece-aware envelopes — not global sine wobble. */
 export const ANIM_ARCS: AnimArc[] = [
   {
     id: "emergence",
     label: "emergence",
-    apply: (p, t) => ({ ...p, density: (p.density ?? 0.7) * (0.2 + 0.8 * t), exposure: 0.7 + 0.5 * t }),
+    apply: (p, t) => {
+      const e = t * t; // ease-in reveal
+      return {
+        ...p,
+        density: (p.density ?? 0.7) * (0.15 + 0.85 * e),
+        exposure: 0.55 + 0.7 * e,
+        chaos: (p.chaos ?? 0.3) * (0.4 + 0.6 * t),
+      };
+    },
+  },
+  {
+    id: "reveal",
+    label: "reveal",
+    apply: (p, t) => ({
+      ...p,
+      margin: (p.margin ?? 1.2) * (1.45 - 0.4 * t),
+      ink: (p.ink ?? 1.2) * (0.5 + 0.7 * t),
+      exposure: 0.6 + 0.55 * t,
+    }),
   },
   {
     id: "growth",
     label: "growth",
-    apply: (p, t) => ({ ...p, zoom: (p.zoom ?? 1) * (0.85 + 0.35 * t), density: (p.density ?? 0.7) * (0.7 + 0.4 * t) }),
+    apply: (p, t) => ({
+      ...p,
+      zoom: (p.zoom ?? 1) * (0.82 + 0.4 * t),
+      density: (p.density ?? 0.7) * (0.65 + 0.45 * t),
+      growth_rate: (p.growth_rate ?? 0.5) * (0.5 + 0.8 * t),
+    }),
+  },
+  {
+    id: "drift",
+    label: "drift",
+    apply: (p, t) => ({
+      ...p,
+      off_center_x: (p.off_center_x ?? 0) + 0.12 * t,
+      rotation: (p.rotation ?? 0) + 0.08 * t,
+      hue: ((p.hue ?? 0.5) + 0.04 * t) % 1,
+    }),
+  },
+  {
+    id: "fracture",
+    label: "fracture",
+    apply: (p, t) => {
+      const crack = t < 0.35 ? t / 0.35 : 1;
+      return {
+        ...p,
+        chaos: (p.chaos ?? 0.3) * (0.3 + 1.4 * crack),
+        density: (p.density ?? 0.7) * (1.1 - 0.35 * crack),
+      };
+    },
   },
   {
     id: "collapse",
     label: "collapse",
-    apply: (p, t) => ({ ...p, density: (p.density ?? 0.7) * (1.2 - 0.9 * t), chaos: (p.chaos ?? 0.3) * (0.5 + t) }),
-  },
-  {
-    id: "zoom",
-    label: "zoom",
-    apply: (p, t) => ({ ...p, zoom: (p.zoom ?? 1) * (1 + t * 1.5) }),
+    apply: (p, t) => ({
+      ...p,
+      density: (p.density ?? 0.7) * (1.15 - 0.95 * t),
+      zoom: (p.zoom ?? 1) * (1 + 0.35 * t),
+      chaos: (p.chaos ?? 0.3) * (0.45 + 0.9 * t),
+    }),
   },
   {
     id: "settle",
     label: "settle",
-    apply: (p, t) => ({ ...p, chaos: (p.chaos ?? 0.3) * (1 - 0.7 * t), exposure: 1 + 0.2 * Math.sin(t * Math.PI) }),
+    apply: (p, t) => ({
+      ...p,
+      chaos: (p.chaos ?? 0.3) * (1 - 0.75 * t),
+      density: (p.density ?? 0.7) * (0.85 + 0.15 * (1 - t)),
+      exposure: 0.95 + 0.15 * (1 - t),
+    }),
   },
   {
-    id: "phase-transition",
-    label: "phase-transition",
-    apply: (p, t) => {
-      const kick = t > 0.45 && t < 0.55 ? 1.5 : 1;
-      return { ...p, chaos: (p.chaos ?? 0.3) * kick, density: (p.density ?? 0.7) * (0.6 + 0.6 * Math.sin(t * Math.PI)) };
-    },
+    id: "afterimage",
+    label: "afterimage",
+    apply: (p, t) => ({
+      ...p,
+      exposure: 1.1 - 0.55 * t,
+      ink: (p.ink ?? 1.2) * (1.2 - 0.5 * t),
+      density: (p.density ?? 0.7) * (1 - 0.25 * t),
+      bloom_intensity: 0.08 + 0.25 * (1 - t),
+    }),
   },
 ];

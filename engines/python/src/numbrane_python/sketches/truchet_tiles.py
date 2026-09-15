@@ -18,51 +18,104 @@ class TruchetTilesConfig(BaseModel):
     width: int = Field(default=1920)
     height: int = Field(default=1080)
 
-    # Tile parameters
+    # Tile parameters (algorithm)
     tile_size: int = Field(default=40, description="Tile size in pixels")
     tile_set: str = Field(default="curves", description="Tile set (curves, arcs, maze)")
     perturbation: float = Field(default=0.1, description="Perturbation strength")
 
-    # Stylization
+    # Composition — tile layout / orientation
+    tile_scale: float = Field(
+        default=1.0, ge=0.5, le=2.5, description="Global tile scale multiplier"
+    )
+    orientation_bias: float = Field(
+        default=0.0,
+        ge=-1.0,
+        le=1.0,
+        description="Bias toward alternating orientations",
+    )
+    field_driven_orientation: bool = Field(
+        default=False,
+        description="Let scalar field steer tile pattern choice",
+    )
+    pattern_continuity: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Neighbor-aware pattern continuity (1 = strong)",
+    )
+
+    # Stylization / style
     line_width: float = Field(default=2.0, description="Line width")
     palette: str = Field(default="ink", description="Color palette")
-    background_color: tuple = Field(default=(0, 0, 0), description="Background color")
+    background_color: tuple = Field(default=(0, 0, 0), description="Background color (legacy)")
+    background: str = Field(default="", description="Intentional background token")
+    pfl_style: str = Field(default="", description="PFL art-direction preset id")
 
-    # Noise for perturbation
+    # Noise for perturbation (algorithm)
     noise_scale: float = Field(default=0.1, description="Noise scale for perturbation")
 
 
 def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
     """Render Truchet tiles."""
+    from numbrane_python.composition.grammar import background_rgb
+    from numbrane_python.style.pfl import apply_style_to_params
+
+    if config.pfl_style:
+        raw = apply_style_to_params(config.pfl_style, config.model_dump())
+        config = config.model_copy(
+            update={k: raw[k] for k in ("palette", "background") if k in raw}
+        )
+
     canvas = Canvas(ctx.width, ctx.height, 3)
     layer = canvas.create_layer("main")
 
-    # Initialize background
-    layer[:] = np.array(config.background_color, dtype=np.uint8)
+    if config.background:
+        layer[:] = np.array(background_rgb(config.background), dtype=np.uint8)
+    else:
+        layer[:] = np.array(config.background_color, dtype=np.uint8)
 
-    # Create noise field for perturbation
     noise_field = NoiseField(scale=config.noise_scale, seed=ctx.rng.seed)
+    orient_field = NoiseField(scale=config.noise_scale * 0.7, seed=ctx.rng.seed + 17)
 
-    rng = ctx.rng.generator
+    rng = np.random.default_rng(int(config.seed) & 0xFFFFFFFF)
     palette_colors = get_palette(config.palette)
-    # Foreground must contrast with background (void[0] is near-black)
     fg = palette_colors[-1] if len(palette_colors) > 1 else (220, 220, 230)
     color = np.array(fg, dtype=np.uint8)
-    # Seed-sensitive tile size within a bounded range
-    tile_size = max(12, int(config.tile_size + (int(config.seed) % 17) - 8))
+
+    base_tile = max(12, int(config.tile_size + (int(config.seed) % 17) - 8))
+    tile_size = max(8, int(base_tile * config.tile_scale))
     num_tiles_x = ctx.width // tile_size + 1
     num_tiles_y = ctx.height // tile_size + 1
+    prev_pattern = 0
 
-    # Draw tiles
     for ty in range(num_tiles_y):
         for tx in range(num_tiles_x):
             tile_x = tx * tile_size
             tile_y = ty * tile_size
 
-            # Choose tile pattern (simplified - 4 basic patterns)
-            pattern = rng.integers(0, 4)
+            if config.field_driven_orientation:
+                field_val = orient_field.sample(
+                    np.array([tile_x / ctx.width]),
+                    np.array([tile_y / ctx.height]),
+                )[0]
+                pattern = int((field_val + 1) * 2) % 4
+            else:
+                pattern = int(rng.integers(0, 4))
 
-            # Add perturbation
+            if config.orientation_bias != 0.0:
+                if (tx + ty) % 2 == 0:
+                    pattern = (pattern + int(config.orientation_bias > 0)) % 4
+                else:
+                    pattern = (pattern + int(config.orientation_bias < 0)) % 4
+
+            if config.pattern_continuity > 0 and tx + ty > 0:
+                blend = float(config.pattern_continuity)
+                if blend >= 0.5:
+                    pattern = int(round(prev_pattern * blend + pattern * (1.0 - blend))) % 4
+                else:
+                    pattern = prev_pattern if rng.random() < blend else pattern
+            prev_pattern = pattern
+
             perturb_x = (
                 noise_field.sample(
                     np.array([tile_x / ctx.width]),
@@ -79,17 +132,14 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                 * config.perturbation
                 * tile_size
             )
-
             tile_x += perturb_x
             tile_y += perturb_y
 
-            # Draw tile pattern
             center_x = tile_x + tile_size / 2
             center_y = tile_y + tile_size / 2
             half = tile_size / 2
 
             if pattern == 0:
-                # Top-left to bottom-right curve
                 points = []
                 for i in range(20):
                     t = i / 19.0
@@ -99,7 +149,6 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                     points.append([px, py])
                 draw_polyline(layer, np.array(points), config.line_width, color)
             elif pattern == 1:
-                # Top-right to bottom-left curve
                 points = []
                 for i in range(20):
                     t = i / 19.0
@@ -109,7 +158,6 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                     points.append([px, py])
                 draw_polyline(layer, np.array(points), config.line_width, color)
             elif pattern == 2:
-                # Diagonal line top-left to bottom-right
                 draw_line(
                     layer,
                     (tile_x, tile_y),
@@ -118,7 +166,6 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                     color,
                 )
             else:
-                # Diagonal line top-right to bottom-left
                 draw_line(
                     layer,
                     (tile_x + tile_size, tile_y),
@@ -128,8 +175,6 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                 )
 
     image = canvas.get_image()
-
-    # Post-processing
     image = apply_vignette(image, 0.2)
 
     return RenderResult(
@@ -179,11 +224,13 @@ def presets() -> dict:
             "tile_size": 20,
             "tile_set": "maze",
             "perturbation": 0.05,
+            "pattern_continuity": 0.85,
         },
         "flowing_curves": {
             "tile_size": 60,
             "tile_set": "curves",
             "perturbation": 0.2,
             "line_width": 3.0,
+            "field_driven_orientation": True,
         },
     }

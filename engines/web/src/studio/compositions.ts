@@ -8,7 +8,7 @@ export type CompositionRecipe = {
   id: string;
   label: string;
   description: string;
-  build: (seed: number, params: Record<string, number>) => SetDef;
+  build: (seed: number, params: Record<string, number | string | boolean>) => SetDef;
 };
 
 function setOf(
@@ -55,7 +55,10 @@ export const COMPOSITIONS: CompositionRecipe[] = [
           opacity: 0.45,
           blend: "screen",
           seed: seed ^ 0x9e3779b9,
-          parameters: { ...params, density: Math.min(1, (params.density ?? 0.7) * 0.7) },
+          parameters: {
+            ...params,
+            density: Math.min(1, (Number(params.density) || 0.7) * 0.7),
+          },
         },
       ]),
   },
@@ -152,6 +155,78 @@ export const COMPOSITIONS: CompositionRecipe[] = [
           blend: "add",
           seed: seed ^ 0xc2b2ae35,
           parameters: { ...params, density: 0.6 },
+        },
+      ]),
+  },
+  {
+    id: "yantra-rd",
+    label: "Sri Yantra + RD",
+    description: "Reaction diffusion under ritual geometry",
+    build: (seed, params) =>
+      setOf("yantra-rd", "Yantra + RD", [
+        {
+          id: "L0",
+          piece: "reaction-diffusion/reaction-diffusion",
+          opacity: 1,
+          blend: "normal",
+          seed,
+          parameters: { ...params, evolved_preset: "lace" },
+        },
+        {
+          id: "L1",
+          piece: "geometry/sri-yantra",
+          opacity: 0.5,
+          blend: "screen",
+          seed,
+          parameters: { ...params, density: 0.55 },
+        },
+      ]),
+  },
+  {
+    id: "slime-geometry",
+    label: "Slime + geometry nutrients",
+    description: "Slime mold guided by Metatron site map",
+    build: (seed, params) =>
+      setOf("slime-geometry", "Slime + geometry", [
+        {
+          id: "L0",
+          piece: "growth/slime-mold",
+          opacity: 0.95,
+          blend: "normal",
+          seed,
+          parameters: { ...params },
+        },
+        {
+          id: "L1",
+          piece: "geometry/metatron",
+          opacity: 0.35,
+          blend: "screen",
+          seed: seed ^ 0x27d4eb2d,
+          parameters: { ...params, density: 0.4 },
+        },
+      ]),
+  },
+  {
+    id: "truchet-growth",
+    label: "Truchet + differential growth",
+    description: "Tiled field with organic growth overlay",
+    build: (seed, params) =>
+      setOf("truchet-growth", "Truchet + growth", [
+        {
+          id: "L0",
+          piece: "tiling/truchet-tiles",
+          opacity: 1,
+          blend: "normal",
+          seed,
+          parameters: { ...params },
+        },
+        {
+          id: "L1",
+          piece: "growth/differential-growth",
+          opacity: 0.55,
+          blend: "screen",
+          seed: seed ^ 0x165667b1,
+          parameters: { ...params, density: 0.7 },
         },
       ]),
   },

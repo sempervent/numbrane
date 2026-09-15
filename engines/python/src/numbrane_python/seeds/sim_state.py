@@ -467,16 +467,23 @@ def build_piece_state(
             centers = seed_of_life_centers(r)
             ir = geometry_ir_from_centers(centers, r)
         elif "metatron" in piece_id:
+            from numbrane_python.composition.grammar import apply_geometry_composition
+
+            comp_mode = str(params.get("composition_mode", params.get("comp.mode", "canonical")))
             centers = flower_of_life_centers(r, levels=int(params.get("geom.levels", 1)))
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
+            ir = apply_geometry_composition(ir, comp_mode, seed=int(recipe.get("seed", 42)))
         elif "flower-of-life" in piece_id or "sri-yantra" in piece_id or "isometric" in piece_id:
             from numbrane_python.geometry.sacred import build_sacred_geometry_ir
 
+            comp_mode = str(params.get("composition_mode", params.get("comp.mode", "canonical")))
             ir = build_sacred_geometry_ir(
                 piece_id,
                 radius=r,
                 layers=int(params.get("geom.layers", 3)),
                 scale=float(params.get("geom.scale", r)),
+                seed=int(recipe.get("seed", 42)),
+                composition_mode=comp_mode,
             )
         else:
             ir = gen_lattice(recipe)

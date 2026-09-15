@@ -79,23 +79,23 @@ def noise2d(coords: np.ndarray, seed: int = 0) -> np.ndarray:
                 corner_coords[:, d] += 1
         corners.append(hash_coords(corner_coords.astype(np.float64), seed) * 2.0 - 1.0)
 
-    # Interpolate
+    # Interpolate — use 1D t slices so (N,) corners don't broadcast to (N,N)
     if dims == 2:
         # Bilinear interpolation
         n00, n10, n01, n11 = corners
-        nx0 = lerp(n00, n10, t[:, 0:1])
-        nx1 = lerp(n01, n11, t[:, 0:1])
-        result = lerp(nx0, nx1, t[:, 1:2])
+        nx0 = lerp(n00, n10, t[:, 0])
+        nx1 = lerp(n01, n11, t[:, 0])
+        result = lerp(nx0, nx1, t[:, 1])
     else:  # dims == 3
         # Trilinear interpolation
         n000, n100, n010, n110, n001, n101, n011, n111 = corners
-        nx00 = lerp(n000, n100, t[:, 0:1])
-        nx10 = lerp(n010, n110, t[:, 0:1])
-        nx01 = lerp(n001, n101, t[:, 0:1])
-        nx11 = lerp(n011, n111, t[:, 0:1])
-        ny0 = lerp(nx00, nx10, t[:, 1:2])
-        ny1 = lerp(nx01, nx11, t[:, 1:2])
-        result = lerp(ny0, ny1, t[:, 2:3])
+        nx00 = lerp(n000, n100, t[:, 0])
+        nx10 = lerp(n010, n110, t[:, 0])
+        nx01 = lerp(n001, n101, t[:, 0])
+        nx11 = lerp(n011, n111, t[:, 0])
+        ny0 = lerp(nx00, nx10, t[:, 1])
+        ny1 = lerp(nx01, nx11, t[:, 1])
+        result = lerp(ny0, ny1, t[:, 2])
 
     return result.reshape(coords.shape[:-1])
 
