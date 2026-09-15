@@ -18,7 +18,7 @@ class StrangeAttractorsConfig(BaseModel):
 
     # Attractor type
     attractor_type: str = Field(
-        default="lorenz", description="Attractor type (lorenz, rossler, clifford)"
+        default="clifford", description="Attractor type (lorenz, rossler, clifford)"
     )
 
     # Lorenz parameters
@@ -62,14 +62,25 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
     """Render strange attractor."""
     canvas = Canvas(ctx.width, ctx.height, 3)
     layer = canvas.create_layer("main")
+    rng = np.random.default_rng(int(config.seed) & 0xFFFFFFFF)
 
-    # Initialize state
+    # Seed-driven initial conditions and bounded coefficient variation
     if config.attractor_type == "lorenz":
-        x, y, z = 1.0, 1.0, 1.0
+        x, y, z = (float(v) for v in rng.uniform(-1.5, 1.5, 3))
+        sigma = config.lorenz_sigma + float(rng.uniform(-0.8, 0.8))
+        rho = config.lorenz_rho + float(rng.uniform(-2.5, 2.5))
+        beta = config.lorenz_beta + float(rng.uniform(-0.2, 0.2))
     elif config.attractor_type == "rossler":
-        x, y, z = 0.0, 0.0, 0.0
+        x, y, z = (float(v) for v in rng.uniform(-0.5, 0.5, 3))
+        ra = config.rossler_a + float(rng.uniform(-0.05, 0.05))
+        rb = config.rossler_b + float(rng.uniform(-0.05, 0.05))
+        rc = config.rossler_c + float(rng.uniform(-0.4, 0.4))
     else:  # clifford
-        x, y = 0.0, 0.0
+        x, y = (float(v) for v in rng.uniform(-0.1, 0.1, 2))
+        ca = config.clifford_a + float(rng.uniform(-0.35, 0.35))
+        cb = config.clifford_b + float(rng.uniform(-0.35, 0.35))
+        cc = config.clifford_c + float(rng.uniform(-0.25, 0.25))
+        cd = config.clifford_d + float(rng.uniform(-0.25, 0.25))
 
     # Density map
     density = np.zeros((ctx.height, ctx.width), dtype=np.float32)
@@ -79,27 +90,23 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
     for i in range(config.steps + config.burn_in):
         # Integrate
         if config.attractor_type == "lorenz":
-            dx = config.lorenz_sigma * (y - x)
-            dy = x * (config.lorenz_rho - z) - y
-            dz = x * y - config.lorenz_beta * z
+            dx = sigma * (y - x)
+            dy = x * (rho - z) - y
+            dz = x * y - beta * z
             x += dx * config.dt
             y += dy * config.dt
             z += dz * config.dt
         elif config.attractor_type == "rossler":
             dx = -(y + z)
-            dy = x + config.rossler_a * y
-            dz = config.rossler_b + z * (x - config.rossler_c)
+            dy = x + ra * y
+            dz = rb + z * (x - rc)
             x += dx * config.dt
             y += dy * config.dt
             z += dz * config.dt
         else:  # clifford (2D)
-            x_new = np.sin(config.clifford_a * y) + config.clifford_c * np.cos(
-                config.clifford_a * x
-            )
-            y_new = np.sin(config.clifford_b * x) + config.clifford_d * np.cos(
-                config.clifford_b * y
-            )
-            x, y = x_new, y_new
+            x_new = np.sin(ca * y) + cc * np.cos(ca * x)
+            y_new = np.sin(cb * x) + cd * np.cos(cb * y)
+            x, y = float(x_new), float(y_new)
 
         # Skip burn-in
         if i < config.burn_in:

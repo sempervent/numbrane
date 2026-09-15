@@ -31,6 +31,7 @@ class CirclePackingConfig(BaseModel):
     # Shading
     shading_strength: float = Field(default=0.5, description="Shading strength")
     light_direction: tuple = Field(default=(0.5, -0.5), description="Light direction")
+    vignette_strength: float = Field(default=0.15, description="Vignette strength")
 
 
 def render(config: CirclePackingConfig, ctx: RenderContext) -> RenderResult:
