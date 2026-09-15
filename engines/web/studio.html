@@ -27,6 +27,31 @@
       body.controls-visible, body.pointer-active { cursor: default; }
       #stage-wrap { position: fixed; inset: 0; background: #000; }
       #stage { width: 100%; height: 100%; display: block; }
+      #generate-preview {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: contain; background: #000; display: none; z-index: 1;
+      }
+      #generate-preview.visible { display: block; }
+      #stage.hidden-live { visibility: hidden; }
+      #gen-status {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        color: var(--mute); letter-spacing: 0.08em; text-transform: uppercase;
+        pointer-events: none; z-index: 2; display: none;
+        background: rgba(0,0,0,0.55); padding: 0.6rem 1rem; border-radius: 8px;
+        border: 1px solid var(--line);
+      }
+      #gen-status.visible { display: block; }
+      #unsupported-banner {
+        position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+        max-width: min(420px, 90vw); text-align: center; z-index: 3;
+        color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+        border-radius: 12px; padding: 1rem 1.25rem; display: none;
+      }
+      #unsupported-banner.visible { display: block; }
+      #browser .piece img.thumb {
+        width: 100%; height: 72px; object-fit: cover; display: block;
+        margin-bottom: 0.35rem; border-radius: 4px; background: #111;
+      }
       #chrome {
         position: fixed; inset: 0; pointer-events: none; z-index: 20;
       }
@@ -145,7 +170,12 @@
     </style>
   </head>
   <body class="controls-visible">
-    <div id="stage-wrap"><canvas id="stage"></canvas></div>
+    <div id="stage-wrap">
+      <canvas id="stage"></canvas>
+      <img id="generate-preview" alt="Generated preview" />
+      <div id="gen-status">Generating…</div>
+      <div id="unsupported-banner"></div>
+    </div>
     <div id="chrome">
       <div id="modebar">
         <button type="button" data-mode="generate" class="active">Generate</button>

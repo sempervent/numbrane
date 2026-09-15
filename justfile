@@ -297,7 +297,7 @@ ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
 [group('ci')]
-ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke studio-test studio-smoke bake-print
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke studio-test studio-fidelity studio-smoke bake-print
     @echo "ci ok"
 
 # ── NUMBRANE Studio ──────────────────────────────────────────────────
@@ -316,11 +316,21 @@ studio-test:
     cd "{{root}}/engines/web" && npm run test:studio
 
 [group('studio')]
+studio-fidelity:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npm run test:studio-fidelity
+    cd "{{root}}/engines/python"
+    uv run pytest tests/test_studio_fidelity.py -q
+
+[group('studio')]
 studio-smoke:
     #!/usr/bin/env bash
     set -euo pipefail
     cd "{{root}}/engines/web"
     npm run test:studio
+    npm run test:studio-fidelity
     npm run typecheck
 
 [group('studio')]

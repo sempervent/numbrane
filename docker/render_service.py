@@ -6,14 +6,15 @@ Artifacts land under ARTIFACTS_DIR (bind-mounted to ./artifacts on the host).
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -30,8 +31,13 @@ if not PYTHON.exists():
 
 PIECE_RE = re.compile(r"^[a-z0-9][a-z0-9_/-]{0,120}$")
 SAFE_NAME = re.compile(r"^[a-zA-Z0-9_./-]{1,200}$")
+RENDERER_VERSION = "1"
 
-app = FastAPI(title="NUMBRANE Render", version="0.1.0")
+app = FastAPI(title="NUMBRANE Render", version="0.2.0")
+
+# Bounded in-memory preview cache (key -> bytes + meta)
+_CACHE: OrderedDict[str, tuple[bytes, dict[str, str]]] = OrderedDict()
+_CACHE_MAX = 48
 
 
 def _ensure_artifacts() -> Path:
@@ -45,6 +51,46 @@ def _validate_piece(piece: str) -> str:
     return piece
 
 
+def _digest(obj: Any) -> str:
+    raw = json.dumps(obj, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
+
+
+def _apply_preview_budgets(piece: str, params: dict[str, Any], quality: str) -> dict[str, Any]:
+    """Same algorithm, lower budget for preview quality."""
+    out = dict(params)
+    if quality != "preview":
+        return out
+    if piece == "fields/flow-hatching":
+        out["line_spacing"] = max(float(out.get("line_spacing", 4)), 7.0)
+        out["streamline_steps"] = min(int(out.get("streamline_steps", 24)), 12)
+        out["density"] = min(float(out.get("density", 1.0)), 0.55)
+    if piece.startswith("reaction-diffusion"):
+        out["iterations"] = min(int(out.get("iterations", 400)), 220)
+    if piece == "growth/slime-mold":
+        out["steps"] = min(int(out.get("steps", 200)), 120)
+    if piece == "fractals/strange-attractors":
+        out["steps"] = min(int(out.get("steps", 80000)), 40000)
+    if "voronoi" in piece:
+        out["num_points"] = min(int(out.get("num_points", 50)), 40)
+    return out
+
+
+def _cache_get(key: str) -> tuple[bytes, dict[str, str]] | None:
+    item = _CACHE.get(key)
+    if item is None:
+        return None
+    _CACHE.move_to_end(key)
+    return item
+
+
+def _cache_put(key: str, data: bytes, meta: dict[str, str]) -> None:
+    _CACHE[key] = (data, meta)
+    _CACHE.move_to_end(key)
+    while len(_CACHE) > _CACHE_MAX:
+        _CACHE.popitem(last=False)
+
+
 class RenderBody(BaseModel):
     piece: str
     seed: int = 42
@@ -52,7 +98,9 @@ class RenderBody(BaseModel):
     height: int = Field(default=1080, ge=64, le=8192)
     frame: int = Field(default=0, ge=0, le=100_000)
     format: Literal["png", "svg"] = "png"
+    quality: Literal["preview", "final"] = "preview"
     parameters: dict[str, Any] = Field(default_factory=dict)
+    recipe: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("piece")
     @classmethod
@@ -103,12 +151,38 @@ class ExportAnimBody(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    return {"status": "ok", "service": "numbrane-render"}
+    return {"status": "ok", "service": "numbrane-render", "renderer": RENDERER_VERSION}
 
 
 @app.post("/api/render")
 def api_render(body: RenderBody) -> Response:
     """Deterministic still render via numbrane CLI."""
+    params = dict(body.parameters or {})
+    if isinstance(body.recipe, dict) and body.recipe.get("parameters"):
+        merged = dict(body.recipe["parameters"])
+        merged.update(params)
+        params = merged
+    params = _apply_preview_budgets(body.piece, params, body.quality)
+
+    recipe_digest = _digest(
+        {
+            "piece": body.piece,
+            "seed": body.seed,
+            "frame": body.frame,
+            "width": body.width,
+            "height": body.height,
+            "quality": body.quality,
+            "format": body.format,
+            "parameters": params,
+            "renderer": RENDERER_VERSION,
+        }
+    )
+    cache_key = f"{recipe_digest}:{body.format}"
+    cached = _cache_get(cache_key)
+    if cached is not None:
+        data, meta = cached
+        return Response(content=data, media_type=meta["media"], headers=meta)
+
     out_dir = _ensure_artifacts() / "studio-export"
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time() * 1000)
@@ -131,10 +205,11 @@ def api_render(body: RenderBody) -> Response:
         "-o",
         str(out),
     ]
-    # Optional parameters via env recipe fragment (CLI may ignore unknown flags)
     env = os.environ.copy()
-    if body.parameters:
-        env["NUMBRANE_RENDER_PARAMS"] = json.dumps(body.parameters)
+    if params:
+        env["NUMBRANE_RENDER_PARAMS"] = json.dumps(params)
+    env["NUMBRANE_RENDER_QUALITY"] = body.quality
+    t0 = time.perf_counter()
     r = subprocess.run(
         args,
         cwd=str(ROOT / "engines/python"),
@@ -144,10 +219,29 @@ def api_render(body: RenderBody) -> Response:
         timeout=180,
         check=False,
     )
+    render_ms = int((time.perf_counter() - t0) * 1000)
     if r.returncode != 0 or not out.exists():
         raise HTTPException(500, r.stderr or r.stdout or "render failed")
+    data = out.read_bytes()
+    render_digest = hashlib.sha256(data).hexdigest()[:16]
     media = "image/svg+xml" if body.format == "svg" else "image/png"
-    return Response(content=out.read_bytes(), media_type=media)
+    headers = {
+        "X-Numbrane-Piece": body.piece,
+        "X-Numbrane-Seed": str(body.seed),
+        "X-Numbrane-Frame": str(body.frame),
+        "X-Numbrane-Recipe-Digest": recipe_digest,
+        "X-Numbrane-Render-Digest": render_digest,
+        "X-Numbrane-Render-Ms": str(render_ms),
+        "X-Numbrane-Quality": body.quality,
+        "X-Numbrane-Renderer": RENDERER_VERSION,
+        "media": media,
+    }
+    _cache_put(cache_key, data, headers)
+    return Response(
+        content=data,
+        media_type=media,
+        headers={k: v for k, v in headers.items() if k != "media"},
+    )
 
 
 @app.post("/api/seed")
@@ -210,6 +304,14 @@ def api_export_anim(body: ExportAnimBody) -> Response:
     job = _ensure_artifacts() / "anim-export" / uuid.uuid4().hex[:12]
     frames_dir = job / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    params = _apply_preview_budgets(
+        body.piece,
+        dict(body.parameters or {}),
+        "preview" if body.width <= 960 else "final",
+    )
+    if params:
+        env["NUMBRANE_RENDER_PARAMS"] = json.dumps(params)
     try:
         for i in range(n):
             frame = body.start_frame + i
@@ -235,6 +337,7 @@ def api_export_anim(body: ExportAnimBody) -> Response:
             r = subprocess.run(
                 args,
                 cwd=str(ROOT / "engines/python"),
+                env=env,
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -272,7 +375,6 @@ def api_export_anim(body: ExportAnimBody) -> Response:
             ]
             media = "video/webm"
         elif body.format == "webp":
-            # Animated WebP via FFmpeg libwebp
             loop = "0" if body.loop else "1"
             cmd = [
                 ffmpeg,
@@ -328,7 +430,6 @@ def api_export_anim(body: ExportAnimBody) -> Response:
         if enc.returncode != 0 or not encoded.exists():
             raise HTTPException(500, enc.stderr or "ffmpeg encode failed")
 
-        # Keep a host-visible copy
         published = (
             _ensure_artifacts()
             / "anim-export"
@@ -343,10 +444,18 @@ def api_export_anim(body: ExportAnimBody) -> Response:
             headers={
                 "X-Numbrane-Artifact": str(published.relative_to(_ensure_artifacts())),
                 "X-Numbrane-Frames": str(n),
+                "X-Numbrane-Recipe-Digest": _digest(
+                    {
+                        "piece": body.piece,
+                        "seed": body.seed,
+                        "parameters": params,
+                        "fps": body.fps,
+                        "n": n,
+                    }
+                ),
             },
         )
     finally:
-        # Keep frames for debugging under job dir briefly; clean large frame trees
         shutil.rmtree(frames_dir, ignore_errors=True)
 
 

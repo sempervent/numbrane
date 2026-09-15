@@ -35,6 +35,19 @@ import {
   type StudioSeedRecord,
 } from "./seed/library";
 import { defaultMappingsForPiece } from "./audio/mappings";
+import { GeneratePreviewController } from "./generate/preview";
+import {
+  defaultsForPiece,
+  getPieceRuntime,
+  supportsMode,
+} from "./runtime/registry";
+import {
+  cryptoSeed,
+  paramsForApi,
+  previewSize,
+  rendererKindFor,
+  studioSurface,
+} from "./runtime/surface";
 
 declare global {
   interface Window {
@@ -48,12 +61,6 @@ function toast(msg: string): void {
   el.textContent = msg;
   el.classList.add("show");
   window.setTimeout(() => el.classList.remove("show"), 2200);
-}
-
-async function loadSet(id: string): Promise<SetDef> {
-  const res = await fetch(`/sets/${id}.json`);
-  if (!res.ok) throw new Error(`set ${id}: ${res.status}`);
-  return (await res.json()) as SetDef;
 }
 
 export class StudioApp {
@@ -74,7 +81,7 @@ export class StudioApp {
   browserVisible = false;
   filter = "all";
   locked = new Set<string>();
-  params: Record<string, number> = {
+  params: Record<string, number | string | boolean> = {
     chaos: 0.3,
     density: 0.7,
     zoom: 1,
@@ -114,11 +121,19 @@ export class StudioApp {
   audioEnabled = false;
   audioLevel = 0;
   currentSeedId: string | null = null;
+  recipeDigest = "";
+  renderDigest = "";
+  lastRenderMs = 0;
+  generating = false;
+  unsupportedMessage = "";
   private idleTimer: number | null = null;
   private raf = 0;
   private lastHud = 0;
   private fps = 60;
   private frameTimes: number[] = [];
+  private preview = new GeneratePreviewController();
+  private apiAnimTimer: number | null = null;
+  private lastApiAnimMs = 0;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -148,6 +163,7 @@ export class StudioApp {
       transparent: false,
     });
     await this.session.init();
+    this.params = { ...defaultsForPiece(this.pieceId), ...this.params };
     await this.applyPieceScene();
 
     this.wireKeyboard();
@@ -166,7 +182,48 @@ export class StudioApp {
   }
 
   private async applyPieceScene(): Promise<void> {
+    this.stopApiAnim();
+    const surface = studioSurface(this.pieceId, this.mode);
+    const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
+    const statusEl = document.getElementById("gen-status");
+    const banner = document.getElementById("unsupported-banner");
+    this.unsupportedMessage = "";
+
+    if (surface === "unsupported") {
+      this.session?.runtime.transport.stop();
+      this.canvas.classList.add("hidden-live");
+      previewEl?.classList.remove("visible");
+      statusEl?.classList.remove("visible");
+      if (banner) {
+        const modeLabel = this.mode.toUpperCase();
+        this.unsupportedMessage = `This piece does not yet support ${modeLabel}`;
+        banner.textContent = this.unsupportedMessage;
+        banner.classList.add("visible");
+      }
+      this.syncChrome();
+      return;
+    }
+    banner?.classList.remove("visible");
+
+    if (surface === "api-preview") {
+      this.session?.runtime.transport.stop();
+      this.canvas.classList.add("hidden-live");
+      previewEl?.classList.add("visible");
+      this.scheduleGeneratePreview();
+      if (this.mode === "animate" && this.playing) {
+        this.startApiAnim();
+      }
+      this.syncChrome();
+      return;
+    }
+
+    // Live surface (ANIMATE/REACT stateful, wasm, geometry-ir, shader-native)
+    this.preview.cancel();
+    this.canvas.classList.remove("hidden-live");
+    previewEl?.classList.remove("visible");
+    statusEl?.classList.remove("visible");
     if (!this.session) return;
+
     const mappings = defaultMappingsForPiece(this.pieceId).map((m, i) => ({
       id: `studio-${i}`,
       source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
@@ -176,43 +233,57 @@ export class StudioApp {
       max: 2,
     }));
     const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
+    const liveMode = this.mode === "react" ? "react" : "animate";
+    // Mashup slime-on-sdf: live = slime only (authentic RD trail), not fake SDF shader
+    const livePieceId =
+      this.pieceId === "mashups/slime-on-sdf" ? "growth/slime-mold" : this.pieceId;
     const set: SetDef = composition
-      ? composition.build(this.seed, this.params)
-      : this.pieceId === "mashups/slime-on-sdf"
-        ? COMPOSITIONS.find((c) => c.id === "slime-sdf")!.build(this.seed, this.params)
-        : {
-            protocol_version: "0.1.0",
-            set_id: "studio-session",
-            name: "Studio",
-            scenes: [
-              {
-                id: "main",
-                name: this.pieceId,
-                layers: [
-                  {
-                    id: "L0",
-                    piece: this.pieceId,
-                    opacity: 1,
-                    blend: "normal",
-                    seed: this.seed,
-                    parameters: { ...this.params },
-                  },
-                ],
-                modulation: mappings,
-                post: { bloom: 0.2, feedback: 0.05 },
-              },
-            ],
-            cues: [],
-          };
-    // Ensure studio modulation when composition didn't include it
+      ? composition.build(this.seed, this.params as Record<string, number>)
+      : {
+          protocol_version: "0.1.0",
+          set_id: "studio-session",
+          name: "Studio",
+          scenes: [
+            {
+              id: "main",
+              name: this.pieceId,
+              layers: [
+                {
+                  id: "L0",
+                  piece: livePieceId,
+                  opacity: 1,
+                  blend: "normal",
+                  seed: this.seed,
+                  parameters: { ...this.params } as Record<string, number>,
+                },
+              ],
+              modulation: mappings,
+              post: { bloom: 0.2, feedback: 0.05 },
+            },
+          ],
+          cues: [],
+        };
     if (set.scenes[0] && (!set.scenes[0].modulation || set.scenes[0].modulation.length === 0)) {
       set.scenes[0].modulation = mappings;
     }
-    await this.session.loadSet(set);
+    try {
+      await this.session.loadSet(set, liveMode);
+    } catch (err) {
+      this.unsupportedMessage =
+        err instanceof Error ? err.message : `Failed to load ${this.pieceId}`;
+      if (banner) {
+        banner.textContent = this.unsupportedMessage;
+        banner.classList.add("visible");
+      }
+      toast(this.unsupportedMessage);
+      return;
+    }
     this.session.setSeed(this.seed);
     for (const layer of set.scenes[0]?.layers ?? []) {
       for (const [k, v] of Object.entries(this.params)) {
-        this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
+        if (typeof v === "number") {
+          this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
+        }
       }
     }
     this.session.startLoop();
@@ -221,6 +292,79 @@ export class StudioApp {
       this.session.runtime.transport.stop();
     } else if (this.playing) {
       this.session.runtime.transport.start();
+    }
+    this.syncChrome();
+  }
+
+  private scheduleGeneratePreview(immediate = false): void {
+    if (studioSurface(this.pieceId, this.mode) !== "api-preview") return;
+    const { width, height } = previewSize();
+    const req = {
+      piece: this.pieceId,
+      seed: this.seed,
+      frame: this.frame,
+      width,
+      height,
+      quality: "preview" as const,
+      parameters: paramsForApi(this.params),
+    };
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    const status = document.getElementById("gen-status");
+    const run = immediate
+      ? this.preview.run.bind(this.preview)
+      : (r: typeof req, a: (id: number) => void, b: (res: import("./generate/preview").GenerateResult) => void, c: (e: Error, id: number) => void) =>
+          this.preview.schedule(r, 280, a, b, c);
+    run(
+      req,
+      () => {
+        this.generating = true;
+        status?.classList.add("visible");
+        if (status) status.textContent = "Generating…";
+      },
+      (result) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        this.recipeDigest = result.recipeDigest;
+        this.renderDigest = result.renderDigest;
+        this.lastRenderMs = result.renderMs;
+        if (img) {
+          img.src = result.objectUrl;
+          img.classList.add("visible");
+        }
+        this.syncChrome();
+      },
+      (err) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        toast(err.message.slice(0, 120));
+      },
+    );
+  }
+
+  private startApiAnim(): void {
+    this.stopApiAnim();
+    this.lastApiAnimMs = performance.now();
+    const tick = () => {
+      if (!this.playing || studioSurface(this.pieceId, this.mode) !== "api-preview") {
+        this.stopApiAnim();
+        return;
+      }
+      const now = performance.now();
+      const interval = 1000 / Math.max(1, this.anim.fps);
+      if (now - this.lastApiAnimMs >= interval) {
+        this.lastApiAnimMs = now;
+        this.frame += 1;
+        this.scheduleGeneratePreview(true);
+      }
+      this.apiAnimTimer = window.setTimeout(tick, 16);
+    };
+    this.apiAnimTimer = window.setTimeout(tick, 16);
+  }
+
+  private stopApiAnim(): void {
+    if (this.apiAnimTimer !== null) {
+      window.clearTimeout(this.apiAnimTimer);
+      this.apiAnimTimer = null;
     }
   }
 
@@ -468,31 +612,35 @@ export class StudioApp {
     if (mode === "generate") {
       this.playing = false;
       this.session?.runtime.transport.stop();
+      this.stopApiAnim();
     } else {
       this.playing = true;
-      this.session?.runtime.transport.start();
     }
-    if (mode === "react") {
-      try {
-        const set = await loadSet(this.prefs.lastSetId || "pfl-default");
-        // Keep current piece as primary layer unless set requested
-        await this.applyPieceScene();
-        void set;
-      } catch {
-        await this.applyPieceScene();
-      }
-    } else {
-      await this.applyPieceScene();
-    }
+    await this.applyPieceScene();
     this.renderConfig();
     this.renderHelp();
     this.syncUrl(true);
-    toast(`${mode.toUpperCase()} mode`);
+    if (!supportsMode(this.pieceId, mode)) {
+      toast(`This piece does not yet support ${mode.toUpperCase()}`);
+    } else {
+      toast(`${mode.toUpperCase()} mode`);
+    }
   }
 
   async setPiece(pieceId: string): Promise<void> {
     this.pieceId = pieceId;
     this.prefs.pieceId = pieceId;
+    // Reset to piece defaults; keep shared meta axes that map meaningfully
+    const defaults = defaultsForPiece(pieceId);
+    const next: Record<string, number | string | boolean> = { ...defaults };
+    for (const key of ["density", "chaos", "hue", "zoom"] as const) {
+      if (key in defaults && typeof this.params[key] === "number") {
+        next[key] = this.params[key]!;
+      }
+    }
+    this.params = next;
+    this.compositionId = null;
+    this.frame = 0;
     this.persist();
     await this.applyPieceScene();
     this.pushHistory();
@@ -502,7 +650,11 @@ export class StudioApp {
   }
 
   async randomizeSeed(): Promise<void> {
-    this.seed = ((this.seed * 1664525 + 1013904223) ^ (Date.now() & 0xffffffff)) >>> 0;
+    if (this.locked.has("seed")) {
+      toast("seed locked");
+      return;
+    }
+    this.seed = cryptoSeed();
     this.prefs.seed = this.seed;
     this.persist();
     await this.applyPieceScene();
@@ -519,6 +671,11 @@ export class StudioApp {
 
   togglePlay(): void {
     this.playing = !this.playing;
+    if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+      if (this.playing) this.startApiAnim();
+      else this.stopApiAnim();
+      return;
+    }
     if (this.playing) this.session?.runtime.transport.start();
     else this.session?.runtime.transport.stop();
   }
@@ -576,8 +733,12 @@ export class StudioApp {
 
   async exploreVariants(): Promise<void> {
     const count = this.variantBatch;
+    const numericParams: Record<string, number> = {};
+    for (const [k, v] of Object.entries(this.params)) {
+      if (typeof v === "number") numericParams[k] = v;
+    }
     const variants = moreLikeThis(
-      { seed: this.seed, parameters: this.params },
+      { seed: this.seed, parameters: numericParams },
       { count, locked: this.locked },
     );
     this.variantCache = variants.map((v) => ({
@@ -601,7 +762,6 @@ export class StudioApp {
       cell.innerHTML = `<span style="display:block;padding:0.25rem;font-size:10px">${v.label}</span>`;
       cell.title = `seed ${v.seed}`;
       cell.addEventListener("click", () => {
-        // Promote exact cached recipe — do not regenerate
         this.seed = v.seed;
         this.params = { ...this.params, ...v.parameters };
         void this.applyPieceScene().then(() => {
@@ -611,7 +771,6 @@ export class StudioApp {
         });
       });
       grid.appendChild(cell);
-      // Thumbnail via local render API (low-res); fall back to seed label
       try {
         const res = await fetch("/api/render", {
           method: "POST",
@@ -623,6 +782,7 @@ export class StudioApp {
             height: 160,
             frame: this.frame,
             format: "png",
+            quality: "preview",
             parameters: v.parameters,
           }),
         });
@@ -845,7 +1005,11 @@ export class StudioApp {
         const result = await exportAnimation(cfg, async (frame, t) => {
           const t01 = cfg.durationSec > 0 ? t / cfg.durationSec : 0;
           if (arc) {
-            const next = arc.apply({ ...this.params }, Math.min(1, Math.max(0, t01)));
+            const numeric: Record<string, number> = {};
+            for (const [k, v] of Object.entries(this.params)) {
+              if (typeof v === "number") numeric[k] = v;
+            }
+            const next = arc.apply(numeric, Math.min(1, Math.max(0, t01)));
             for (const [k, v] of Object.entries(next)) {
               if (typeof v === "number") {
                 this.session?.runtime.getPiece("L0")?.setParameter(k, v);
@@ -906,8 +1070,11 @@ export class StudioApp {
     document.getElementById("hud")?.classList.toggle("visible", this.hudVisible);
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
     const strip = document.getElementById("meta-strip");
+    const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     if (strip) {
-      strip.textContent = `${this.mode.toUpperCase()} · ${this.pieceId} · seed ${this.seed}`;
+      strip.textContent = `${this.mode.toUpperCase()} · ${this.pieceId} · ${kind} · seed ${this.seed}${
+        this.generating ? " · generating…" : ""
+      }`;
     }
   }
 
@@ -973,12 +1140,46 @@ export class StudioApp {
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
       const caps = p.capabilities || {};
-      div.innerHTML = `<div class="name">${p.title || p.name || p.piece_id}</div>
-        <div class="meta">${p.family || p.piece_id.split("/")[0]} ·
+      const rt = getPieceRuntime(p.piece_id);
+      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" />
+        <div class="name">${p.title || p.name || p.piece_id}</div>
+        <div class="meta">${p.family || p.piece_id.split("/")[0]} · gen:${rt.generate}
         ${caps.still ? "still " : ""}${caps.animated ? "anim " : ""}${caps.realtime ? "rt " : ""}${caps.audio_reactive ? "audio" : ""}</div>
         <div class="meta">${p.description || ""}</div>`;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       host.appendChild(div);
+    }
+    // Lazy real thumbnails (actual /api/render) for visible catalog entries
+    void this.loadBrowserThumbs(list.slice(0, 16).map((p) => p.piece_id));
+  }
+
+  private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
+    for (const pieceId of pieceIds) {
+      if (!supportsMode(pieceId, "generate")) continue;
+      const img = document.querySelector<HTMLImageElement>(`#browser img.thumb[data-piece="${pieceId}"]`);
+      if (!img || img.dataset.loaded) continue;
+      try {
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            piece: pieceId,
+            seed: 42,
+            width: 160,
+            height: 90,
+            frame: 0,
+            format: "png",
+            quality: "preview",
+            parameters: defaultsForPiece(pieceId),
+          }),
+        });
+        if (!res.ok) continue;
+        const blob = await res.blob();
+        img.src = URL.createObjectURL(blob);
+        img.dataset.loaded = "1";
+      } catch {
+        /* optional */
+      }
     }
   }
 
@@ -1064,16 +1265,25 @@ export class StudioApp {
         <p class="muted">Browser owns getUserMedia — Docker only serves the app.</p>
       ` : ""}
       <h2>Parameters</h2>
-      <label>Density</label>
-      <input id="cfg-density" type="range" min="0" max="1" step="0.01" value="${this.params.density}" />
-      <label>Chaos</label>
-      <input id="cfg-chaos" type="range" min="0" max="1" step="0.01" value="${this.params.chaos}" />
-      <label>Hue</label>
-      <input id="cfg-hue" type="range" min="0" max="1" step="0.01" value="${this.params.hue}" />
+      ${getPieceRuntime(this.pieceId).paramSchema
+        .map((f) => {
+          const val = this.params[f.key] ?? f.default;
+          if (f.type === "choice") {
+            return `<label>${f.label}</label><select data-param="${f.key}">${(f.choices || [])
+              .map(
+                (c) =>
+                  `<option value="${c}" ${String(val) === c ? "selected" : ""}>${c || "(none)"}</option>`,
+              )
+              .join("")}</select>`;
+          }
+          if (f.type === "boolean") {
+            return `<label><input type="checkbox" data-param="${f.key}" ${val ? "checked" : ""} /> ${f.label}</label>`;
+          }
+          return `<label>${f.label}</label><input data-param="${f.key}" type="range" min="${f.min ?? 0}" max="${f.max ?? 1}" step="${f.step ?? 0.01}" value="${Number(val)}" />`;
+        })
+        .join("")}
       <details class="advanced">
         <summary>Advanced / meta / seeds</summary>
-        <label>Zoom</label>
-        <input id="cfg-zoom" type="range" min="0.2" max="2" step="0.01" value="${this.params.zoom}" />
         <label>Meta: organic ↔ geometric</label>
         <input id="cfg-meta-organic" type="range" min="0" max="1" step="0.01" value="${this.meta.organic}" />
         <label>Meta: still ↔ kinetic</label>
@@ -1101,6 +1311,7 @@ export class StudioApp {
     el.querySelector("#cfg-seed")?.addEventListener("change", (e) => {
       this.seed = Number((e.target as HTMLInputElement).value) >>> 0;
       void this.applyPieceScene();
+      this.pushHistory();
     });
     el.querySelector("#cfg-rand")?.addEventListener("click", () => void this.randomizeSeed());
     el.querySelector("#cfg-export")?.addEventListener("click", () => {
@@ -1125,8 +1336,10 @@ export class StudioApp {
       const preset = presetsForPiece(this.pieceId).find((p) => p.id === id);
       if (!preset) return;
       for (const [k, v] of Object.entries(preset.parameters)) {
-        if (typeof v === "number") this.params[k] = v;
-        this.session?.runtime.getPiece("L0")?.setParameter(k, v as number);
+        this.params[k] = v as number | string | boolean;
+        if (typeof v === "number") {
+          this.session?.runtime.getPiece("L0")?.setParameter(k, v);
+        }
       }
       void this.applyPieceScene();
       toast(`preset ${preset.label}`);
@@ -1159,6 +1372,7 @@ export class StudioApp {
     });
     el.querySelector("#cfg-frame")?.addEventListener("change", (e) => {
       this.frame = Number((e.target as HTMLInputElement).value) | 0;
+      void this.applyPieceScene();
     });
     el.querySelector("#cfg-fps")?.addEventListener("change", (e) => {
       this.anim.fps = Number((e.target as HTMLInputElement).value) || 30;
@@ -1166,30 +1380,58 @@ export class StudioApp {
     el.querySelector("#cfg-dur")?.addEventListener("change", (e) => {
       this.anim.durationSec = Number((e.target as HTMLInputElement).value) || 4;
     });
-    const bindRange = (id: string, key: keyof typeof this.params) => {
-      el.querySelector(id)?.addEventListener("input", (e) => {
-        const v = Number((e.target as HTMLInputElement).value);
-        this.params[key] = v;
-        this.session?.runtime.getPiece("L0")?.setParameter(key, v);
-      });
-    };
-    bindRange("#cfg-density", "density");
-    bindRange("#cfg-chaos", "chaos");
-    bindRange("#cfg-hue", "hue");
-    bindRange("#cfg-zoom", "zoom");
+    el.querySelectorAll<HTMLElement>("[data-param]").forEach((node) => {
+      const key = node.getAttribute("data-param")!;
+      const apply = () => {
+        if (node instanceof HTMLInputElement && node.type === "checkbox") {
+          this.params[key] = node.checked;
+        } else if (node instanceof HTMLSelectElement) {
+          this.params[key] = node.value;
+        } else if (node instanceof HTMLInputElement) {
+          const v = Number(node.value);
+          this.params[key] = v;
+          this.session?.runtime.getPiece("L0")?.setParameter(key, v);
+        }
+        if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+          this.scheduleGeneratePreview();
+        }
+      };
+      node.addEventListener("input", apply);
+      node.addEventListener("change", apply);
+    });
     el.querySelector("#cfg-meta-organic")?.addEventListener("input", (e) => {
       const v = Number((e.target as HTMLInputElement).value);
       this.meta.organic = v;
-      this.params = applyMetaAxis(this.params, "organic", v);
+      this.params = {
+        ...this.params,
+        ...applyMetaAxis(
+          Object.fromEntries(
+            Object.entries(this.params).filter(([, v]) => typeof v === "number"),
+          ) as Record<string, number>,
+          "organic",
+          v,
+        ),
+      };
       this.params.density = 0.95 - v * 0.55;
-      this.session?.runtime.getPiece("L0")?.setParameter("chaos", this.params.chaos);
-      this.session?.runtime.getPiece("L0")?.setParameter("density", this.params.density);
+      this.session?.runtime.getPiece("L0")?.setParameter("chaos", Number(this.params.chaos));
+      this.session?.runtime.getPiece("L0")?.setParameter("density", Number(this.params.density));
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
     });
     el.querySelector("#cfg-meta-kinetic")?.addEventListener("input", (e) => {
       const v = Number((e.target as HTMLInputElement).value);
       this.meta.kinetic = v;
-      this.params = applyMetaAxis(this.params, "kinetic", v);
-      this.session?.runtime.getPiece("L0")?.setParameter("zoom", this.params.zoom);
+      this.params = {
+        ...this.params,
+        ...applyMetaAxis(
+          Object.fromEntries(
+            Object.entries(this.params).filter(([, v]) => typeof v === "number"),
+          ) as Record<string, number>,
+          "kinetic",
+          v,
+        ),
+      };
+      this.session?.runtime.getPiece("L0")?.setParameter("zoom", Number(this.params.zoom ?? 1));
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
     });
     const bindLock = (id: string, key: string) => {
       el.querySelector(id)?.addEventListener("change", (e) => {
@@ -1258,12 +1500,19 @@ export class StudioApp {
     if (this.hudVisible && now - this.lastHud > 200) {
       this.lastHud = now;
       const hud = document.getElementById("hud");
+      const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
       if (hud) {
         hud.textContent = [
           `FPS ${this.fps}`,
           `mode ${this.mode}`,
           `piece ${this.pieceId}`,
+          `renderer ${kind}`,
           `seed ${this.seed}`,
+          `frame ${this.frame}`,
+          `recipe ${this.recipeDigest || "—"}`,
+          `state ${this.renderDigest || "—"}`,
+          `renderMs ${this.lastRenderMs.toFixed(0)}`,
+          `surface ${studioSurface(this.pieceId, this.mode)}`,
           `res ${this.canvas.width}x${this.canvas.height}`,
           `audio ${this.audioEnabled ? "on" : "off"}`,
           `controls ${this.controlsVisible ? "shown" : "hidden"}`,
@@ -1279,6 +1528,8 @@ export class StudioApp {
 
   dispose(): void {
     cancelAnimationFrame(this.raf);
+    this.stopApiAnim();
+    this.preview.dispose();
     void this.session?.dispose();
   }
 }
