@@ -21,11 +21,15 @@ export type ParamField = {
   default: number | string | boolean;
 };
 
+export type AnimationExportBackend = "python-frames" | "runtime-frames" | "unsupported";
+
 export type PieceRuntimeDescriptor = {
   pieceId: string;
   generate: RendererKind;
   animate: RendererKind | null;
   react: RendererKind | null;
+  /** Explicit animation export backend (derived from animate kind when omitted). */
+  exportBackend?: AnimationExportBackend;
   seedSensitive: boolean;
   /** Seed changes topology/state, not only hue. */
   seedAffectsStructure: boolean;
@@ -35,7 +39,7 @@ export type PieceRuntimeDescriptor = {
 const META: ParamField[] = [
   { key: "density", label: "Density", type: "number", min: 0, max: 1.5, step: 0.01, default: 0.7 },
   { key: "chaos", label: "Chaos", type: "number", min: 0, max: 1, step: 0.01, default: 0.3 },
-  { key: "hue", label: "Hue", type: "number", min: 0, max: 1, step: 0.01, default: 0.55 },
+  { key: "hue", label: "Hue", type: "number", min: 0, max: 1, step: 0.01, default: 0.08 },
 ];
 
 function d(
@@ -273,6 +277,15 @@ export function defaultsForPiece(pieceId: string): Record<string, number | strin
     out[f.key] = f.default;
   }
   return out;
+}
+
+export function animationExportBackendFor(pieceId: string): AnimationExportBackend {
+  const r = getPieceRuntime(pieceId);
+  if (r.exportBackend) return r.exportBackend;
+  const kind = r.animate;
+  if (!kind || kind === "unsupported") return "unsupported";
+  if (kind === "python-api") return "python-frames";
+  return "runtime-frames";
 }
 
 export function supportsMode(

@@ -24,6 +24,16 @@ import { presetsForPiece, ANIM_ARCS } from "./presets";
 import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
 import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
+import { encodeAnimationJob } from "./export/animationJobs";
+import { animationExportBackend } from "./export/exportBackend";
+import { captureRuntimeFrames, type RuntimeExportState } from "./export/runtimeExport";
+import {
+  defaultColorConfig,
+  normalizeColorConfig,
+  type ColorConfig,
+  hexToHueTurn,
+} from "./color/model";
+import { RAMP_PRESETS, RAMP_PRESET_LIST, SOLID_PRESETS, rampMappingsForPiece } from "./color/presets";
 import type { GenerateRequest } from "./generate/preview";
 import {
   RESOLUTION_PRESETS,
@@ -105,10 +115,11 @@ export class StudioApp {
     chaos: 0.3,
     density: 0.7,
     zoom: 1,
-    hue: 0.55,
+    hue: 0.08,
     exposure: 1,
     rotation: 0,
   };
+  color: ColorConfig = defaultColorConfig();
   meta: Record<MetaAxis, number> = {
     density: 0.7,
     chaos: 0.3,
@@ -164,6 +175,8 @@ export class StudioApp {
     this.mode = this.prefs.mode;
     this.pieceId = this.prefs.pieceId;
     this.seed = this.prefs.seed;
+    if (this.prefs.color) this.color = normalizeColorConfig(this.prefs.color);
+    this.params.hue = hexToHueTurn(this.color.primary.value);
     this.controlsVisible = this.prefs.controlsVisible;
     this.history = new ExploreHistory(this.prefs.recent);
   }
@@ -285,7 +298,7 @@ export class StudioApp {
                   opacity: 1,
                   blend: "normal",
                   seed: this.seed,
-                  parameters: { ...this.params } as Record<string, number>,
+                  parameters: paramsForApi(this.params, this.color),
                 },
               ],
               modulation: mappings,
@@ -334,6 +347,11 @@ export class StudioApp {
       }
       this.pendingImportState = null;
     }
+    const livePiece = this.session.runtime.getPiece("L0") as
+      | { setColorConfig?: (c: ColorConfig) => void }
+      | undefined;
+    livePiece?.setColorConfig?.(this.color);
+    this.syncColorToParams();
     this.session.startLoop();
     if (this.mode === "generate") {
       this.playing = false;
@@ -354,7 +372,7 @@ export class StudioApp {
   private scheduleGeneratePreview(immediate = false): void {
     if (studioSurface(this.pieceId, this.mode) !== "api-preview") return;
     const { width, height } = previewSize();
-    const baseParams = paramsForApi(this.params);
+    const baseParams = paramsForApi(this.params, this.color);
     const img = document.getElementById("generate-preview") as HTMLImageElement | null;
     const status = document.getElementById("gen-status");
 
@@ -462,7 +480,7 @@ export class StudioApp {
       width: Math.max(320, Math.floor(width * 0.5)),
       height: Math.max(180, Math.floor(height * 0.5)),
       quality: "draft" as const,
-      parameters: paramsForApi(this.params),
+      parameters: paramsForApi(this.params, this.color),
     };
     // GENERATE preview controller must not drive ANIMATE.
     this.preview.cancel();
@@ -1224,9 +1242,65 @@ export class StudioApp {
   async exportAnim(): Promise<void> {
     const cfg = this.anim;
     const fmt = this.exportKind === "video" ? "webm" : this.animFormat;
-    toast(`exporting ${fmt}…`);
+    const backend = animationExportBackend(this.pieceId);
+    if (backend === "unsupported") {
+      toast("This piece does not support animation export");
+      return;
+    }
+    toast(`exporting ${fmt} (${backend})…`);
+    const frameCount = Math.max(1, Math.floor(cfg.fps * cfg.durationSec));
+    const apiParams = paramsForApi(this.params, this.color);
+
     try {
-      // Prefer server-side deterministic frame render + FFmpeg encode
+      if (backend === "runtime-frames") {
+        const livePiece = this.session?.runtime.getPiece("L0") as
+          | { exportState?: () => RuntimeExportState }
+          | undefined;
+        const importState = livePiece?.exportState?.() ?? null;
+        const frames = await captureRuntimeFrames({
+          pieceId: this.pieceId,
+          seed: this.seed,
+          params: apiParams,
+          color: this.color,
+          width: cfg.width,
+          height: cfg.height,
+          fps: cfg.fps,
+          frameCount,
+          startFrame: cfg.startFrame,
+          importState: importState
+            ? { ...importState, logicalFrame: this.session?.runtime.getFrame() ?? cfg.startFrame }
+            : null,
+          onProgress: (n, total) => toast(`export frame ${n}/${total}`),
+        });
+        const encoded = await encodeAnimationJob(
+          frames,
+          {
+            fps: cfg.fps,
+            format: fmt,
+            quality: cfg.quality,
+            loop: cfg.loop,
+            piece: this.pieceId,
+            seed: this.seed,
+            frameCount: frames.length,
+          },
+          (msg) => toast(msg),
+        );
+        if (fmt === "webp") {
+          const animated = await webpIsAnimated(encoded.blob);
+          if (!animated) throw new Error("encoded WebP is not animated");
+        }
+        downloadBlob(
+          encoded.blob,
+          `${this.pieceId.replace(/\//g, "_")}-s${this.seed}.${fmt}`,
+        );
+        toast(
+          encoded.artifact
+            ? `exported .${fmt} → artifacts/${encoded.artifact}`
+            : `exported .${fmt} (runtime frames)`,
+        );
+        return;
+      }
+
       const server = await apiExportAnimation(
         {
           piece: this.pieceId,
@@ -1239,7 +1313,7 @@ export class StudioApp {
           format: fmt,
           quality: cfg.quality,
           loop: cfg.loop,
-          parameters: this.params,
+          parameters: apiParams,
         },
         (msg) => toast(msg),
       );
@@ -1309,7 +1383,27 @@ export class StudioApp {
   }
 
   private persist(): void {
+    this.prefs.color = this.color;
     savePrefs(this.prefs);
+  }
+
+  private syncColorToParams(): void {
+    if (!this.locked.has("color") && !this.locked.has("hue")) {
+      this.params.hue = hexToHueTurn(this.color.primary.value);
+    }
+    this.session?.runtime.getPiece("L0")?.setParameter("hue", Number(this.params.hue));
+  }
+
+  private applyColorPreset(presetId: string): void {
+    const ramp = RAMP_PRESETS[presetId];
+    if (ramp) {
+      this.color.mode = "ramp";
+      this.color.rampPreset = presetId;
+      this.color.ramp = JSON.parse(JSON.stringify(ramp.ramp));
+    }
+    this.syncColorToParams();
+    void this.applyPieceScene();
+    this.persist();
   }
 
   private syncUrl(push: boolean): void {
@@ -1542,8 +1636,45 @@ export class StudioApp {
         <div class="level"><span id="cfg-level"></span></div>
         <p class="muted">Browser owns getUserMedia — silence still evolves the system.</p>
       ` : ""}
+      <h2>Color</h2>
+      <label>Color mode</label>
+      <select id="cfg-color-mode">
+        <option value="solid" ${this.color.mode === "solid" ? "selected" : ""}>Solid</option>
+        <option value="ramp" ${this.color.mode === "ramp" ? "selected" : ""}>Ramp</option>
+        <option value="gradient" ${this.color.mode === "gradient" ? "selected" : ""}>Gradient</option>
+      </select>
+      <label>Primary</label>
+      <div class="row">
+        <input id="cfg-color-primary" type="color" value="${this.color.primary.value}" />
+        <span class="muted">${this.color.primary.value}</span>
+      </div>
+      <label>Background</label>
+      <div class="row">
+        <input id="cfg-color-bg" type="color" value="${this.color.background.value}" ${this.color.transparentBackground ? "disabled" : ""} />
+        <label><input id="cfg-color-transparent" type="checkbox" ${this.color.transparentBackground ? "checked" : ""} /> transparent</label>
+      </div>
+      <label>Ramp preset</label>
+      <select id="cfg-ramp-preset">
+        ${RAMP_PRESET_LIST.map((r) => `<option value="${r.id}" ${this.color.rampPreset === r.id ? "selected" : ""}>${r.label}</option>`).join("")}
+      </select>
+      <label>Solid presets</label>
+      <select id="cfg-solid-preset">
+        <option value="">(custom)</option>
+        ${SOLID_PRESETS.map((s) => `<option value="${s.id}">${s.label}</option>`).join("")}
+      </select>
+      <label>Mapping</label>
+      <select id="cfg-ramp-mapping">
+        ${rampMappingsForPiece(this.pieceId)
+          .map(
+            (m) =>
+              `<option value="${m}" ${this.color.rampMapping === m ? "selected" : ""}>${m}</option>`,
+          )
+          .join("")}
+      </select>
+      <div id="cfg-ramp-preview" style="height:12px;border-radius:4px;margin:0.35rem 0;background:linear-gradient(90deg,${this.color.ramp.stops.map((s) => `${s.color.value} ${s.t * 100}%`).join(",")})"></div>
       <h2>Parameters</h2>
       ${getPieceRuntime(this.pieceId).paramSchema
+        .filter((f) => f.key !== "hue")
         .map((f) => {
           const val = this.params[f.key] ?? f.default;
           if (f.type === "choice") {
@@ -1562,6 +1693,8 @@ export class StudioApp {
         .join("")}
       <details class="advanced">
         <summary>Advanced / meta / seeds</summary>
+        <label>Hue (advanced)</label>
+        <input id="cfg-hue-adv" type="range" min="0" max="1" step="0.01" value="${Number(this.params.hue ?? 0.08)}" />
         <label>Meta: organic ↔ geometric</label>
         <input id="cfg-meta-organic" type="range" min="0" max="1" step="0.01" value="${this.meta.organic}" />
         <label>Meta: still ↔ kinetic</label>
@@ -1571,6 +1704,8 @@ export class StudioApp {
           <label><input id="cfg-lock-density" type="checkbox" ${this.locked.has("density") ? "checked" : ""} /> density</label>
           <label><input id="cfg-lock-chaos" type="checkbox" ${this.locked.has("chaos") ? "checked" : ""} /> chaos</label>
           <label><input id="cfg-lock-hue" type="checkbox" ${this.locked.has("hue") ? "checked" : ""} /> hue</label>
+          <label><input id="cfg-lock-color" type="checkbox" ${this.locked.has("color") ? "checked" : ""} /> color</label>
+          <label><input id="cfg-lock-ramp" type="checkbox" ${this.locked.has("ramp") ? "checked" : ""} /> ramp</label>
           <label><input id="cfg-lock-seed" type="checkbox" ${this.locked.has("seed") ? "checked" : ""} /> seed</label>
         </div>
         <div class="row">
@@ -1738,6 +1873,59 @@ export class StudioApp {
       this.session?.runtime.getPiece("L0")?.setParameter("zoom", Number(this.params.zoom ?? 1));
       if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
     });
+    el.querySelector("#cfg-color-mode")?.addEventListener("change", (e) => {
+      this.color.mode = (e.target as HTMLSelectElement).value as ColorConfig["mode"];
+      this.persist();
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-color-primary")?.addEventListener("input", (e) => {
+      if (this.locked.has("color")) return;
+      this.color.primary.value = (e.target as HTMLInputElement).value;
+      this.color.mode = "solid";
+      this.syncColorToParams();
+      this.persist();
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-color-bg")?.addEventListener("input", (e) => {
+      if (this.locked.has("color")) return;
+      this.color.background.value = (e.target as HTMLInputElement).value;
+      this.persist();
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-color-transparent")?.addEventListener("change", (e) => {
+      this.color.transparentBackground = (e.target as HTMLInputElement).checked;
+      this.persist();
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-ramp-preset")?.addEventListener("change", (e) => {
+      if (this.locked.has("ramp")) return;
+      this.applyColorPreset((e.target as HTMLSelectElement).value);
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-solid-preset")?.addEventListener("change", (e) => {
+      if (this.locked.has("color")) return;
+      const id = (e.target as HTMLSelectElement).value;
+      const preset = SOLID_PRESETS.find((s) => s.id === id);
+      if (!preset) return;
+      this.color.mode = "solid";
+      this.color.primary = { ...preset.color };
+      this.syncColorToParams();
+      this.persist();
+      void this.applyPieceScene();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-ramp-mapping")?.addEventListener("change", (e) => {
+      this.color.rampMapping = (e.target as HTMLSelectElement).value as ColorConfig["rampMapping"];
+      this.persist();
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-hue-adv")?.addEventListener("input", (e) => {
+      if (this.locked.has("hue")) return;
+      const v = Number((e.target as HTMLInputElement).value);
+      this.params.hue = v;
+      this.session?.runtime.getPiece("L0")?.setParameter("hue", v);
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
+    });
     const bindLock = (id: string, key: string) => {
       el.querySelector(id)?.addEventListener("change", (e) => {
         if ((e.target as HTMLInputElement).checked) this.locked.add(key);
@@ -1747,6 +1935,8 @@ export class StudioApp {
     bindLock("#cfg-lock-density", "density");
     bindLock("#cfg-lock-chaos", "chaos");
     bindLock("#cfg-lock-hue", "hue");
+    bindLock("#cfg-lock-color", "color");
+    bindLock("#cfg-lock-ramp", "ramp");
     bindLock("#cfg-lock-seed", "seed");
     bindLock("#cfg-lock-palette", "palette");
     bindLock("#cfg-lock-style", "style");

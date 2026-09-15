@@ -349,6 +349,15 @@ studio-animation:
     export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
     npx playwright test -c playwright.animation.config.ts
 
+[group('studio')]
+animation-export:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npm run test -- --run tests/export_backend.test.ts tests/animation_export_variation.test.ts tests/color.test.ts
+    cd "{{root}}/engines/python"
+    uv run pytest tests/test_render_service.py -q -k "animation_job or export_frame"
+
 # ── Docker Bake ──────────────────────────────────────────────────────
 
 [group('docker')]
