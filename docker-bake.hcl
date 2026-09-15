@@ -1,5 +1,5 @@
 group "default" {
-  targets = ["studio", "python", "docs"]
+  targets = ["studio", "python", "render", "docs"]
 }
 
 group "test" {
@@ -7,11 +7,11 @@ group "test" {
 }
 
 group "ci" {
-  targets = ["ci", "python-test", "web-test", "studio"]
+  targets = ["ci", "python-test", "web-test", "studio", "render"]
 }
 
 group "all" {
-  targets = ["studio", "python", "python-test", "web-test", "docs", "ci", "wasm"]
+  targets = ["studio", "python", "python-test", "web-test", "docs", "ci", "wasm", "render", "export"]
 }
 
 target "studio" {
@@ -54,6 +54,20 @@ target "wasm" {
   dockerfile = "Dockerfile"
   target = "wasm-builder"
   tags = ["numbrane-wasm:local"]
+}
+
+target "render" {
+  context = "."
+  dockerfile = "Dockerfile"
+  target = "render-runtime"
+  tags = ["numbrane-render:local"]
+}
+
+target "export" {
+  context = "."
+  dockerfile = "Dockerfile"
+  target = "export-runtime"
+  tags = ["numbrane-export:local"]
 }
 
 target "docs" {

@@ -353,10 +353,12 @@ bake-print:
 docker-studio:
     #!/usr/bin/env bash
     set -euo pipefail
-    docker buildx bake -f docker-bake.hcl studio
+    docker buildx bake -f docker-bake.hcl studio render
+    mkdir -p "{{root}}/artifacts"
     echo "Studio → http://127.0.0.1:8080/studio.html"
     echo "Microphone: browser getUserMedia (not passed into the container)."
-    docker compose up studio
+    echo "Exports land in ./artifacts/ via the renderer service."
+    docker compose up studio renderer
 
 [group('docker')]
 docker-test:

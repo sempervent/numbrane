@@ -2,13 +2,25 @@
 # Do not define competing Dockerfile build graphs here.
 
 services:
+  renderer:
+    image: numbrane-render:local
+    volumes:
+      - ./artifacts:/artifacts
+      - ./pieces:/src/pieces:ro
+    environment:
+      NUMBRANE_ROOT: /src
+      ARTIFACTS_DIR: /artifacts
+    # No microphone devices — browser owns getUserMedia.
+
   studio:
     image: numbrane-studio:local
     ports:
       - "8080:8080"
+    depends_on:
+      - renderer
     volumes:
       - ./artifacts:/artifacts
-    # Mic stays in the browser (getUserMedia). Container only serves static Studio.
+    # Mic stays in the browser (getUserMedia). Container only serves Studio + proxies /api.
 
   docs:
     image: numbrane-docs:local
