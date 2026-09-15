@@ -44,6 +44,7 @@ import {
 } from "./seed/library";
 import { defaultMappingsForPiece } from "./audio/mappings";
 import { GeneratePreviewController } from "./generate/preview";
+import { BufferedFrameAnimationController } from "./animate/controller";
 import {
   defaultsForPiece,
   getPieceRuntime,
@@ -151,8 +152,11 @@ export class StudioApp {
   private fps = 60;
   private frameTimes: number[] = [];
   private preview = new GeneratePreviewController();
-  private apiAnimTimer: number | null = null;
-  private lastApiAnimMs = 0;
+  private apiAnim: BufferedFrameAnimationController | null = null;
+  private animUpdateFps = 0;
+  private animBackend = "";
+  private displayedFrame = 0;
+  private webglStatus = "—";
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -226,21 +230,27 @@ export class StudioApp {
 
     if (surface === "api-preview") {
       this.session?.runtime.transport.stop();
+      this.session?.runtime.setSimulationPaused(true);
       this.canvas.classList.add("hidden-live");
       previewEl?.classList.add("visible");
-      this.scheduleGeneratePreview();
+      this.animBackend = "buffered-api";
       if (this.mode === "animate" && this.playing) {
         this.startApiAnim();
+      } else {
+        this.stopApiAnim({ abort: this.mode !== "animate" });
+        this.scheduleGeneratePreview();
       }
       this.syncChrome();
       return;
     }
 
     // Live surface (ANIMATE/REACT stateful, wasm, geometry-ir, shader-native)
+    this.stopApiAnim({ abort: true });
     this.preview.cancel();
     this.canvas.classList.remove("hidden-live");
     previewEl?.classList.remove("visible");
     statusEl?.classList.remove("visible");
+    this.animBackend = String(rendererKindFor(this.pieceId, this.mode) ?? "live");
     if (!this.session) return;
 
     const mappings = defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map(
@@ -328,9 +338,16 @@ export class StudioApp {
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
+      this.session.runtime.setSimulationPaused(true);
+      // Still render current state once via the running loop (dt=0).
     } else if (this.playing) {
+      this.session.runtime.setSimulationPaused(false);
       this.session.runtime.transport.start();
+    } else {
+      this.session.runtime.setSimulationPaused(true);
+      this.session.runtime.transport.stop();
     }
+    this.webglStatus = "ok";
     this.syncChrome();
   }
 
@@ -436,29 +453,90 @@ export class StudioApp {
   }
 
   private startApiAnim(): void {
-    this.stopApiAnim();
-    this.lastApiAnimMs = performance.now();
-    const tick = () => {
-      if (!this.playing || studioSurface(this.pieceId, this.mode) !== "api-preview") {
-        this.stopApiAnim();
-        return;
-      }
-      const now = performance.now();
-      const interval = 1000 / Math.max(1, this.anim.fps);
-      if (now - this.lastApiAnimMs >= interval) {
-        this.lastApiAnimMs = now;
-        this.frame += 1;
-        this.scheduleGeneratePreview(true);
-      }
-      this.apiAnimTimer = window.setTimeout(tick, 16);
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    const status = document.getElementById("gen-status");
+    const { width, height } = previewSize();
+    const base = {
+      piece: this.pieceId,
+      seed: this.seed,
+      width: Math.max(320, Math.floor(width * 0.5)),
+      height: Math.max(180, Math.floor(height * 0.5)),
+      quality: "draft" as const,
+      parameters: paramsForApi(this.params),
     };
-    this.apiAnimTimer = window.setTimeout(tick, 16);
+    // GENERATE preview controller must not drive ANIMATE.
+    this.preview.cancel();
+    this.apiAnim?.dispose();
+    this.apiAnim = new BufferedFrameAnimationController({
+      fetchFrame: async (req, signal) => {
+        const t0 = performance.now();
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal,
+          body: JSON.stringify({
+            piece: req.piece,
+            seed: req.seed,
+            frame: req.frame,
+            width: req.width,
+            height: req.height,
+            format: "png",
+            quality: req.quality ?? "draft",
+            parameters: req.parameters,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        return {
+          blob,
+          recipeDigest: res.headers.get("X-Numbrane-Recipe-Digest") ?? "",
+          renderDigest: res.headers.get("X-Numbrane-Render-Digest") ?? "",
+          renderMs: performance.now() - t0,
+        };
+      },
+      onPaint: (result) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        if (img) {
+          img.src = result.objectUrl;
+          img.classList.add("visible");
+        }
+        this.frame = result.logicalFrame;
+        this.displayedFrame = result.logicalFrame;
+        this.recipeDigest = result.recipeDigest;
+        this.renderDigest = result.renderDigest;
+        this.lastRenderMs = result.renderMs;
+        this.syncChrome();
+      },
+      onError: (err) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        const banner = document.getElementById("unsupported-banner");
+        this.unsupportedMessage = `ANIMATE failed (${this.pieceId}): ${err.message.slice(0, 120)}`;
+        if (banner) {
+          banner.textContent = this.unsupportedMessage;
+          banner.classList.add("visible");
+        }
+        toast(this.unsupportedMessage);
+      },
+      onStats: (s) => {
+        this.animUpdateFps = s.updateFps;
+        this.lastRenderMs = s.latencyMs;
+      },
+    });
+    this.generating = true;
+    status?.classList.add("visible");
+    if (status) status.textContent = "Animating…";
+    this.apiAnim.start(base, this.anim.startFrame || this.frame || 0);
   }
 
-  private stopApiAnim(): void {
-    if (this.apiAnimTimer !== null) {
-      window.clearTimeout(this.apiAnimTimer);
-      this.apiAnimTimer = null;
+  private stopApiAnim(opts: { abort?: boolean } = { abort: true }): void {
+    if (!this.apiAnim) return;
+    if (opts.abort !== false) {
+      this.apiAnim.dispose();
+      this.apiAnim = null;
+    } else {
+      this.apiAnim.pause();
     }
   }
 
@@ -783,11 +861,18 @@ export class StudioApp {
     this.playing = !this.playing;
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       if (this.playing) this.startApiAnim();
-      else this.stopApiAnim();
+      else this.stopApiAnim({ abort: false });
+      this.syncChrome();
       return;
     }
-    if (this.playing) this.session?.runtime.transport.start();
-    else this.session?.runtime.transport.stop();
+    if (this.playing) {
+      this.session?.runtime.setSimulationPaused(false);
+      this.session?.runtime.transport.start();
+    } else {
+      this.session?.runtime.setSimulationPaused(true);
+      this.session?.runtime.transport.stop();
+    }
+    this.syncChrome();
   }
 
   async toggleFullscreen(): Promise<void> {
@@ -1730,11 +1815,16 @@ export class StudioApp {
           `mode ${this.mode}`,
           `piece ${this.pieceId}`,
           `renderer ${kind}`,
+          `animBackend ${this.animBackend || kind}`,
           `seed ${this.seed}`,
-          `frame ${this.frame}`,
+          `logicalFrame ${this.frame}`,
+          `displayedFrame ${this.displayedFrame || this.frame}`,
+          `updateFps ${this.animUpdateFps.toFixed(1)}`,
+          `latencyMs ${this.lastRenderMs.toFixed(0)}`,
+          `playing ${this.playing ? "yes" : "pause"}`,
+          `webgl ${this.webglStatus}`,
           `recipe ${this.recipeDigest || "—"}`,
           `state ${this.renderDigest || "—"}`,
-          `renderMs ${this.lastRenderMs.toFixed(0)}`,
           `surface ${studioSurface(this.pieceId, this.mode)}`,
           `res ${this.canvas.width}x${this.canvas.height}`,
           `audio ${this.audioEnabled ? "on" : "off"}`,
