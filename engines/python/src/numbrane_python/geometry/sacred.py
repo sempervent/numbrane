@@ -71,31 +71,43 @@ def build_sacred_geometry_ir(
     radius: float = 1.0,
     layers: int = 3,
     scale: float = 1.0,
+    seed: int = 42,
 ) -> dict[str, Any]:
+    """Build sacred geometry IR. Seed applies bounded rotation / layer / scale variation."""
+    rot = ((seed & 0xFFFFFFFF) % 360) * (math.pi / 180.0) * 0.12
+    layer_nudge = (seed % 3) - 1
+    scale_nudge = 0.92 + ((seed % 17) / 17.0) * 0.16
+
+    def _rotate_xy(x: float, y: float) -> tuple[float, float]:
+        c, s = math.cos(rot), math.sin(rot)
+        return (x * c - y * s, x * s + y * c)
+
     if kind in {"flower-of-life", "geometry/flower-of-life"}:
-        centers = flower_of_life_layers(radius, layers)
+        lyr = max(1, layers + layer_nudge)
+        centers = [_rotate_xy(x, y) for x, y in flower_of_life_layers(radius * scale_nudge, lyr)]
         ir = geometry_ir_from_centers(centers, radius)
-        ir["meta"] = {"kind": "flower-of-life", "layers": layers}
+        ir["meta"] = {"kind": "flower-of-life", "layers": lyr, "seed": seed, "rotation": rot}
         return ir
     if kind in {"sri-yantra", "geometry/sri-yantra"}:
-        tri = sri_yantra_triangles(scale)
+        tri = sri_yantra_triangles(scale * scale_nudge)
         primitives: list[dict[str, Any]] = []
         for poly in tri["up"] + tri["down"]:
             for i in range(len(poly) - 1):
-                x1, y1 = poly[i]
-                x2, y2 = poly[i + 1]
+                x1, y1 = _rotate_xy(*poly[i])
+                x2, y2 = _rotate_xy(*poly[i + 1])
                 primitives.append({"kind": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2})
-        primitives.append({"kind": "circle", "cx": 0.0, "cy": 0.0, "r": scale})
+        primitives.append({"kind": "circle", "cx": 0.0, "cy": 0.0, "r": scale * scale_nudge})
         return {
             "protocol_version": "0.1.0",
             "kind": "sri-yantra",
             "primitives": primitives,
-            "meta": tri,
+            "meta": {**tri, "seed": seed, "rotation": rot},
         }
     if kind in {"isometric", "geometry/isometric"}:
-        centers = isometric_nodes()
+        n = 6 + (seed % 3)
+        centers = [_rotate_xy(x, y) for x, y in isometric_nodes(cols=n, rows=n)]
         ir = geometry_ir_from_centers(centers, radius * 0.35)
-        ir["meta"] = {"kind": "isometric"}
+        ir["meta"] = {"kind": "isometric", "seed": seed, "n": n}
         return ir
     raise ValueError(f"unknown sacred geometry kind: {kind}")
 

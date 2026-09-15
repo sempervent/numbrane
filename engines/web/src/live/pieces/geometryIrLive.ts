@@ -1,59 +1,9 @@
 /**
- * Geometry IR LIVE — draws centers/edges from structured Seed Artifact geometry.
+ * Geometry IR LIVE — draws piece-specific structured IR (no shared Metatron fallback).
  */
 
 import type { FrameState, LivePiece, LiveTelemetry, RenderContext } from "../piece";
-
-type Center = { x: number; y: number; r: number };
-type Edge = { a: number; b: number };
-
-function defaultMetatron(seed: number): { centers: Center[]; edges: Edge[] } {
-  let s = seed >>> 0 || 1;
-  const rnd = () => {
-    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
-    return (s & 0xffff) / 0x10000;
-  };
-  const R = 0.28 + rnd() * 0.08;
-  const centers: Center[] = [{ x: 0, y: 0, r: R }];
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2;
-    centers.push({ x: Math.cos(a) * R * 2, y: Math.sin(a) * R * 2, r: R });
-  }
-  for (let i = 0; i < 6; i++) {
-    const a = (i / 6) * Math.PI * 2 + Math.PI / 6;
-    centers.push({
-      x: Math.cos(a) * R * 2 * Math.sqrt(3),
-      y: Math.sin(a) * R * 2 * Math.sqrt(3),
-      r: R,
-    });
-  }
-  const edges: Edge[] = [];
-  for (let i = 0; i < centers.length; i++) {
-    for (let j = i + 1; j < centers.length; j++) {
-      const dx = centers[i]!.x - centers[j]!.x;
-      const dy = centers[i]!.y - centers[j]!.y;
-      if (Math.hypot(dx, dy) < R * 4.2) edges.push({ a: i, b: j });
-    }
-  }
-  return { centers, edges };
-}
-
-function parseIr(json: Record<string, unknown>): { centers: Center[]; edges: Edge[] } | null {
-  const centersRaw = (json.centers ?? json.nodes ?? []) as Array<Record<string, number>>;
-  if (!Array.isArray(centersRaw) || centersRaw.length === 0) return null;
-  const centers: Center[] = centersRaw.map((c) => ({
-    x: Number(c.x ?? 0),
-    y: Number(c.y ?? 0),
-    r: Number(c.r ?? c.radius ?? 0.2),
-  }));
-  const edgesRaw = (json.edges ?? json.lines ?? []) as Array<Record<string, number> | number[]>;
-  const edges: Edge[] = [];
-  for (const e of edgesRaw) {
-    if (Array.isArray(e)) edges.push({ a: Number(e[0]), b: Number(e[1]) });
-    else edges.push({ a: Number(e.a ?? e.i0 ?? 0), b: Number(e.b ?? e.i1 ?? 0) });
-  }
-  return { centers, edges };
-}
+import { buildGeometryIr, type GeomIR } from "../../studio/geometry/generators";
 
 function compileBlit(gl: WebGL2RenderingContext): {
   prog: WebGLProgram;
@@ -95,8 +45,7 @@ export async function createGeometryIrPiece(
 ): Promise<LivePiece> {
   const blit = compileBlit(gl);
   const scratch = document.createElement("canvas");
-  let centers: Center[] = [];
-  let edges: Edge[] = [];
+  let ir: GeomIR = buildGeometryIr(pieceId, 42, {});
   let seed = 42;
   let last: FrameState = {
     frame: 0,
@@ -115,34 +64,27 @@ export async function createGeometryIrPiece(
     rotation: 0,
     hue: 0.55,
     exposure: 1.2,
+    "geom.radius": 1,
+    "geom.levels": 2,
   };
   const audio = { energy: 0, low: 0, mid: 0, high: 0, onset: 0 };
-  let irJson: Record<string, unknown> | null = null;
 
   const rebuild = () => {
-    const parsed = irJson ? parseIr(irJson) : null;
-    if (parsed) {
-      centers = parsed.centers;
-      edges = parsed.edges;
-    } else {
-      const d = defaultMetatron(seed);
-      centers = d.centers;
-      edges = d.edges;
-    }
+    ir = buildGeometryIr(pieceId, seed, params);
   };
 
   return {
     id: pieceId,
     initialize(_recipe, s) {
       seed = s >>> 0;
-      params.hue = ((seed % 1000) / 1000) * 0.15 + 0.5;
+      params.hue = ((seed % 1000) / 1000) * 0.15 + 0.45;
       rebuild();
     },
     resize() {},
     update(frame) {
       last = frame;
-      if (audio.onset > 0.55) params.rotation += 0.04;
-      params.rotation += audio.low * 0.01;
+      if (audio.onset > 0.55) params.rotation += 0.03;
+      params.rotation += audio.low * 0.008;
     },
     setParameter(name, value) {
       if (typeof value === "number") {
@@ -151,6 +93,7 @@ export async function createGeometryIrPiece(
           if (k in audio) audio[k] = value;
         } else {
           params[name] = value;
+          if (name.startsWith("geom.") || name === "count" || name === "chaos") rebuild();
         }
       }
     },
@@ -179,35 +122,53 @@ export async function createGeometryIrPiece(
       c2.fillRect(0, 0, ctx.width, ctx.height);
       const cx = ctx.width * 0.5;
       const cy = ctx.height * 0.5;
-      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom * (1 + audio.energy * 0.15);
-      const rot = params.rotation + last.t * 0.05 * params.chaos;
+      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom * (1 + audio.energy * 0.12);
+      const rot = params.rotation + last.t * 0.04 * params.chaos;
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const rgb = `hsl(${params.hue * 360} 70% ${45 + audio.energy * 20}%)`;
+      const rgb = `hsl(${params.hue * 360} 70% ${48 + audio.energy * 18}%)`;
       c2.strokeStyle = rgb;
-      c2.lineWidth = 1.25 + params.density;
-      c2.globalAlpha = 0.9;
+      c2.lineWidth = 1.2 + params.density * 0.8;
+      c2.globalAlpha = 0.92;
       const xf = (x: number, y: number) => {
         const xr = x * cos - y * sin;
         const yr = x * sin + y * cos;
         return [cx + xr * scale, cy + yr * scale] as const;
       };
-      for (const e of edges) {
-        const a = centers[e.a];
-        const b = centers[e.b];
-        if (!a || !b) continue;
-        const [x0, y0] = xf(a.x, a.y);
-        const [x1, y1] = xf(b.x, b.y);
-        c2.beginPath();
-        c2.moveTo(x0, y0);
-        c2.lineTo(x1, y1);
-        c2.stroke();
-      }
-      for (const p of centers) {
-        const [x, y] = xf(p.x, p.y);
-        c2.beginPath();
-        c2.arc(x, y, Math.max(2, p.r * scale), 0, Math.PI * 2);
-        c2.stroke();
+      if (ir.primitives?.length) {
+        for (const p of ir.primitives) {
+          if (p.kind === "line") {
+            const [x0, y0] = xf(Number(p.x1), Number(p.y1));
+            const [x1, y1] = xf(Number(p.x2), Number(p.y2));
+            c2.beginPath();
+            c2.moveTo(x0, y0);
+            c2.lineTo(x1, y1);
+            c2.stroke();
+          } else if (p.kind === "circle") {
+            const [x, y] = xf(Number(p.cx), Number(p.cy));
+            c2.beginPath();
+            c2.arc(x, y, Math.max(2, Number(p.r) * scale), 0, Math.PI * 2);
+            c2.stroke();
+          }
+        }
+      } else {
+        for (const e of ir.edges) {
+          const a = ir.centers[e.a];
+          const b = ir.centers[e.b];
+          if (!a || !b) continue;
+          const [x0, y0] = xf(a.x, a.y);
+          const [x1, y1] = xf(b.x, b.y);
+          c2.beginPath();
+          c2.moveTo(x0, y0);
+          c2.lineTo(x1, y1);
+          c2.stroke();
+        }
+        for (const p of ir.centers) {
+          const [x, y] = xf(p.x, p.y);
+          c2.beginPath();
+          c2.arc(x, y, Math.max(2, p.r * scale), 0, Math.PI * 2);
+          c2.stroke();
+        }
       }
       gl.bindTexture(gl.TEXTURE_2D, blit.tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
@@ -219,8 +180,7 @@ export async function createGeometryIrPiece(
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, blit.tex);
       gl.uniform1i(gl.getUniformLocation(blit.prog, "u"), 0);
-      if (ctx.transparent) gl.clearColor(0, 0, 0, 0);
-      else gl.clearColor(0.02, 0.02, 0.03, 1);
+      gl.clearColor(0.02, 0.02, 0.03, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
@@ -233,15 +193,20 @@ export async function createGeometryIrPiece(
       return {
         arrays: {},
         shapes: {},
-        json: { kind: "geometry-ir", seed, centers, edges, pieceId },
+        json: { kind: "geometry-ir", ...ir },
       };
     },
     importState(s) {
-      if (s.json?.geometry_ir && typeof s.json.geometry_ir === "object") {
-        irJson = s.json.geometry_ir as Record<string, unknown>;
-        rebuild();
-      } else if (s.json?.centers) {
-        irJson = s.json;
+      if (s.json?.centers || s.json?.primitives) {
+        ir = {
+          pieceId,
+          seed,
+          centers: (s.json.centers as GeomIR["centers"]) ?? [],
+          edges: (s.json.edges as GeomIR["edges"]) ?? [],
+          primitives: s.json.primitives as GeomIR["primitives"],
+          meta: (s.json.meta as GeomIR["meta"]) ?? {},
+        };
+      } else {
         rebuild();
       }
     },

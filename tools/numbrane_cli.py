@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -60,9 +61,7 @@ def cmd_pieces(_: argparse.Namespace) -> int:
         caps = m.get("capabilities", {})
         still = "Y" if caps.get("still") else "N"
         rt = "Y" if caps.get("realtime") else "N"
-        print(
-            f"{m['piece_id']:40} {m.get('backend', '?'):8} {still:5} {rt:3} {m.get('name', '')}"
-        )
+        print(f"{m['piece_id']:40} {m.get('backend', '?'):8} {still:5} {rt:3} {m.get('name', '')}")
     print(f"\n{len(rows)} pieces")
     return 0
 
@@ -103,6 +102,15 @@ def _load_recipe(args: argparse.Namespace) -> dict:
             raise SystemExit(f"piece not found: {args.piece}")
     recipe["seed"] = args.seed
     params = dict(recipe.get("parameters") or {})
+    # Studio / Docker render service may inject JSON parameter overrides
+    extra = os.environ.get("NUMBRANE_RENDER_PARAMS")
+    if extra:
+        try:
+            injected = json.loads(extra)
+            if isinstance(injected, dict):
+                params.update(injected)
+        except json.JSONDecodeError:
+            pass
     if getattr(args, "width", None):
         params["width"] = args.width
         params["output.width"] = args.width
@@ -118,6 +126,20 @@ def _load_recipe(args: argparse.Namespace) -> dict:
     recipe["parameters"] = params
     if getattr(args, "frame", None) is not None:
         recipe.setdefault("time", {})["frame"] = args.frame
+    # Preview budgets (same algorithm, lower complexity)
+    if os.environ.get("NUMBRANE_RENDER_QUALITY") == "preview":
+        piece = recipe.get("piece_id") or getattr(args, "piece", "")
+        if piece == "fields/flow-hatching":
+            params["line_spacing"] = max(float(params.get("line_spacing", 4)), 7.0)
+            params["streamline_steps"] = min(int(params.get("streamline_steps", 24)), 12)
+            params["density"] = min(float(params.get("density", 1.0)), 0.55)
+        if str(piece).startswith("reaction-diffusion"):
+            params["iterations"] = min(int(params.get("iterations", 400)), 220)
+        if piece == "growth/slime-mold":
+            params["steps"] = min(int(params.get("steps", 200)), 120)
+        if piece == "fractals/strange-attractors":
+            params["steps"] = min(int(params.get("steps", 80000)), 40000)
+        recipe["parameters"] = params
     return recipe
 
 
@@ -179,14 +201,24 @@ def cmd_render(args: argparse.Namespace) -> int:
         "reference/circle-lattice",
         "geometry/circle-lattice",
     }:
+        import math
+
         r = float(recipe.get("parameters", {}).get("geom.radius", 1.0))
+        seed = int(args.seed)
+        rot = ((seed % 360) * math.pi / 180.0) * 0.12
+        levels = int(recipe.get("parameters", {}).get("geom.levels", 1))
         if "seed-of-life" in piece:
-            ir = geometry_ir_from_centers(seed_of_life_centers(r), r)
+            centers = seed_of_life_centers(r * (0.9 + (seed % 11) / 55.0))
+            c, s = math.cos(rot), math.sin(rot)
+            centers = [(x * c - y * s, x * s + y * c) for x, y in centers]
+            ir = geometry_ir_from_centers(centers, r)
+            ir["meta"] = {"kind": "seed-of-life", "seed": seed}
         elif "metatron" in piece:
-            centers = flower_of_life_centers(
-                r, levels=int(recipe.get("parameters", {}).get("geom.levels", 1))
-            )
+            centers = flower_of_life_centers(r, levels=max(1, levels + (seed % 2)))
+            c, s = math.cos(rot), math.sin(rot)
+            centers = [(x * c - y * s, x * s + y * c) for x, y in centers]
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
+            ir["meta"] = {"kind": "metatron", "seed": seed, "nodes": len(centers)}
         elif "flower-of-life" in piece or "sri-yantra" in piece or "isometric" in piece:
             from numbrane_python.geometry.sacred import build_sacred_geometry_ir
 
@@ -202,9 +234,12 @@ def cmd_render(args: argparse.Namespace) -> int:
                 radius=r,
                 layers=int(recipe.get("parameters", {}).get("geom.levels", 3)),
                 scale=float(recipe.get("parameters", {}).get("geom.scale", 1.0)),
+                seed=seed,
             )
         else:
             ir = gen_lattice(recipe)
+            if isinstance(ir, dict):
+                ir.setdefault("meta", {})["seed"] = seed
         if fmt == "svg":
             out = out.with_suffix(".svg")
             out.write_text(geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8")
@@ -323,8 +358,10 @@ def cmd_seed_from_raster(args: argparse.Namespace) -> int:
 
     mode = args.transform
     piece = args.piece
-    out = Path(args.output) if args.output else default_library_root() / (
-        f"raster-{mode}-{Path(args.image).stem}"
+    out = (
+        Path(args.output)
+        if args.output
+        else default_library_root() / (f"raster-{mode}-{Path(args.image).stem}")
     )
     out.mkdir(parents=True, exist_ok=True)
     (out / "state").mkdir(parents=True, exist_ok=True)
@@ -339,7 +376,9 @@ def cmd_seed_from_raster(args: argparse.Namespace) -> int:
             rel = f"state/{name}.npy"
             np.save(out / rel, arr)
             state_files.append(
-                StateFile(role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape))
+                StateFile(
+                    role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape)
+                )
             )
         artifact_type = "simulation-state"
         piece = "reaction-diffusion/reaction-diffusion"
@@ -348,7 +387,13 @@ def cmd_seed_from_raster(args: argparse.Namespace) -> int:
         rel = "state/emission.npy"
         np.save(out / rel, dens)
         state_files.append(
-            StateFile(role="emission", path=rel, format="npy", dtype=str(dens.dtype), shape=list(dens.shape))
+            StateFile(
+                role="emission",
+                path=rel,
+                format="npy",
+                dtype=str(dens.dtype),
+                shape=list(dens.shape),
+            )
         )
         artifact_type = "scalar-field"
         piece = piece if piece.startswith("particles") else "particles/noodles"
@@ -358,7 +403,9 @@ def cmd_seed_from_raster(args: argparse.Namespace) -> int:
             rel = f"state/{name}.npy"
             np.save(out / rel, arr)
             state_files.append(
-                StateFile(role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape))
+                StateFile(
+                    role=name, path=rel, format="npy", dtype=str(arr.dtype), shape=list(arr.shape)
+                )
             )
         artifact_type = "vector-field"
         piece = piece if piece.startswith("fields") else "fields/flow-hatching"
@@ -399,8 +446,10 @@ def cmd_seed_create(args: argparse.Namespace) -> int:
     from numbrane_python.seeds import create_seed_artifact, default_library_root
 
     recipe = _load_recipe(args)
-    out = Path(args.output) if args.output else default_library_root() / (
-        f"{args.piece.replace('/', '-')}-s{args.seed}-f{args.frame}"
+    out = (
+        Path(args.output)
+        if args.output
+        else default_library_root() / (f"{args.piece.replace('/', '-')}-s{args.seed}-f{args.frame}")
     )
     art = create_seed_artifact(
         args.piece,
@@ -482,7 +531,6 @@ def cmd_seed_continue(args: argparse.Namespace) -> int:
     return 0
 
 
-
 def cmd_explore(args: argparse.Namespace) -> int:
     """Deterministic seed variants for a piece (rule-based exploration)."""
     seeds = [int(s) for s in args.seeds.split(",")]
@@ -511,16 +559,20 @@ def cmd_explore(args: argparse.Namespace) -> int:
 
 def cmd_gallery(args: argparse.Namespace) -> int:
     seeds = [int(s) for s in args.seeds.split(",")]
-    pieces = args.pieces.split(",") if args.pieces else [
-        "geometry/seed-of-life",
-        "geometry/metatron",
-        "reaction-diffusion/reaction-diffusion",
-        "growth/slime-mold",
-        "fractals/strange-attractors",
-        "fields/flow-hatching",
-        "tiling/truchet-tiles",
-        "particles/noodles",
-    ]
+    pieces = (
+        args.pieces.split(",")
+        if args.pieces
+        else [
+            "geometry/seed-of-life",
+            "geometry/metatron",
+            "reaction-diffusion/reaction-diffusion",
+            "growth/slime-mold",
+            "fractals/strange-attractors",
+            "fields/flow-hatching",
+            "tiling/truchet-tiles",
+            "particles/noodles",
+        ]
+    )
     out_dir = Path(args.output or ROOT / "artifacts" / "gallery")
     out_dir.mkdir(parents=True, exist_ok=True)
     ns = argparse.Namespace(
@@ -610,7 +662,9 @@ def main() -> int:
         help="Build Seed Artifact from image (nutrient/emission/displacement)",
     )
     p.add_argument("image")
-    p.add_argument("--transform", choices=["nutrient", "emission", "displacement"], default="nutrient")
+    p.add_argument(
+        "--transform", choices=["nutrient", "emission", "displacement"], default="nutrient"
+    )
     p.add_argument("--piece", default="reaction-diffusion/reaction-diffusion")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--output", "-o")
