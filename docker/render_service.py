@@ -73,7 +73,14 @@ def _apply_preview_budgets(piece: str, params: dict[str, Any], quality: str) -> 
         out["max_steps"] = min(int(out.get("max_steps", 2000)), 80 if draft else 180)
         out["field_octaves"] = min(int(out.get("field_octaves", 4)), 1 if draft else 2)
     if piece.startswith("reaction-diffusion"):
-        out["iterations"] = min(int(out.get("iterations", 400)), 80 if draft else 220)
+        # Preview still needs enough settle to look like evolved lace/coral/worms,
+        # not the raw IC. Final quality leaves settle_steps untouched (early return).
+        out["iterations"] = min(int(out.get("iterations", 400)), 400 if draft else 1200)
+        if "settle_steps" in out:
+            out["settle_steps"] = min(int(out["settle_steps"]), 900 if draft else 2200)
+        else:
+            out.setdefault("settle_steps", 700 if draft else 1800)
+        out.setdefault("settle_cap", 1400 if draft else 3200)
     if piece == "growth/slime-mold":
         out["steps"] = min(int(out.get("steps", 200)), 50 if draft else 120)
     if piece == "growth/differential-growth":
@@ -322,6 +329,8 @@ def api_export_anim(body: ExportAnimBody) -> Response:
         dict(body.parameters or {}),
         "preview" if body.width <= 960 else "final",
     )
+    params["construction_animate"] = True
+    params["construction_frames"] = n
     if params:
         env["NUMBRANE_RENDER_PARAMS"] = json.dumps(params)
     try:
@@ -469,6 +478,352 @@ def api_export_anim(body: ExportAnimBody) -> Response:
         )
     finally:
         shutil.rmtree(frames_dir, ignore_errors=True)
+
+
+class PackExportBody(BaseModel):
+    pack: dict[str, Any]
+    performance_set: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = False
+
+
+def _slugify(name: str) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", str(name).lower()).strip("-")
+    return (s or "pfl-pack")[:48]
+
+
+def _still_size(preset: str, preview: bool) -> tuple[int, int]:
+    table = {
+        "episode-16x9": (3840, 2160),
+        "projection-16x9": (1920, 1080),
+        "square": (2160, 2160),
+        "portrait": (2160, 3840),
+    }
+    w, h = table.get(preset, (1920, 1080))
+    if preview:
+        return max(320, w // 6), max(180, h // 6)
+    return w, h
+
+
+def _anim_duration(preset: str, fallback: float, preview: bool) -> float:
+    table = {"loop-6s": 6.0, "loop-12s": 12.0, "section-20s": 20.0, "section-30s": 30.0}
+    d = float(table.get(preset, fallback or 12.0))
+    return min(d, 2.0) if preview else d
+
+
+@app.post("/api/pack/export")
+def api_pack_export(body: PackExportBody) -> dict[str, Any]:
+    """Export a PFL production pack under artifacts/pfl-packs/<slug>/."""
+    pack = dict(body.pack or {})
+    name = str(pack.get("name") or "PFL Pack")
+    slug = _slugify(name)
+    root = _ensure_artifacts() / "pfl-packs" / slug
+    stills = root / "stills"
+    anims = root / "animations"
+    recipes = root / "recipes"
+    perf = root / "performance"
+    for d in (stills, anims, recipes, perf):
+        d.mkdir(parents=True, exist_ok=True)
+
+    items = list(pack.get("items") or [])
+    contact_thumbs: list[Path] = []
+    written: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            continue
+        n = idx + 1
+        piece = str(item.get("pieceId") or item.get("piece") or "")
+        if not piece:
+            continue
+        try:
+            _validate_piece(piece)
+        except HTTPException:
+            continue
+        seed = int(item.get("seed", 42)) & 0xFFFFFFFF
+        params = dict(item.get("parameters") or {})
+        if item.get("styleId"):
+            params.setdefault("pfl_style", item["styleId"])
+        kind = str(item.get("kind") or "still")
+        stem = f"{n:02d}-{piece.replace('/', '_')}-s{seed}"
+        recipe_path = recipes / f"{stem}.json"
+        recipe_path.write_text(
+            json.dumps(
+                {
+                    "piece": piece,
+                    "seed": seed,
+                    "frame": int(item.get("frame", 0)),
+                    "parameters": params,
+                    "kind": kind,
+                    "animArc": item.get("animArc"),
+                    "durationSec": item.get("durationSec"),
+                },
+                indent=2,
+            )
+        )
+
+        # Always render a still preview (used for contact sheet + stills/)
+        sw, sh = _still_size(str(item.get("stillPreset") or pack.get("still_preset") or "projection-16x9"), body.preview)
+        still_out = stills / f"{stem}.png"
+        env = os.environ.copy()
+        env["NUMBRANE_RENDER_PARAMS"] = json.dumps(params)
+        quality = "draft" if body.preview else "final"
+        r = subprocess.run(
+            [
+                str(PYTHON),
+                str(CLI),
+                "render",
+                piece,
+                "--seed",
+                str(seed),
+                "--width",
+                str(sw),
+                "--height",
+                str(sh),
+                "--frame",
+                str(int(item.get("frame", 0))),
+                "--format",
+                "png",
+                "-o",
+                str(still_out),
+            ],
+            cwd=str(ROOT / "engines/python"),
+            env={**env, "NUMBRANE_RENDER_QUALITY": quality},
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        if r.returncode == 0 and still_out.exists():
+            contact_thumbs.append(still_out)
+            written.append({"n": n, "kind": "still", "path": str(still_out.relative_to(root))})
+
+        if kind in {"animation", "react"}:
+            if body.preview:
+                # Short animated webp stub for preview packs
+                dur = _anim_duration(
+                    str(item.get("animPreset") or "loop-6s"),
+                    float(item.get("durationSec") or 6),
+                    True,
+                )
+                fps = 8
+                nframes = max(4, int(dur * fps))
+                job = root / f".tmp-anim-{n}"
+                frames_dir = job / "frames"
+                frames_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    for fi in range(nframes):
+                        fout = frames_dir / f"frame_{fi:05d}.png"
+                        fr = int(item.get("frame", 0)) + fi
+                        subprocess.run(
+                            [
+                                str(PYTHON),
+                                str(CLI),
+                                "render",
+                                piece,
+                                "--seed",
+                                str(seed),
+                                "--width",
+                                str(min(sw, 480)),
+                                "--height",
+                                str(min(sh, 270)),
+                                "--frame",
+                                str(fr),
+                                "--format",
+                                "png",
+                                "-o",
+                                str(fout),
+                            ],
+                            cwd=str(ROOT / "engines/python"),
+                            env={**env, "NUMBRANE_RENDER_QUALITY": "draft"},
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                            check=False,
+                        )
+                    ffmpeg = shutil.which("ffmpeg")
+                    anim_out = anims / f"{stem}.webp"
+                    if ffmpeg and any(frames_dir.glob("*.png")):
+                        subprocess.run(
+                            [
+                                ffmpeg,
+                                "-y",
+                                "-framerate",
+                                str(fps),
+                                "-i",
+                                str(frames_dir / "frame_%05d.png"),
+                                "-loop",
+                                "0",
+                                "-q:v",
+                                "60",
+                                str(anim_out),
+                            ],
+                            capture_output=True,
+                            text=True,
+                            timeout=60,
+                            check=False,
+                        )
+                        if anim_out.exists():
+                            written.append(
+                                {
+                                    "n": n,
+                                    "kind": "animation",
+                                    "path": str(anim_out.relative_to(root)),
+                                }
+                            )
+                finally:
+                    shutil.rmtree(job, ignore_errors=True)
+            else:
+                dur = _anim_duration(
+                    str(item.get("animPreset") or "loop-12s"),
+                    float(item.get("durationSec") or 12),
+                    False,
+                )
+                fps = 24
+                nframes = min(240, max(8, int(dur * fps)))
+                fmt = str(item.get("animFormat") or "webp")
+                if fmt not in {"webp", "webm", "apng"}:
+                    fmt = "webp"
+                aw, ah = _still_size(
+                    str(item.get("stillPreset") or "projection-16x9"), False
+                )
+                aw, ah = min(aw, 1920), min(ah, 1080)
+                job = root / f".tmp-anim-{n}"
+                frames_dir = job / "frames"
+                frames_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    for fi in range(nframes):
+                        fout = frames_dir / f"frame_{fi:05d}.png"
+                        fr = int(item.get("frame", 0)) + fi
+                        subprocess.run(
+                            [
+                                str(PYTHON),
+                                str(CLI),
+                                "render",
+                                piece,
+                                "--seed",
+                                str(seed),
+                                "--width",
+                                str(aw),
+                                "--height",
+                                str(ah),
+                                "--frame",
+                                str(fr),
+                                "--format",
+                                "png",
+                                "-o",
+                                str(fout),
+                            ],
+                            cwd=str(ROOT / "engines/python"),
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            timeout=120,
+                            check=False,
+                        )
+                    ffmpeg = shutil.which("ffmpeg")
+                    anim_out = anims / f"{stem}.{fmt}"
+                    if ffmpeg and any(frames_dir.glob("*.png")):
+                        pattern = str(frames_dir / "frame_%05d.png")
+                        if fmt == "webm":
+                            cmd = [
+                                ffmpeg,
+                                "-y",
+                                "-framerate",
+                                str(fps),
+                                "-i",
+                                pattern,
+                                "-c:v",
+                                "libvpx-vp9",
+                                "-b:v",
+                                "0",
+                                "-crf",
+                                "32",
+                                "-pix_fmt",
+                                "yuv420p",
+                                str(anim_out),
+                            ]
+                        else:
+                            cmd = [
+                                ffmpeg,
+                                "-y",
+                                "-framerate",
+                                str(fps),
+                                "-i",
+                                pattern,
+                                "-loop",
+                                "0",
+                                "-q:v",
+                                "50",
+                                str(anim_out),
+                            ]
+                        subprocess.run(
+                            cmd, capture_output=True, text=True, timeout=180, check=False
+                        )
+                        if anim_out.exists():
+                            written.append(
+                                {
+                                    "n": n,
+                                    "kind": "animation",
+                                    "path": str(anim_out.relative_to(root)),
+                                }
+                            )
+                finally:
+                    shutil.rmtree(job, ignore_errors=True)
+
+    # Performance set
+    perf_set = body.performance_set or {}
+    if not perf_set:
+        perf_set = {
+            "protocol_version": "0.1.0",
+            "set_id": f"pfl-packs-{slug}",
+            "name": name,
+            "scenes": [],
+            "cues": [],
+        }
+    (perf / "set.json").write_text(json.dumps(perf_set, indent=2) + "\n")
+
+    # Contact sheet
+    contact = root / "contact-sheet.png"
+    try:
+        from PIL import Image, ImageDraw
+
+        cell = 220
+        cols = min(4, max(1, len(contact_thumbs)))
+        rows = max(1, (len(contact_thumbs) + cols - 1) // cols)
+        sheet = Image.new(
+            "RGB", (cols * cell + 20, rows * (cell + 36) + 20), (12, 12, 14)
+        )
+        draw = ImageDraw.Draw(sheet)
+        for i, thumb in enumerate(contact_thumbs):
+            r, c = divmod(i, cols)
+            x, y = 10 + c * cell, 10 + r * (cell + 36)
+            im = Image.open(thumb).convert("RGB")
+            im.thumbnail((cell - 8, cell - 8))
+            sheet.paste(im, (x + 4, y + 4))
+            item = items[i] if i < len(items) else {}
+            label = (
+                f"{i + 1:02d}  {str(item.get('pieceId', '')).split('/')[-1]}  "
+                f"s{item.get('seed', '')}"
+            )
+            draw.text((x + 4, y + cell - 2), label[:42], fill=(200, 205, 215))
+        sheet.save(contact)
+    except Exception:
+        contact.write_bytes(b"")
+
+    pack_out = dict(pack)
+    pack_out["pack_id"] = f"pfl-packs/{slug}"
+    pack_out["output_root"] = f"artifacts/pfl-packs/{slug}"
+    pack_out["exports"] = written
+    manifest = root / "manifest.json"
+    manifest.write_text(json.dumps(pack_out, indent=2) + "\n")
+
+    return {
+        "ok": True,
+        "slug": slug,
+        "path": f"artifacts/pfl-packs/{slug}",
+        "manifest_url": f"/api/artifact/pfl-packs/{slug}/manifest.json",
+        "contact_sheet_url": f"/api/artifact/pfl-packs/{slug}/contact-sheet.png",
+    }
 
 
 @app.get("/api/artifact/{path:path}")

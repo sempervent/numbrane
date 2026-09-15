@@ -158,6 +158,7 @@ function renderApiPlugin(): Plugin {
               format?: string;
               quality?: number;
               loop?: boolean;
+              parameters?: Record<string, number | string | boolean>;
             };
             const fps = Math.max(1, Math.min(60, body.fps ?? 30));
             const duration = Math.max(0.1, Math.min(30, body.duration_sec ?? 2));
@@ -170,6 +171,14 @@ function renderApiPlugin(): Plugin {
             const framesDir = resolve(job, "frames");
             mkdirSync(framesDir, { recursive: true });
             const cli = resolve(repoRoot, "tools/numbrane_cli.py");
+            const env = {
+              ...process.env,
+              NUMBRANE_RENDER_PARAMS: JSON.stringify({
+                ...(body.parameters ?? {}),
+                construction_animate: true,
+                construction_frames: n,
+              }),
+            };
             for (let i = 0; i < n; i++) {
               const frame = start + i;
               const out = resolve(framesDir, `frame_${String(i).padStart(5, "0")}.png`);
@@ -194,7 +203,12 @@ function renderApiPlugin(): Plugin {
                   "-o",
                   out,
                 ],
-                { cwd: resolve(repoRoot, "engines/python"), encoding: "utf8", timeout: 120_000 },
+                {
+                  cwd: resolve(repoRoot, "engines/python"),
+                  encoding: "utf8",
+                  timeout: 120_000,
+                  env,
+                },
               );
               if (r.status !== 0 || !existsSync(out)) {
                 res.statusCode = 500;
@@ -271,6 +285,8 @@ function renderApiPlugin(): Plugin {
               height?: number;
               frame?: number;
               format?: string;
+              parameters?: Record<string, number | string | boolean>;
+              recipe?: { parameters?: Record<string, number | string | boolean> };
             };
             const fmt = body.format === "svg" ? "svg" : "png";
             const outDir = resolve(repoRoot, "artifacts/studio-export");
@@ -294,10 +310,20 @@ function renderApiPlugin(): Plugin {
               "-o",
               out,
             ];
+            const merged = {
+              ...(body.recipe?.parameters ?? {}),
+              ...(body.parameters ?? {}),
+            };
             const r = spawnSync("uv", ["run", "python", ...args], {
               cwd: resolve(repoRoot, "engines/python"),
               encoding: "utf8",
               timeout: 120_000,
+              env: {
+                ...process.env,
+                ...(Object.keys(merged).length
+                  ? { NUMBRANE_RENDER_PARAMS: JSON.stringify(merged) }
+                  : {}),
+              },
             });
             if (r.status !== 0 || !existsSync(out)) {
               res.statusCode = 500;

@@ -63,10 +63,48 @@ def test_pfl_styles_preserve_piece_keys():
 def test_geometry_composition_modes():
     ir = {
         "primitives": [
-            {"type": "line", "x1": -1, "y1": 0, "x2": 1, "y2": 0, "stroke": 1.0},
-            {"type": "circle", "cx": 0, "cy": 0, "r": 0.5, "stroke": 1.0},
+            {"kind": "line", "x1": -1, "y1": 0, "x2": 1, "y2": 0, "stroke": 1.0},
+            {"kind": "circle", "cx": 0, "cy": 0, "r": 0.5, "stroke": 1.0},
         ]
     }
     out = apply_geometry_composition(ir, "fragment", seed=7)
     assert "primitives" in out
     assert len(out["primitives"]) >= 1
+
+    construction = apply_geometry_composition(ir, "construction", seed=1)
+    assert all(p.get("kind") == "circle" for p in construction["primitives"])
+    assert construction["meta"]["construction"] is True
+
+    anim = apply_geometry_composition(ir, "construction", seed=1, for_animation=True)
+    assert any(p.get("kind") == "line" for p in anim["primitives"])
+
+
+def test_construction_progress_phases():
+    from numbrane_python.composition.grammar import reveal_construction_progress
+
+    ir = {
+        "primitives": [
+            {"kind": "circle", "cx": 0, "cy": 0, "r": 1.0},
+            {"kind": "circle", "cx": 1, "cy": 0, "r": 1.0},
+            {"kind": "circle", "cx": -1, "cy": 0, "r": 1.0},
+            {"kind": "line", "x1": 0, "y1": 0, "x2": 1, "y2": 0},
+            {"kind": "line", "x1": 0, "y1": 0, "x2": -1, "y2": 0},
+        ],
+        "meta": {},
+    }
+    early = reveal_construction_progress(ir, 0.1)
+    assert early["meta"]["construction_phase"] == "centers"
+    assert all(p.get("kind") == "circle" for p in early["primitives"])
+    assert all(float(p["r"]) <= 0.04 for p in early["primitives"])
+
+    mid = reveal_construction_progress(ir, 0.35)
+    assert mid["meta"]["construction_phase"] == "circles"
+    assert not any(p.get("kind") == "line" for p in mid["primitives"])
+
+    late = reveal_construction_progress(ir, 0.6)
+    assert late["meta"]["construction_phase"] == "edges"
+    assert any(p.get("kind") == "line" for p in late["primitives"])
+
+    full = reveal_construction_progress(ir, 0.95)
+    assert full["meta"]["construction_phase"] == "layers"
+    assert len(full["primitives"]) == len(ir["primitives"])

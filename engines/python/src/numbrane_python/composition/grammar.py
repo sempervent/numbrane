@@ -155,8 +155,13 @@ def apply_geometry_composition(
     mode: str,
     *,
     seed: int = 42,
+    for_animation: bool = False,
 ) -> dict[str, Any]:
-    """Adjust sacred-geometry IR for composition modes — does not change lattice math."""
+    """Adjust sacred-geometry IR for composition modes — does not change lattice math.
+
+    When ``for_animation`` and mode is construction, keep full IR and tag meta so
+    callers can apply ``reveal_construction_progress`` over frames.
+    """
     if mode in {"", "canonical", "none"}:
         return ir
     out = dict(ir)
@@ -168,8 +173,9 @@ def apply_geometry_composition(
 
     if mode == "construction":
         meta["construction"] = True
-        out["primitives"] = [p for p in primitives if p.get("kind") == "circle"]
-        out["edges"] = []
+        if not for_animation:
+            out["primitives"] = [p for p in primitives if p.get("kind") == "circle"]
+            out["edges"] = []
     elif mode == "cropped":
         meta["margin"] = 0.88
         meta["center_bias"] = 0.85
@@ -202,6 +208,68 @@ def apply_geometry_composition(
         if edges:
             out["edges"] = edges[::2]
         meta["rotation"] = float(meta.get("rotation", 0.0)) + 0.42
+
+    out["meta"] = meta
+    return out
+
+
+def reveal_construction_progress(ir: dict[str, Any], progress: float) -> dict[str, Any]:
+    """Progressive authentic construction: centers → circles → edges → layers.
+
+    ``progress`` in [0, 1]. Prefer real IR subsetting over opacity fade-in.
+    """
+    t = float(np.clip(progress, 0.0, 1.0))
+    out = dict(ir)
+    meta = dict(out.get("meta") or {})
+    meta["construction_progress"] = t
+    primitives = list(ir.get("primitives") or [])
+    edges = list(ir.get("edges") or [])
+    circles = [p for p in primitives if p.get("kind") == "circle"]
+    lines = [p for p in primitives if p.get("kind") == "line"]
+
+    if t < 0.22:
+        # Phase A: center points as tiny dots
+        u = t / 0.22
+        n = max(1, int(math.ceil(len(circles) * u))) if circles else 0
+        tiny = []
+        for p in circles[:n]:
+            copy = dict(p)
+            copy["r"] = min(float(copy.get("r", 0.04)), 0.04)
+            tiny.append(copy)
+        out["primitives"] = tiny
+        out["edges"] = []
+        meta["construction_phase"] = "centers"
+    elif t < 0.48:
+        # Phase B: full-radius circles
+        u = (t - 0.22) / 0.26
+        n = max(1, int(math.ceil(len(circles) * u))) if circles else 0
+        out["primitives"] = circles[:n]
+        out["edges"] = []
+        meta["construction_phase"] = "circles"
+    elif t < 0.78:
+        # Phase C: edges / lines
+        u = (t - 0.48) / 0.3
+        ln = int(math.ceil(len(lines) * u))
+        en = int(math.ceil(len(edges) * u))
+        out["primitives"] = list(circles) + lines[:ln]
+        out["edges"] = edges[:en]
+        meta["construction_phase"] = "edges"
+    else:
+        # Phase D: layers / full
+        u = (t - 0.78) / 0.22
+        if u < 1.0 and primitives:
+            half = max(1, len(primitives) // 2)
+            revealed: list[dict[str, Any]] = []
+            for i, p in enumerate(primitives):
+                copy = dict(p)
+                if i < half:
+                    copy["opacity"] = 0.25 + 0.55 * u
+                revealed.append(copy)
+            out["primitives"] = revealed
+        else:
+            out["primitives"] = primitives
+        out["edges"] = edges
+        meta["construction_phase"] = "layers"
 
     out["meta"] = meta
     return out

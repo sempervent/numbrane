@@ -4,14 +4,26 @@
 
 export type Center = { x: number; y: number; r: number };
 export type Edge = { a: number; b: number };
+export type GeomPrimitive = Record<string, number | string>;
 export type GeomIR = {
   pieceId: string;
   seed: number;
   centers: Center[];
   edges: Edge[];
-  primitives?: Array<Record<string, number | string>>;
-  meta: Record<string, number | string>;
+  primitives?: GeomPrimitive[];
+  meta: Record<string, number | string | boolean>;
 };
+
+export const COMPOSITION_MODES = [
+  "canonical",
+  "construction",
+  "cropped",
+  "fragment",
+  "off-axis",
+  "layered",
+] as const;
+
+export type CompositionMode = (typeof COMPOSITION_MODES)[number];
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
@@ -161,6 +173,177 @@ function circleLattice(r: number, seed: number): Center[] {
   return flowerOfLife(r * (0.85 + rnd() * 0.3), rings);
 }
 
+function resolveCompositionMode(params: Record<string, number | string | boolean>): string {
+  const raw = String(params.composition_mode ?? params["comp.mode"] ?? "canonical");
+  return raw || "canonical";
+}
+
+/**
+ * Mirror Python apply_geometry_composition — framing/subset only, not lattice math.
+ * When `forAnimation` is true, construction keeps full IR and tags meta for progressive reveal.
+ */
+export function applyGeometryComposition(
+  ir: GeomIR,
+  mode: string,
+  seed: number,
+  opts: { forAnimation?: boolean } = {},
+): GeomIR {
+  if (!mode || mode === "canonical" || mode === "none") return ir;
+  const rnd = mulberry32(seed ^ 0xc0ff);
+  const out: GeomIR = {
+    ...ir,
+    centers: [...ir.centers],
+    edges: [...ir.edges],
+    primitives: ir.primitives ? [...ir.primitives] : undefined,
+    meta: { ...ir.meta, composition_mode: mode },
+  };
+
+  if (mode === "construction") {
+    out.meta.construction = true;
+    if (!opts.forAnimation) {
+      // Still: circles / centers only (authentic construction drawing)
+      out.edges = [];
+      if (out.primitives?.length) {
+        out.primitives = out.primitives.filter((p) => p.kind === "circle");
+      }
+    }
+    return out;
+  }
+  if (mode === "cropped") {
+    out.meta.margin = 0.88;
+    out.meta.center_bias = 0.85;
+  } else if (mode === "detail") {
+    out.meta.margin = 0.72;
+    out.meta.center_bias = 0.92;
+    out.meta.view_zoom = 1.35;
+  } else if (mode === "off-axis") {
+    out.meta.off_center_x = 0.12 + (seed % 5) * 0.04;
+    out.meta.off_center_y = -0.08 + (seed % 7) * 0.03;
+    out.meta.rotation = Number(out.meta.rotation ?? 0) + 0.18;
+  } else if (mode === "layered") {
+    if (out.primitives?.length) {
+      const layered = out.primitives.map((p, i) => ({
+        ...p,
+        stroke: p.stroke || "#e8eef8",
+        opacity: 0.35 + (0.45 * (i % 3)) / 2,
+      }));
+      out.primitives = [...layered, ...out.primitives];
+    } else {
+      // Duplicate centers at reduced radius as ghost layer
+      const ghost = out.centers.map((c) => ({ ...c, r: c.r * 1.08 }));
+      out.centers = [...ghost, ...out.centers];
+      out.meta.layered = true;
+    }
+  } else if (mode === "fragment") {
+    if (out.primitives?.length) {
+      out.primitives = out.primitives.filter(() => rnd() > 0.45);
+    } else {
+      const keepMask = out.centers.map(() => rnd() > 0.45);
+      const indexMap = new Map<number, number>();
+      const kept: Center[] = [];
+      out.centers.forEach((c, i) => {
+        if (keepMask[i]) {
+          indexMap.set(i, kept.length);
+          kept.push(c);
+        }
+      });
+      out.centers = kept.length > 0 ? kept : out.centers.slice(0, 1);
+      if (kept.length === 0) indexMap.set(0, 0);
+      out.edges = out.edges
+        .filter((e) => indexMap.has(e.a) && indexMap.has(e.b) && rnd() > 0.55)
+        .map((e) => ({ a: indexMap.get(e.a)!, b: indexMap.get(e.b)! }));
+    }
+  } else if (mode === "broken-symmetry") {
+    if (out.centers.length > 2) {
+      const cut = Math.max(1, Math.floor(out.centers.length / 2));
+      out.centers = [...out.centers.slice(0, cut), ...out.centers.slice(cut + 1)];
+    }
+    out.edges = out.edges.filter((_, i) => i % 2 === 0);
+    if (out.primitives?.length) {
+      const cut = Math.max(1, Math.floor(out.primitives.length / 2));
+      out.primitives = [...out.primitives.slice(0, cut), ...out.primitives.slice(cut + 1)];
+    }
+    out.meta.rotation = Number(out.meta.rotation ?? 0) + 0.42;
+  }
+  return out;
+}
+
+/**
+ * Progressive authentic construction: centers → circles → edges → layers.
+ * progress in [0, 1]. Prefer this over opacity fade-in.
+ */
+export function revealConstructionProgress(ir: GeomIR, progress: number): GeomIR {
+  const t = Math.max(0, Math.min(1, progress));
+  const meta = { ...ir.meta, construction_progress: t };
+
+  // Phase A [0, 0.22): center points as tiny dots
+  if (t < 0.22) {
+    const n = Math.max(1, Math.ceil(ir.centers.length * (t / 0.22)));
+    return {
+      ...ir,
+      centers: ir.centers.slice(0, n).map((c) => ({ ...c, r: Math.min(c.r, 0.04) })),
+      edges: [],
+      primitives: ir.primitives
+        ?.filter((p) => p.kind === "circle")
+        .slice(0, Math.max(1, Math.ceil((ir.primitives?.filter((p) => p.kind === "circle").length ?? 1) * (t / 0.22))))
+        .map((p) => ({ ...p, r: Math.min(Number(p.r) || 0.04, 0.04) })),
+      meta: { ...meta, construction_phase: "centers" },
+    };
+  }
+
+  // Phase B [0.22, 0.48): full-radius circles appear
+  if (t < 0.48) {
+    const u = (t - 0.22) / 0.26;
+    const n = Math.max(1, Math.ceil(ir.centers.length * u));
+    const circlePrims = ir.primitives?.filter((p) => p.kind === "circle") ?? [];
+    const cn = Math.max(1, Math.ceil(circlePrims.length * u));
+    return {
+      ...ir,
+      centers: ir.centers.slice(0, n),
+      edges: [],
+      primitives: circlePrims.slice(0, cn),
+      meta: { ...meta, construction_phase: "circles" },
+    };
+  }
+
+  // Phase C [0.48, 0.78): edges / lines
+  if (t < 0.78) {
+    const u = (t - 0.48) / 0.3;
+    const en = Math.ceil(ir.edges.length * u);
+    const circles = ir.primitives?.filter((p) => p.kind === "circle") ?? [];
+    const lines = ir.primitives?.filter((p) => p.kind === "line") ?? [];
+    const ln = Math.ceil(lines.length * u);
+    return {
+      ...ir,
+      centers: [...ir.centers],
+      edges: ir.edges.slice(0, en),
+      primitives: [...circles, ...lines.slice(0, ln)],
+      meta: { ...meta, construction_phase: "edges" },
+    };
+  }
+
+  // Phase D [0.78, 1]: layers / full (ghost layer opacity ramp for layered look)
+  const u = (t - 0.78) / 0.22;
+  const out: GeomIR = {
+    ...ir,
+    centers: [...ir.centers],
+    edges: [...ir.edges],
+    primitives: ir.primitives ? [...ir.primitives] : undefined,
+    meta: { ...meta, construction_phase: "layers" },
+  };
+  if (u < 1 && out.primitives?.length) {
+    out.primitives = out.primitives.map((p, i) =>
+      i < out.primitives!.length / 2
+        ? { ...p, opacity: 0.25 + 0.55 * u }
+        : p,
+    );
+  } else if (u < 1 && ir.meta.layered) {
+    // Soft-in ghost centers already present from layered mode
+    out.meta.layer_reveal = u;
+  }
+  return out;
+}
+
 /**
  * Build piece-specific IR. Throws if pieceId is not a known geometry system.
  */
@@ -168,48 +351,48 @@ export function buildGeometryIr(
   pieceId: string,
   seed: number,
   params: Record<string, number | string | boolean> = {},
+  opts: { forAnimation?: boolean; constructionProgress?: number } = {},
 ): GeomIR {
   const rnd = mulberry32(seed);
   const radius = Number(params["geom.radius"] ?? params.radius ?? 1);
   const levels = Math.max(1, Math.floor(Number(params["geom.levels"] ?? params.layers ?? 2)));
+  const mode = resolveCompositionMode(params);
   // Seed-driven bounded variation: rotation + slight radius scale
   const rot =
     Number(params["geom.rotation"] ?? 0) + ((seed >>> 0) % 360) * (Math.PI / 180) * 0.15 + rnd() * 0.2;
   const r = radius * (0.9 + rnd() * 0.2);
 
+  let ir: GeomIR;
   if (pieceId.includes("seed-of-life")) {
     const centers = rotate(seedOfLife(r), rot);
-    return {
+    ir = {
       pieceId,
       seed,
       centers,
       edges: connectNear(centers, r * 2.05),
       meta: { kind: "seed-of-life", nodes: centers.length },
     };
-  }
-  if (pieceId.includes("flower-of-life")) {
+  } else if (pieceId.includes("flower-of-life")) {
     const centers = rotate(flowerOfLife(r, levels + Math.floor(rnd() * 2)), rot);
-    return {
+    ir = {
       pieceId,
       seed,
       centers,
       edges: connectNear(centers, r * 2.05),
       meta: { kind: "flower-of-life", nodes: centers.length, layers: levels },
     };
-  }
-  if (pieceId.includes("metatron")) {
+  } else if (pieceId.includes("metatron")) {
     const { centers, edges } = metatron(r, levels);
-    return {
+    ir = {
       pieceId,
       seed,
       centers: rotate(centers, rot),
       edges,
       meta: { kind: "metatron", nodes: centers.length, edges: edges.length },
     };
-  }
-  if (pieceId.includes("sri-yantra")) {
+  } else if (pieceId.includes("sri-yantra")) {
     const primitives = sriYantra(r, seed);
-    return {
+    ir = {
       pieceId,
       seed,
       centers: [{ x: 0, y: 0, r }],
@@ -217,39 +400,49 @@ export function buildGeometryIr(
       primitives,
       meta: { kind: "sri-yantra", primitives: primitives.length },
     };
-  }
-  if (pieceId.includes("isometric")) {
+  } else if (pieceId.includes("isometric")) {
     const centers = rotate(isometric(r * 0.55, seed), rot);
-    return {
+    ir = {
       pieceId,
       seed,
       centers,
       edges: connectNear(centers, r * 0.95),
       meta: { kind: "isometric", nodes: centers.length },
     };
-  }
-  if (pieceId.includes("circle-packing")) {
+  } else if (pieceId.includes("circle-packing")) {
     const count = Math.floor(Number(params.count ?? 60 + (seed % 40)));
     const centers = rotate(circlePacking(seed, count), rot);
-    return {
+    ir = {
       pieceId,
       seed,
       centers,
       edges: [],
       meta: { kind: "circle-packing", nodes: centers.length },
     };
-  }
-  if (pieceId.includes("circle-lattice")) {
+  } else if (pieceId.includes("circle-lattice")) {
     const centers = rotate(circleLattice(r, seed), rot);
-    return {
+    ir = {
       pieceId,
       seed,
       centers,
       edges: connectNear(centers, r * 2.05),
       meta: { kind: "circle-lattice", nodes: centers.length },
     };
+  } else {
+    throw new Error(`no geometry IR generator for ${pieceId}`);
   }
-  throw new Error(`no geometry IR generator for ${pieceId}`);
+
+  const composed = applyGeometryComposition(ir, mode, seed, {
+    forAnimation: opts.forAnimation && mode === "construction",
+  });
+  if (
+    opts.forAnimation &&
+    mode === "construction" &&
+    opts.constructionProgress !== undefined
+  ) {
+    return revealConstructionProgress(composed, opts.constructionProgress);
+  }
+  return composed;
 }
 
 export function geometryTopologyHash(ir: GeomIR): string {

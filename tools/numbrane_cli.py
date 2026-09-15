@@ -211,27 +211,50 @@ def cmd_render(args: argparse.Namespace) -> int:
         seed = int(args.seed)
         rot = ((seed % 360) * math.pi / 180.0) * 0.12
         levels = int(recipe.get("parameters", {}).get("geom.levels", 1))
+        params = recipe.get("parameters") or {}
+        comp_mode = str(
+            params.get("composition_mode", params.get("comp.mode", "canonical"))
+        )
+        # GENERATE still (frame 0, no export flag): static construction = circles only.
+        # ANIMATE /api/export sets construction_animate so frame 0 starts progressive reveal.
+        anim_construction = comp_mode == "construction" and (
+            frame > 0
+            or bool(params.get("construction_animate"))
+            or str(params.get("export_anim", "")).lower() in {"1", "true", "yes"}
+        )
+        construction_progress = (
+            min(1.0, frame / max(1.0, float(params.get("construction_frames", 90))))
+            if anim_construction
+            else None
+        )
+
+        from numbrane_python.composition.grammar import (
+            apply_geometry_composition,
+            reveal_construction_progress,
+        )
+
         if "seed-of-life" in piece:
             centers = seed_of_life_centers(r * (0.9 + (seed % 11) / 55.0))
             c, s = math.cos(rot), math.sin(rot)
             centers = [(x * c - y * s, x * s + y * c) for x, y in centers]
             ir = geometry_ir_from_centers(centers, r)
             ir["meta"] = {"kind": "seed-of-life", "seed": seed}
-        elif "metatron" in piece:
-            from numbrane_python.composition.grammar import apply_geometry_composition
-
-            comp_mode = str(
-                recipe.get("parameters", {}).get(
-                    "composition_mode",
-                    recipe.get("parameters", {}).get("comp.mode", "canonical"),
-                )
+            ir = apply_geometry_composition(
+                ir, comp_mode, seed=seed, for_animation=anim_construction
             )
+            if construction_progress is not None:
+                ir = reveal_construction_progress(ir, construction_progress)
+        elif "metatron" in piece:
             centers = flower_of_life_centers(r, levels=max(1, levels + (seed % 2)))
             c, s = math.cos(rot), math.sin(rot)
             centers = [(x * c - y * s, x * s + y * c) for x, y in centers]
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
             ir["meta"] = {"kind": "metatron", "seed": seed, "nodes": len(centers)}
-            ir = apply_geometry_composition(ir, comp_mode, seed=seed)
+            ir = apply_geometry_composition(
+                ir, comp_mode, seed=seed, for_animation=anim_construction
+            )
+            if construction_progress is not None:
+                ir = reveal_construction_progress(ir, construction_progress)
         elif "flower-of-life" in piece or "sri-yantra" in piece or "isometric" in piece:
             from numbrane_python.geometry.sacred import build_sacred_geometry_ir
 
@@ -242,24 +265,26 @@ def cmd_render(args: argparse.Namespace) -> int:
                 if "sri" in piece
                 else "isometric"
             )
-            comp_mode = str(
-                recipe.get("parameters", {}).get(
-                    "composition_mode",
-                    recipe.get("parameters", {}).get("comp.mode", "canonical"),
-                )
-            )
             ir = build_sacred_geometry_ir(
                 kind,
                 radius=r,
-                layers=int(recipe.get("parameters", {}).get("geom.levels", 3)),
-                scale=float(recipe.get("parameters", {}).get("geom.scale", 1.0)),
+                layers=int(params.get("geom.levels", 3)),
+                scale=float(params.get("geom.scale", 1.0)),
                 seed=seed,
                 composition_mode=comp_mode,
+                for_animation=anim_construction,
+                construction_progress=construction_progress,
             )
         else:
             ir = gen_lattice(recipe)
             if isinstance(ir, dict):
                 ir.setdefault("meta", {})["seed"] = seed
+                if comp_mode and comp_mode != "canonical":
+                    ir = apply_geometry_composition(
+                        ir, comp_mode, seed=seed, for_animation=anim_construction
+                    )
+                    if construction_progress is not None:
+                        ir = reveal_construction_progress(ir, construction_progress)
         if fmt == "svg":
             out = out.with_suffix(".svg")
             out.write_text(geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8")

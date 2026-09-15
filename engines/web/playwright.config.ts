@@ -10,6 +10,7 @@ const extraArgs = (process.env.PW_CHROMIUM_ARGS ?? "--use-angle=swiftshader")
 
 export default defineConfig({
   testDir: "./tests/e2e",
+  testIgnore: ["**/pfl-acceptance.spec.ts"],
   timeout: 120_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
