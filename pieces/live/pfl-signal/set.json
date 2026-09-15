@@ -1,0 +1,92 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-signal",
+  "name": "PFL / Signal",
+  "bpm": 108,
+  "default_transition": {
+    "type": "crossfade",
+    "duration_beats": 3
+  },
+  "scenes": [
+    {
+      "id": "signal-noodles",
+      "name": "Field noodles",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "particles/noodles",
+          "opacity": 1,
+          "parameters": {
+            "density": 0.7,
+            "flow": 1.05,
+            "curl": 1.1,
+            "pfl_style": "pfl-signal",
+            "palette": "electric-cyan"
+          }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.energy",
+          "destination": "layer.L0.flow",
+          "amount": 0.35,
+          "min": 0.4,
+          "max": 1.8
+        },
+        {
+          "id": "m2",
+          "source": "audio.centroid",
+          "destination": "layer.L0.curl",
+          "amount": 0.3,
+          "min": 0.4,
+          "max": 1.8
+        },
+        {
+          "id": "m3",
+          "source": "audio.onset",
+          "destination": "layer.L0.chaos",
+          "amount": 0.25,
+          "min": 0,
+          "max": 0.8
+        }
+      ],
+      "post": {
+        "bloom": 0.2,
+        "chromatic": 0.05
+      }
+    },
+    {
+      "id": "signal-flow",
+      "name": "Ring-masked hatch",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fields/flow-hatching",
+          "opacity": 1,
+          "parameters": {
+            "density": 0.85,
+            "mask": "ring",
+            "pfl_style": "pfl-signal",
+            "palette": "electric-cyan",
+            "paper_style": "dark"
+          }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.high",
+          "destination": "layer.L0.density",
+          "amount": 0.3,
+          "min": 0.4,
+          "max": 1.2
+        }
+      ],
+      "post": {
+        "bloom": 0.15
+      }
+    }
+  ],
+  "cues": []
+}
