@@ -11,6 +11,14 @@ import {
   emptyFeatures,
   type AudioFeatures,
 } from "./inputs/audioAnalysis";
+
+/** Soft noise-floor for continuous mic features (room hush → no modulation). */
+const STUDIO_AUDIO_FLOOR = 0.055;
+
+function gateStudioFeature(value: number, floor = STUDIO_AUDIO_FLOOR): number {
+  if (!Number.isFinite(value) || value <= floor) return 0;
+  return Math.min(1, (value - floor) / Math.max(1e-6, 1 - floor));
+}
 import { MidiInputManager, MidiMapper, type MidiMessage } from "./inputs/midi";
 import {
   EnvelopeBank,
@@ -449,13 +457,13 @@ export class LiveSession {
     const lfo = this.lfos.sample(frame.beat, frame.bpm);
     const env = this.envelopes.sample(frame.t);
     const sources: Record<string, number> = {
-      "audio.energy": this.features.energy,
-      "audio.peak": this.features.peak,
-      "audio.low": this.features.low,
-      "audio.mid": this.features.mid,
-      "audio.high": this.features.high,
+      "audio.energy": gateStudioFeature(this.features.energy),
+      "audio.peak": gateStudioFeature(this.features.peak),
+      "audio.low": gateStudioFeature(this.features.low),
+      "audio.mid": gateStudioFeature(this.features.mid),
+      "audio.high": gateStudioFeature(this.features.high),
       "audio.centroid": this.features.centroid,
-      "audio.flux": this.features.flux,
+      "audio.flux": gateStudioFeature(this.features.flux),
       "audio.onset": this.features.onset ? 1 : 0,
       "transport.beat": frame.beatPhase,
       "transport.beatPhase": frame.beatPhase,

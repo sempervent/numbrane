@@ -32,11 +32,11 @@ export type NormConfig = {
 };
 
 const DEFAULT_NORM: NormConfig = {
-  attack: 0.35,
-  release: 0.08,
-  sensitivity: 1,
-  floorAdapt: 0.002,
-  ceilAdapt: 0.01,
+  attack: 0.28,
+  release: 0.1,
+  sensitivity: 0.92,
+  floorAdapt: 0.004,
+  ceilAdapt: 0.012,
   log: true,
 };
 
