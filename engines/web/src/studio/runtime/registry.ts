@@ -165,11 +165,11 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     paramSchema: GEOM_SCHEMA,
   }),
 
-  "fields/flow-hatching": d("fields/flow-hatching", "python-api", "python-api", null, {
+  "fields/flow-hatching": d("fields/flow-hatching", "python-api", "shader-native", null, {
     paramSchema: FLOW_SCHEMA,
   }),
-  "fields/nebula": d("fields/nebula", "python-api", "python-api", null, { paramSchema: META }),
-  "landscape/noise-landscape": d("landscape/noise-landscape", "python-api", "python-api", null, {
+  "fields/nebula": d("fields/nebula", "python-api", "shader-native", null, { paramSchema: META }),
+  "landscape/noise-landscape": d("landscape/noise-landscape", "python-api", "shader-native", null, {
     paramSchema: [
       {
         key: "overlay",
@@ -181,18 +181,18 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
       ...META,
     ],
   }),
-  "reference/noise-landscape": d("reference/noise-landscape", "python-api", "python-api", null),
+  "reference/noise-landscape": d("reference/noise-landscape", "python-api", "shader-native", null),
 
-  "fractals/escape-time": d("fractals/escape-time", "python-api", "python-api", null, {
+  "fractals/escape-time": d("fractals/escape-time", "python-api", "shader-native", null, {
     paramSchema: ESCAPE_SCHEMA,
   }),
-  "reference/escape-time": d("reference/escape-time", "python-api", "python-api", null, {
+  "reference/escape-time": d("reference/escape-time", "python-api", "shader-native", null, {
     paramSchema: ESCAPE_SCHEMA,
   }),
-  "fractals/strange-attractors": d("fractals/strange-attractors", "python-api", "python-api", null, {
+  "fractals/strange-attractors": d("fractals/strange-attractors", "python-api", "shader-native", null, {
     paramSchema: ATTRACTOR_SCHEMA,
   }),
-  "fractals/sdf-raymarch2d": d("fractals/sdf-raymarch2d", "python-api", "python-api", null),
+  "fractals/sdf-raymarch2d": d("fractals/sdf-raymarch2d", "python-api", "shader-native", null),
 
   "growth/differential-growth": d(
     "growth/differential-growth",
@@ -201,7 +201,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "webgl-stateful",
     { paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META] },
   ),
-  "growth/lsystem": d("growth/lsystem", "python-api", "python-api", null),
+  "growth/lsystem": d("growth/lsystem", "python-api", "shader-native", null),
   "growth/slime-mold": d("growth/slime-mold", "python-api", "webgl-stateful", "webgl-stateful", {
     paramSchema: SLIME_SCHEMA,
   }),
@@ -222,8 +222,8 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     { paramSchema: RD_SCHEMA },
   ),
 
-  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "python-api", null),
-  "tiling/voronoi-stained-glass": d("tiling/voronoi-stained-glass", "python-api", "python-api", null, {
+  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "shader-native", null),
+  "tiling/voronoi-stained-glass": d("tiling/voronoi-stained-glass", "python-api", "shader-native", null, {
     paramSchema: VORONOI_SCHEMA,
   }),
 
@@ -237,20 +237,21 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "shader-native",
   ),
 
-  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", "python-api", null),
+  // Mashups: ANIMATE unsupported until component-composed live runtimes exist.
+  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", null, null),
   "mashups/bureaucratic-growth-forms": d(
     "mashups/bureaucratic-growth-forms",
     "python-api",
-    "python-api",
+    null,
     null,
   ),
-  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", "python-api", null),
-  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", "python-api", null),
+  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", null, null),
+  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", null, null),
   "mashups/slime-on-sdf": d("mashups/slime-on-sdf", "python-api", "webgl-stateful", "webgl-stateful"),
   "mashups/striped-worms-eating-boxes": d(
     "mashups/striped-worms-eating-boxes",
     "python-api",
-    "python-api",
+    null,
     null,
   ),
 
@@ -287,4 +288,15 @@ export function supportsMode(
 export const SHADER_NATIVE_PIECES = new Set<string>([
   "audiovisual/nodes",
   "reference/audiovisual-nodes",
+  "fractals/escape-time",
+  "reference/escape-time",
+  "fractals/sdf-raymarch2d",
+  "fractals/strange-attractors",
+  "fields/flow-hatching",
+  "fields/nebula",
+  "landscape/noise-landscape",
+  "reference/noise-landscape",
+  "tiling/truchet-tiles",
+  "tiling/voronoi-stained-glass",
+  "growth/lsystem",
 ]);

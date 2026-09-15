@@ -32,6 +32,8 @@ export class LiveRuntime {
   private seed: number;
   private frame = 0;
   private blackout = false;
+  /** When true, pieces still render but update() is skipped (Studio Pause). */
+  private simulationPaused = false;
   private transition: TransitionState = {
     active: false,
     type: "cut",
@@ -177,6 +179,14 @@ export class LiveRuntime {
     return this.blackout;
   }
 
+  setSimulationPaused(paused: boolean): void {
+    this.simulationPaused = paused;
+  }
+
+  isSimulationPaused(): boolean {
+    return this.simulationPaused;
+  }
+
   /** Safe reset: clear blackout, stop transition, reset feedback-ish flags. */
   panic(): void {
     this.blackout = false;
@@ -200,7 +210,7 @@ export class LiveRuntime {
       if (this.transition.progress >= 1) this.transition.active = false;
     }
 
-    const dt = 1 / this.fps;
+    const dt = this.simulationPaused ? 0 : 1 / this.fps;
     const frame: FrameState = {
       frame: this.frame,
       t: this.frame / this.fps,
@@ -212,11 +222,12 @@ export class LiveRuntime {
       bpm: snap.bpm,
     };
 
-    for (const piece of this.pieces.values()) {
-      piece.update(frame);
+    if (!this.simulationPaused) {
+      for (const piece of this.pieces.values()) {
+        piece.update(frame);
+      }
+      this.frame += 1;
     }
-
-    this.frame += 1;
     return frame;
   }
 
