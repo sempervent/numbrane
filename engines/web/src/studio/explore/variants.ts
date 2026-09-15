@@ -1,6 +1,8 @@
 /**
- * Deterministic "More Like This" / variant exploration (no ML).
+ * Deterministic "More Like This" / series / mutation exploration (no ML).
  */
+
+import { MUTATION_STRENGTH, type MutationScale } from "../style/pfl";
 
 export type LockedParams = Set<string>;
 
@@ -32,6 +34,10 @@ const MUTATABLE = [
   "k",
   "field_scale",
   "growth_rate",
+  "ink",
+  "margin",
+  "center_bias",
+  "steps",
 ];
 
 /** Meta aesthetic axes → concrete parameter nudges. */
@@ -63,24 +69,38 @@ export function moreLikeThis(
     count?: number;
     locked?: LockedParams;
     mutationStrength?: number;
+    mutationScale?: MutationScale;
+    /** Narrow mutation around favorite recipes (rule-based, no ML). */
+    favoriteBias?: Record<string, number>[];
   } = {},
 ): VariantSpec[] {
   const count = opts.count ?? 8;
   const locked = opts.locked ?? new Set<string>();
-  const mutationStrength = opts.mutationStrength ?? 0.18;
+  const mutationStrength =
+    opts.mutationStrength ??
+    (opts.mutationScale ? MUTATION_STRENGTH[opts.mutationScale] : 0.18);
   const out: VariantSpec[] = [];
   const rng = mulberry32((base.seed ^ 0x9e3779b9) >>> 0);
+  const biasCenter =
+    opts.favoriteBias && opts.favoriteBias.length
+      ? averageParams([base.parameters, ...opts.favoriteBias])
+      : base.parameters;
+
   for (let i = 0; i < count; i++) {
     const seed = (base.seed + 1 + Math.floor(rng() * 1e6) + i * 9973) >>> 0;
     const parameters = { ...base.parameters };
     for (const key of MUTATABLE) {
       if (locked.has(key)) continue;
+      if (locked.has("composition") && ["margin", "center_bias", "rotation", "ink"].includes(key)) {
+        continue;
+      }
+      if (locked.has("palette") && key === "hue") continue;
       if (!(key in parameters) && !["chaos", "density", "zoom", "hue", "exposure"].includes(key)) {
         continue;
       }
-      const cur = parameters[key] ?? (key === "density" ? 0.7 : key === "chaos" ? 0.3 : 1);
+      const cur = biasCenter[key] ?? parameters[key] ?? (key === "density" ? 0.7 : key === "chaos" ? 0.3 : 1);
       const delta = (rng() * 2 - 1) * mutationStrength;
-      parameters[key] = Math.min(2, Math.max(0, cur + delta));
+      parameters[key] = Math.min(2.5, Math.max(0, cur + delta));
     }
     out.push({
       seed: locked.has("seed") ? base.seed : seed,
@@ -91,8 +111,47 @@ export function moreLikeThis(
   return out;
 }
 
+function averageParams(list: Record<string, number>[]): Record<string, number> {
+  const keys = new Set<string>();
+  for (const p of list) for (const k of Object.keys(p)) keys.add(k);
+  const out: Record<string, number> = {};
+  for (const k of keys) {
+    let s = 0;
+    let n = 0;
+    for (const p of list) {
+      if (typeof p[k] === "number") {
+        s += p[k]!;
+        n += 1;
+      }
+    }
+    if (n) out[k] = s / n;
+  }
+  return out;
+}
+
+/** Cohesive series: same recipe/style, controlled seed/param variation. */
+export function generateSeries(
+  base: { seed: number; parameters: Record<string, number> },
+  opts: {
+    count?: number;
+    locked?: LockedParams;
+    mutationScale?: MutationScale;
+  } = {},
+): VariantSpec[] {
+  const count = opts.count ?? 8;
+  const locked = new Set(opts.locked ?? []);
+  // Series keeps style/palette/composition locked by default
+  locked.add("palette");
+  locked.add("composition");
+  return moreLikeThis(base, {
+    count,
+    locked,
+    mutationScale: opts.mutationScale ?? "subtle",
+  }).map((v, i) => ({ ...v, label: `s${i + 1}` }));
+}
+
 export function seedVariants(pieceId: string, seeds: number[]): VariantSpec[] {
-  return seeds.map((seed, i) => ({
+  return seeds.map((seed) => ({
     seed: seed >>> 0,
     parameters: {},
     label: `${pieceId.split("/").pop()}-${seed}`,

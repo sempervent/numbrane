@@ -13,10 +13,18 @@ import {
 } from "./keyboard/registry";
 import { ExploreHistory, loadPrefs, savePrefs, type StudioPrefs } from "./prefs";
 import { fetchPieceCatalog, matchesFilter, type PieceInfo } from "./catalog";
-import { moreLikeThis, applyMetaAxis, type MetaAxis } from "./explore/variants";
+import {
+  moreLikeThis,
+  generateSeries,
+  applyMetaAxis,
+  type MetaAxis,
+} from "./explore/variants";
 import { COMPOSITIONS, compositionById } from "./compositions";
 import { presetsForPiece, ANIM_ARCS } from "./presets";
+import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
+import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
+import type { GenerateRequest } from "./generate/preview";
 import {
   RESOLUTION_PRESETS,
   exportStillPng,
@@ -81,6 +89,17 @@ export class StudioApp {
   browserVisible = false;
   filter = "all";
   locked = new Set<string>();
+  pflStyleId = "";
+  mutationScale: MutationScale = "moderate";
+  reactSensitivity: ReactSensitivity = "balanced";
+  sessionFavorites: Array<{ seed: number; parameters: Record<string, number> }> = [];
+  sessionRejects: number[] = [];
+  /** Captured live sim state for Generate → Animate continuity. */
+  private pendingImportState: {
+    arrays?: Record<string, Float32Array>;
+    shapes?: Record<string, number[]>;
+    json?: Record<string, unknown>;
+  } | null = null;
   params: Record<string, number | string | boolean> = {
     chaos: 0.3,
     density: 0.7,
@@ -224,21 +243,23 @@ export class StudioApp {
     statusEl?.classList.remove("visible");
     if (!this.session) return;
 
-    const mappings = defaultMappingsForPiece(this.pieceId).map((m, i) => ({
-      id: `studio-${i}`,
-      source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
-      destination: `layer.L0.${m.target}`,
-      amount: m.amount,
-      min: 0,
-      max: 2,
-    }));
+    const mappings = defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map(
+      (m, i) => ({
+        id: `studio-${i}`,
+        source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
+        destination: `layer.L0.${m.target}`,
+        amount: m.amount,
+        min: 0,
+        max: 2,
+      }),
+    );
     const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
     const liveMode = this.mode === "react" ? "react" : "animate";
     // Mashup slime-on-sdf: live = slime only (authentic RD trail), not fake SDF shader
     const livePieceId =
       this.pieceId === "mashups/slime-on-sdf" ? "growth/slime-mold" : this.pieceId;
     const set: SetDef = composition
-      ? composition.build(this.seed, this.params as Record<string, number>)
+      ? composition.build(this.seed, this.params)
       : {
           protocol_version: "0.1.0",
           set_id: "studio-session",
@@ -286,6 +307,23 @@ export class StudioApp {
         }
       }
     }
+    if (this.pendingImportState) {
+      const piece = this.session.runtime.getPiece("L0") as
+        | {
+            importState?: (s: {
+              arrays?: Record<string, Float32Array>;
+              shapes?: Record<string, number[]>;
+              json?: Record<string, unknown>;
+            }) => void;
+          }
+        | undefined;
+      try {
+        piece?.importState?.(this.pendingImportState);
+      } catch {
+        /* optional continuity */
+      }
+      this.pendingImportState = null;
+    }
     this.session.startLoop();
     if (this.mode === "generate") {
       this.playing = false;
@@ -299,44 +337,100 @@ export class StudioApp {
   private scheduleGeneratePreview(immediate = false): void {
     if (studioSurface(this.pieceId, this.mode) !== "api-preview") return;
     const { width, height } = previewSize();
-    const req = {
+    const baseParams = paramsForApi(this.params);
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    const status = document.getElementById("gen-status");
+
+    const paint = (result: import("./generate/preview").GenerateResult, label: string) => {
+      this.recipeDigest = result.recipeDigest;
+      this.renderDigest = result.renderDigest;
+      this.lastRenderMs = result.renderMs;
+      if (img) {
+        img.src = result.objectUrl;
+        img.classList.add("visible");
+      }
+      if (status) status.textContent = label;
+      this.syncChrome();
+    };
+
+    const draftReq: GenerateRequest = {
+      piece: this.pieceId,
+      seed: this.seed,
+      frame: this.frame,
+      width: Math.max(160, Math.floor(width * 0.45)),
+      height: Math.max(90, Math.floor(height * 0.45)),
+      quality: "draft",
+      parameters: baseParams,
+    };
+    const previewReq: GenerateRequest = {
       piece: this.pieceId,
       seed: this.seed,
       frame: this.frame,
       width,
       height,
-      quality: "preview" as const,
-      parameters: paramsForApi(this.params),
+      quality: "preview",
+      parameters: baseParams,
     };
-    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
-    const status = document.getElementById("gen-status");
-    const run = immediate
-      ? this.preview.run.bind(this.preview)
-      : (r: typeof req, a: (id: number) => void, b: (res: import("./generate/preview").GenerateResult) => void, c: (e: Error, id: number) => void) =>
-          this.preview.schedule(r, 280, a, b, c);
-    run(
-      req,
+
+    const runPreview = () => {
+      void this.preview.run(
+        previewReq,
+        () => {
+          this.generating = true;
+          status?.classList.add("visible");
+          if (status) status.textContent = "Refining preview…";
+        },
+        (result) => {
+          this.generating = false;
+          status?.classList.remove("visible");
+          paint(result, "");
+        },
+        (err) => {
+          this.generating = false;
+          status?.classList.remove("visible");
+          toast(err.message.slice(0, 120));
+        },
+      );
+    };
+
+    if (immediate) {
+      void this.preview.run(
+        previewReq,
+        () => {
+          this.generating = true;
+          status?.classList.add("visible");
+          if (status) status.textContent = "Generating…";
+        },
+        (result) => {
+          this.generating = false;
+          status?.classList.remove("visible");
+          paint(result, "");
+        },
+        (err) => {
+          this.generating = false;
+          status?.classList.remove("visible");
+          toast(err.message.slice(0, 120));
+        },
+      );
+      return;
+    }
+
+    // Progressive: draft first, then full preview replaces it
+    this.preview.schedule(
+      draftReq,
+      160,
       () => {
         this.generating = true;
         status?.classList.add("visible");
-        if (status) status.textContent = "Generating…";
+        if (status) status.textContent = "Draft…";
       },
       (result) => {
-        this.generating = false;
-        status?.classList.remove("visible");
-        this.recipeDigest = result.recipeDigest;
-        this.renderDigest = result.renderDigest;
-        this.lastRenderMs = result.renderMs;
-        if (img) {
-          img.src = result.objectUrl;
-          img.classList.add("visible");
-        }
-        this.syncChrome();
+        paint(result, "Draft — refining…");
+        runPreview();
       },
-      (err) => {
-        this.generating = false;
-        status?.classList.remove("visible");
-        toast(err.message.slice(0, 120));
+      () => {
+        // Draft failed — still attempt preview
+        runPreview();
       },
     );
   }
@@ -486,6 +580,22 @@ export class StudioApp {
         label: "Generate variants / More Like This",
         group: "generate",
         handler: () => void this.exploreVariants(),
+      },
+      {
+        id: "animate-this",
+        keys: "A",
+        match: ["a"],
+        label: "Animate This (exact continuity)",
+        group: "generate",
+        handler: () => void this.animateThis(),
+      },
+      {
+        id: "series",
+        keys: "Y",
+        match: ["y"],
+        label: "Generate Series",
+        group: "generate",
+        handler: () => void this.exploreSeries(),
       },
       {
         id: "prev",
@@ -739,8 +849,36 @@ export class StudioApp {
     }
     const variants = moreLikeThis(
       { seed: this.seed, parameters: numericParams },
-      { count, locked: this.locked },
+      {
+        count,
+        locked: this.locked,
+        mutationScale: this.mutationScale,
+        favoriteBias: this.sessionFavorites.map((f) => f.parameters),
+      },
     );
+    await this.renderVariantGrid(variants, `generating ${count} (${this.mutationScale})…`);
+  }
+
+  async exploreSeries(): Promise<void> {
+    const count = this.variantBatch;
+    const numericParams: Record<string, number> = {};
+    for (const [k, v] of Object.entries(this.params)) {
+      if (typeof v === "number") numericParams[k] = v;
+    }
+    const locked = new Set(this.locked);
+    if (this.locked.has("style") || this.pflStyleId) locked.add("palette");
+    locked.add("composition");
+    const variants = generateSeries(
+      { seed: this.seed, parameters: numericParams },
+      { count, locked, mutationScale: this.mutationScale === "wild" ? "moderate" : "subtle" },
+    );
+    await this.renderVariantGrid(variants, `series of ${count}…`);
+  }
+
+  private async renderVariantGrid(
+    variants: Array<{ seed: number; parameters: Record<string, number>; label: string }>,
+    statusMsg: string,
+  ): Promise<void> {
     this.variantCache = variants.map((v) => ({
       seed: v.seed,
       parameters: { ...v.parameters },
@@ -749,19 +887,32 @@ export class StudioApp {
     }));
     const host = document.getElementById("variants");
     if (!host) return;
+    const count = this.variantCache.length;
     host.innerHTML = `<div class="variant-grid" style="display:grid;grid-template-columns:repeat(${Math.min(4, Math.ceil(Math.sqrt(count)))},1fr);gap:0.35rem"></div>`;
     const grid = host.querySelector(".variant-grid")!;
-    toast(`generating ${count} variants…`);
+    toast(statusMsg);
     for (let i = 0; i < this.variantCache.length; i++) {
       const v = this.variantCache[i]!;
       const cell = document.createElement("button");
       cell.type = "button";
       cell.className = "variant-cell";
       cell.style.cssText =
-        "padding:0;aspect-ratio:1;overflow:hidden;border:1px solid var(--line);background:#111";
+        "padding:0;aspect-ratio:1;overflow:hidden;border:1px solid var(--line);background:#111;position:relative";
       cell.innerHTML = `<span style="display:block;padding:0.25rem;font-size:10px">${v.label}</span>`;
-      cell.title = `seed ${v.seed}`;
-      cell.addEventListener("click", () => {
+      cell.title = `seed ${v.seed} — click promote · shift-click favorite · alt-click reject`;
+      cell.addEventListener("click", (ev) => {
+        if (ev.shiftKey) {
+          this.sessionFavorites.unshift({ seed: v.seed, parameters: { ...v.parameters } });
+          this.sessionFavorites = this.sessionFavorites.slice(0, 12);
+          toast(`favorite ${v.label}`);
+          return;
+        }
+        if (ev.altKey) {
+          this.sessionRejects.push(v.seed);
+          cell.style.opacity = "0.35";
+          toast(`reject ${v.label}`);
+          return;
+        }
         this.seed = v.seed;
         this.params = { ...this.params, ...v.parameters };
         void this.applyPieceScene().then(() => {
@@ -782,8 +933,8 @@ export class StudioApp {
             height: 160,
             frame: this.frame,
             format: "png",
-            quality: "preview",
-            parameters: v.parameters,
+            quality: "draft",
+            parameters: { ...paramsForApi(this.params), ...v.parameters },
           }),
         });
         if (res.ok) {
@@ -801,7 +952,30 @@ export class StudioApp {
         /* label-only cell */
       }
     }
-    toast("variants ready — click to promote");
+    toast("variants ready — click · shift=♥ · alt=reject");
+  }
+
+  /** Hand off current Generate look into ANIMATE with exact state continuity. */
+  async animateThis(): Promise<void> {
+    const piece = this.session?.runtime.getPiece("L0") as
+      | {
+          exportState?: () => {
+            arrays?: Record<string, Float32Array>;
+            shapes?: Record<string, number[]>;
+            json?: Record<string, unknown>;
+          };
+        }
+      | undefined;
+    if (piece && typeof piece.exportState === "function") {
+      try {
+        this.pendingImportState = piece.exportState();
+      } catch {
+        this.pendingImportState = null;
+      }
+    }
+    this.anim.startFrame = this.frame;
+    toast(`Animate This · frame ${this.frame}`);
+    await this.setMode("animate");
   }
 
   async saveSeedState(): Promise<void> {
@@ -1211,6 +1385,11 @@ export class StudioApp {
       ${this.mode === "generate" ? `
         <label>Exact frame</label>
         <input id="cfg-frame" type="number" value="${this.frame}" />
+        <label>PFL style</label>
+        <select id="cfg-style">
+          <option value="">(none)</option>
+          ${PFL_STYLES.map((s) => `<option value="${s.id}" ${this.pflStyleId === s.id ? "selected" : ""}>${s.label}</option>`).join("")}
+        </select>
         <label>Composition</label>
         <select id="cfg-comp">
           <option value="">(single piece)</option>
@@ -1231,11 +1410,20 @@ export class StudioApp {
           <button type="button" class="primary" id="cfg-export">Export</button>
           <button type="button" id="cfg-svg">SVG</button>
         </div>
-        <label>Variant batch</label>
-        <select id="cfg-batch">
-          ${[4, 9, 12, 16].map((n) => `<option value="${n}" ${this.variantBatch === n ? "selected" : ""}>${n}</option>`).join("")}
-        </select>
-        <button type="button" id="cfg-variants">More Like This</button>
+        <label>Look-finding</label>
+        <div class="row">
+          <select id="cfg-batch">
+            ${[4, 8, 12, 16].map((n) => `<option value="${n}" ${this.variantBatch === n ? "selected" : ""}>${n}</option>`).join("")}
+          </select>
+          <select id="cfg-mutation">
+            ${(["subtle", "moderate", "wild"] as MutationScale[]).map((m) => `<option value="${m}" ${this.mutationScale === m ? "selected" : ""}>${m}</option>`).join("")}
+          </select>
+        </div>
+        <div class="row">
+          <button type="button" class="primary" id="cfg-variants">More Like This</button>
+          <button type="button" id="cfg-series">Generate Series</button>
+        </div>
+        <button type="button" class="primary" id="cfg-animate-this">Animate This</button>
         <div id="variants"></div>
       ` : ""}
       ${this.mode === "animate" ? `
@@ -1253,6 +1441,7 @@ export class StudioApp {
         </select>
         <label>Animation arc</label>
         <select id="cfg-arc">${ANIM_ARCS.map((a) => `<option value="${a.id}" ${this.animArc === a.id ? "selected" : ""}>${a.label}</option>`).join("")}</select>
+        <p class="muted">start frame ${this.anim.startFrame} (Animate This continuity)</p>
         <div class="row">
           <button type="button" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
           <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
@@ -1261,8 +1450,12 @@ export class StudioApp {
       ${this.mode === "react" ? `
         <h2>Audio</h2>
         <button type="button" class="primary" id="cfg-mic">${this.audioEnabled ? "Mic active" : "Enable microphone"}</button>
+        <label>Sensitivity</label>
+        <select id="cfg-sensitivity">
+          ${(["subtle", "balanced", "aggressive"] as ReactSensitivity[]).map((s) => `<option value="${s}" ${this.reactSensitivity === s ? "selected" : ""}>${s}</option>`).join("")}
+        </select>
         <div class="level"><span id="cfg-level"></span></div>
-        <p class="muted">Browser owns getUserMedia — Docker only serves the app.</p>
+        <p class="muted">Browser owns getUserMedia — silence still evolves the system.</p>
       ` : ""}
       <h2>Parameters</h2>
       ${getPieceRuntime(this.pieceId).paramSchema
@@ -1295,6 +1488,11 @@ export class StudioApp {
           <label><input id="cfg-lock-hue" type="checkbox" ${this.locked.has("hue") ? "checked" : ""} /> hue</label>
           <label><input id="cfg-lock-seed" type="checkbox" ${this.locked.has("seed") ? "checked" : ""} /> seed</label>
         </div>
+        <div class="row">
+          <label><input id="cfg-lock-palette" type="checkbox" ${this.locked.has("palette") ? "checked" : ""} /> palette</label>
+          <label><input id="cfg-lock-style" type="checkbox" ${this.locked.has("style") ? "checked" : ""} /> style</label>
+          <label><input id="cfg-lock-comp" type="checkbox" ${this.locked.has("composition") ? "checked" : ""} /> composition</label>
+        </div>
         <button type="button" id="cfg-save">Save Seed State</button>
         <button type="button" id="cfg-load-seeds">Refresh saved seeds</button>
         <div id="seed-list" class="muted"></div>
@@ -1320,8 +1518,30 @@ export class StudioApp {
     });
     el.querySelector("#cfg-svg")?.addEventListener("click", () => void this.exportSvg());
     el.querySelector("#cfg-variants")?.addEventListener("click", () => void this.exploreVariants());
+    el.querySelector("#cfg-series")?.addEventListener("click", () => void this.exploreSeries());
+    el.querySelector("#cfg-animate-this")?.addEventListener("click", () => void this.animateThis());
     el.querySelector("#cfg-batch")?.addEventListener("change", (e) => {
       this.variantBatch = Number((e.target as HTMLSelectElement).value) || 12;
+    });
+    el.querySelector("#cfg-mutation")?.addEventListener("change", (e) => {
+      this.mutationScale = (e.target as HTMLSelectElement).value as MutationScale;
+    });
+    el.querySelector("#cfg-style")?.addEventListener("change", (e) => {
+      const id = (e.target as HTMLSelectElement).value;
+      this.pflStyleId = id;
+      if (id) {
+        this.params = applyStyle(this.params, id);
+        if (this.locked.has("style")) {
+          /* style lock keeps future mutations from replacing style keys */
+        }
+      }
+      void this.applyPieceScene();
+      toast(id ? `style ${id}` : "style cleared");
+    });
+    el.querySelector("#cfg-sensitivity")?.addEventListener("change", (e) => {
+      this.reactSensitivity = (e.target as HTMLSelectElement).value as ReactSensitivity;
+      void this.applyPieceScene();
+      toast(`sensitivity ${this.reactSensitivity}`);
     });
     el.querySelector("#cfg-export-kind")?.addEventListener("change", (e) => {
       this.exportKind = (e.target as HTMLSelectElement).value as typeof this.exportKind;
@@ -1443,6 +1663,9 @@ export class StudioApp {
     bindLock("#cfg-lock-chaos", "chaos");
     bindLock("#cfg-lock-hue", "hue");
     bindLock("#cfg-lock-seed", "seed");
+    bindLock("#cfg-lock-palette", "palette");
+    bindLock("#cfg-lock-style", "style");
+    bindLock("#cfg-lock-comp", "composition");
     el.querySelector("#cfg-load-seeds")?.addEventListener("click", () => void this.refreshSeedList());
     void this.refreshSeedList();
   }
