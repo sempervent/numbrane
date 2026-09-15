@@ -212,13 +212,14 @@ def cmd_render(args: argparse.Namespace) -> int:
             out = out.with_suffix(".json")
             out.write_text(json.dumps(ir, indent=2))
         else:
-            # rasterize SVG via cairo-free path: write SVG then also dump IR json sibling?
-            # Use simple PIL blank + note — prefer writing SVG when geometry
-            out_svg = out.with_suffix(".svg")
-            out_svg.write_text(geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8")
-            out = out.with_suffix(".json")
-            out.write_text(json.dumps(ir, indent=2))
-            print(out_svg)
+            from numbrane_python.seeds.svg_export import geometry_ir_to_png
+
+            out = out.with_suffix(".png")
+            geometry_ir_to_png(ir, width=w, height=h).save(out)
+            # Also keep SVG sibling for vector workflows
+            out.with_suffix(".svg").write_text(
+                geometry_ir_to_svg(ir, width=w, height=h), encoding="utf-8"
+            )
         print(out)
         return 0
 

@@ -14,6 +14,9 @@ import {
 import { ExploreHistory, loadPrefs, savePrefs, type StudioPrefs } from "./prefs";
 import { fetchPieceCatalog, matchesFilter, type PieceInfo } from "./catalog";
 import { moreLikeThis, applyMetaAxis, type MetaAxis } from "./explore/variants";
+import { COMPOSITIONS, compositionById } from "./compositions";
+import { presetsForPiece, ANIM_ARCS } from "./presets";
+import { apiExportAnimation, webpIsAnimated } from "./export/api";
 import {
   RESOLUTION_PRESETS,
   exportStillPng,
@@ -97,6 +100,17 @@ export class StudioApp {
     quality: 0.8,
   };
   exportPreset = "1080p";
+  exportKind: "still" | "animated" | "video" = "still";
+  animFormat: "webp" | "apng" | "webm" | "gif" = "webp";
+  variantBatch = 12;
+  variantCache: Array<{
+    seed: number;
+    parameters: Record<string, number>;
+    label: string;
+    thumbUrl: string | null;
+  }> = [];
+  animArc = "emergence";
+  compositionId: string | null = null;
   audioEnabled = false;
   audioLevel = 0;
   currentSeedId: string | null = null;
@@ -161,54 +175,42 @@ export class StudioApp {
       min: 0,
       max: 2,
     }));
-    const layers =
-      this.pieceId === "mashups/slime-on-sdf"
-        ? [
-            {
-              id: "L0",
-              piece: "growth/slime-mold",
-              opacity: 0.85,
-              blend: "normal" as const,
-              seed: this.seed,
-              parameters: { ...this.params },
-            },
-            {
-              id: "L1",
-              piece: "fractals/sdf-raymarch2d",
-              opacity: 0.55,
-              blend: "screen" as const,
-              seed: this.seed ^ 0x5f3759df,
-              parameters: { ...this.params, density: Math.min(1, this.params.density * 0.8) },
-            },
-          ]
-        : [
-            {
-              id: "L0",
-              piece: this.pieceId,
-              opacity: 1,
-              blend: "normal" as const,
-              seed: this.seed,
-              parameters: { ...this.params },
-            },
-          ];
-    const set: SetDef = {
-      protocol_version: "0.1.0",
-      set_id: "studio-session",
-      name: "Studio",
-      scenes: [
-        {
-          id: "main",
-          name: this.pieceId,
-          layers,
-          modulation: mappings,
-          post: { bloom: 0.2, feedback: 0.05 },
-        },
-      ],
-      cues: [],
-    };
+    const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
+    const set: SetDef = composition
+      ? composition.build(this.seed, this.params)
+      : this.pieceId === "mashups/slime-on-sdf"
+        ? COMPOSITIONS.find((c) => c.id === "slime-sdf")!.build(this.seed, this.params)
+        : {
+            protocol_version: "0.1.0",
+            set_id: "studio-session",
+            name: "Studio",
+            scenes: [
+              {
+                id: "main",
+                name: this.pieceId,
+                layers: [
+                  {
+                    id: "L0",
+                    piece: this.pieceId,
+                    opacity: 1,
+                    blend: "normal",
+                    seed: this.seed,
+                    parameters: { ...this.params },
+                  },
+                ],
+                modulation: mappings,
+                post: { bloom: 0.2, feedback: 0.05 },
+              },
+            ],
+            cues: [],
+          };
+    // Ensure studio modulation when composition didn't include it
+    if (set.scenes[0] && (!set.scenes[0].modulation || set.scenes[0].modulation.length === 0)) {
+      set.scenes[0].modulation = mappings;
+    }
     await this.session.loadSet(set);
     this.session.setSeed(this.seed);
-    for (const layer of layers) {
+    for (const layer of set.scenes[0]?.layers ?? []) {
       for (const [k, v] of Object.entries(this.params)) {
         this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
       }
@@ -573,30 +575,73 @@ export class StudioApp {
   }
 
   async exploreVariants(): Promise<void> {
+    const count = this.variantBatch;
     const variants = moreLikeThis(
       { seed: this.seed, parameters: this.params },
-      { count: 8, locked: this.locked },
+      { count, locked: this.locked },
     );
+    this.variantCache = variants.map((v) => ({
+      seed: v.seed,
+      parameters: { ...v.parameters },
+      label: v.label,
+      thumbUrl: null as string | null,
+    }));
     const host = document.getElementById("variants");
     if (!host) return;
-    host.innerHTML = "";
-    for (const v of variants) {
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.textContent = String(v.seed);
-      btn.title = v.label;
-      btn.addEventListener("click", () => {
+    host.innerHTML = `<div class="variant-grid" style="display:grid;grid-template-columns:repeat(${Math.min(4, Math.ceil(Math.sqrt(count)))},1fr);gap:0.35rem"></div>`;
+    const grid = host.querySelector(".variant-grid")!;
+    toast(`generating ${count} variants…`);
+    for (let i = 0; i < this.variantCache.length; i++) {
+      const v = this.variantCache[i]!;
+      const cell = document.createElement("button");
+      cell.type = "button";
+      cell.className = "variant-cell";
+      cell.style.cssText =
+        "padding:0;aspect-ratio:1;overflow:hidden;border:1px solid var(--line);background:#111";
+      cell.innerHTML = `<span style="display:block;padding:0.25rem;font-size:10px">${v.label}</span>`;
+      cell.title = `seed ${v.seed}`;
+      cell.addEventListener("click", () => {
+        // Promote exact cached recipe — do not regenerate
         this.seed = v.seed;
         this.params = { ...this.params, ...v.parameters };
         void this.applyPieceScene().then(() => {
           this.pushHistory();
           this.renderConfig();
-          toast(`variant ${v.seed}`);
+          toast(`selected ${v.seed}`);
         });
       });
-      host.appendChild(btn);
+      grid.appendChild(cell);
+      // Thumbnail via local render API (low-res); fall back to seed label
+      try {
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            piece: this.pieceId,
+            seed: v.seed,
+            width: 160,
+            height: 160,
+            frame: this.frame,
+            format: "png",
+            parameters: v.parameters,
+          }),
+        });
+        if (res.ok) {
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          v.thumbUrl = url;
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = v.label;
+          img.style.cssText = "width:100%;height:100%;object-fit:cover;display:block";
+          cell.innerHTML = "";
+          cell.appendChild(img);
+        }
+      } catch {
+        /* label-only cell */
+      }
     }
-    toast("variants ready — click a cell");
+    toast("variants ready — click to promote");
   }
 
   async saveSeedState(): Promise<void> {
@@ -759,24 +804,72 @@ export class StudioApp {
 
   async exportAnim(): Promise<void> {
     const cfg = this.anim;
-    toast("exporting animation…");
+    const fmt = this.exportKind === "video" ? "webm" : this.animFormat;
+    toast(`exporting ${fmt}…`);
     try {
-      const result = await exportAnimation(cfg, async (frame, _t) => {
-        // Advance logical simulation deterministically via session.frame
-        const wall = (frame / cfg.fps) * 1000;
-        this.session?.frame(wall);
-        return this.canvas;
-      }, (p) => {
-        if (p === 0 || p > 0.95) toast(`export ${Math.round(p * 100)}%`);
-      });
-      const ext = result.format === "webm" ? "webm" : "webp";
-      downloadBlob(
-        result.blob,
-        `${this.pieceId.replace(/\//g, "_")}-s${this.seed}.${ext}`,
+      // Prefer server-side deterministic frame render + FFmpeg encode
+      const server = await apiExportAnimation(
+        {
+          piece: this.pieceId,
+          seed: this.seed,
+          width: cfg.width,
+          height: cfg.height,
+          fps: cfg.fps,
+          start_frame: cfg.startFrame,
+          duration_sec: cfg.durationSec,
+          format: fmt,
+          quality: cfg.quality,
+          loop: cfg.loop,
+          parameters: this.params,
+        },
+        (msg) => toast(msg),
       );
-      toast(`exported .${ext}`);
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "animation export failed");
+      if (fmt === "webp") {
+        const animated = await webpIsAnimated(server.blob);
+        if (!animated) throw new Error("server returned non-animated WebP");
+      }
+      downloadBlob(
+        server.blob,
+        `${this.pieceId.replace(/\//g, "_")}-s${this.seed}.${fmt}`,
+      );
+      toast(
+        server.artifact
+          ? `exported .${fmt} → artifacts/${server.artifact}`
+          : `exported .${fmt}`,
+      );
+      return;
+    } catch (serverErr) {
+      // Fallback: browser logical-frame WebM path
+      try {
+        const arc = ANIM_ARCS.find((a) => a.id === this.animArc);
+        const result = await exportAnimation(cfg, async (frame, t) => {
+          const t01 = cfg.durationSec > 0 ? t / cfg.durationSec : 0;
+          if (arc) {
+            const next = arc.apply({ ...this.params }, Math.min(1, Math.max(0, t01)));
+            for (const [k, v] of Object.entries(next)) {
+              if (typeof v === "number") {
+                this.session?.runtime.getPiece("L0")?.setParameter(k, v);
+              }
+            }
+          }
+          this.session?.frame((frame / cfg.fps) * 1000);
+          return this.canvas;
+        });
+        const ext = result.format === "webm" ? "webm" : "webp";
+        downloadBlob(
+          result.blob,
+          `${this.pieceId.replace(/\//g, "_")}-s${this.seed}.${ext}`,
+        );
+        toast(`exported .${ext} (browser fallback)`);
+      } catch (err) {
+        toast(
+          err instanceof Error
+            ? err.message
+            : serverErr instanceof Error
+              ? serverErr.message
+              : "animation export failed",
+        );
+      }
     }
   }
 
@@ -917,12 +1010,30 @@ export class StudioApp {
       ${this.mode === "generate" ? `
         <label>Exact frame</label>
         <input id="cfg-frame" type="number" value="${this.frame}" />
-        <label>Export resolution</label>
-        <select id="cfg-res">${resOptions}</select>
+        <label>Composition</label>
+        <select id="cfg-comp">
+          <option value="">(single piece)</option>
+          ${COMPOSITIONS.map((c) => `<option value="${c.id}" ${this.compositionId === c.id ? "selected" : ""}>${c.label}</option>`).join("")}
+        </select>
+        <label>Preset</label>
+        <select id="cfg-preset">${presetsForPiece(this.pieceId).map((p) => `<option value="${p.id}">${p.label}</option>`).join("")}</select>
+        <label>Export</label>
         <div class="row">
-          <button type="button" class="primary" id="cfg-export">Export PNG</button>
-          <button type="button" id="cfg-svg">Export SVG</button>
+          <select id="cfg-export-kind">
+            <option value="still" ${this.exportKind === "still" ? "selected" : ""}>Still PNG</option>
+            <option value="animated" ${this.exportKind === "animated" ? "selected" : ""}>Animated image</option>
+            <option value="video" ${this.exportKind === "video" ? "selected" : ""}>Video</option>
+          </select>
+          <select id="cfg-res">${resOptions}</select>
         </div>
+        <div class="row">
+          <button type="button" class="primary" id="cfg-export">Export</button>
+          <button type="button" id="cfg-svg">SVG</button>
+        </div>
+        <label>Variant batch</label>
+        <select id="cfg-batch">
+          ${[4, 9, 12, 16].map((n) => `<option value="${n}" ${this.variantBatch === n ? "selected" : ""}>${n}</option>`).join("")}
+        </select>
         <button type="button" id="cfg-variants">More Like This</button>
         <div id="variants"></div>
       ` : ""}
@@ -932,9 +1043,18 @@ export class StudioApp {
           <input id="cfg-fps" type="number" value="${this.anim.fps}" />
           <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
         </div>
+        <label>Format</label>
+        <select id="cfg-anim-fmt">
+          <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>animated WebP</option>
+          <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
+          <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
+          <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+        </select>
+        <label>Animation arc</label>
+        <select id="cfg-arc">${ANIM_ARCS.map((a) => `<option value="${a.id}" ${this.animArc === a.id ? "selected" : ""}>${a.label}</option>`).join("")}</select>
         <div class="row">
           <button type="button" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
-          <button type="button" class="primary" id="cfg-anim-export">Export WebM/WebP</button>
+          <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
         </div>
       ` : ""}
       ${this.mode === "react" ? `
@@ -983,14 +1103,45 @@ export class StudioApp {
       void this.applyPieceScene();
     });
     el.querySelector("#cfg-rand")?.addEventListener("click", () => void this.randomizeSeed());
-    el.querySelector("#cfg-export")?.addEventListener("click", () => void this.exportCurrent());
+    el.querySelector("#cfg-export")?.addEventListener("click", () => {
+      if (this.exportKind === "still") void this.exportCurrent();
+      else void this.exportAnim();
+    });
     el.querySelector("#cfg-svg")?.addEventListener("click", () => void this.exportSvg());
     el.querySelector("#cfg-variants")?.addEventListener("click", () => void this.exploreVariants());
+    el.querySelector("#cfg-batch")?.addEventListener("change", (e) => {
+      this.variantBatch = Number((e.target as HTMLSelectElement).value) || 12;
+    });
+    el.querySelector("#cfg-export-kind")?.addEventListener("change", (e) => {
+      this.exportKind = (e.target as HTMLSelectElement).value as typeof this.exportKind;
+    });
+    el.querySelector("#cfg-comp")?.addEventListener("change", (e) => {
+      const v = (e.target as HTMLSelectElement).value;
+      this.compositionId = v || null;
+      void this.applyPieceScene();
+    });
+    el.querySelector("#cfg-preset")?.addEventListener("change", (e) => {
+      const id = (e.target as HTMLSelectElement).value;
+      const preset = presetsForPiece(this.pieceId).find((p) => p.id === id);
+      if (!preset) return;
+      for (const [k, v] of Object.entries(preset.parameters)) {
+        if (typeof v === "number") this.params[k] = v;
+        this.session?.runtime.getPiece("L0")?.setParameter(k, v as number);
+      }
+      void this.applyPieceScene();
+      toast(`preset ${preset.label}`);
+    });
     el.querySelector("#cfg-play")?.addEventListener("click", () => {
       this.togglePlay();
       this.renderConfig();
     });
     el.querySelector("#cfg-anim-export")?.addEventListener("click", () => void this.exportAnim());
+    el.querySelector("#cfg-anim-fmt")?.addEventListener("change", (e) => {
+      this.animFormat = (e.target as HTMLSelectElement).value as typeof this.animFormat;
+    });
+    el.querySelector("#cfg-arc")?.addEventListener("change", (e) => {
+      this.animArc = (e.target as HTMLSelectElement).value;
+    });
     el.querySelector("#cfg-mic")?.addEventListener("click", () => void this.enableMic());
     el.querySelector("#cfg-save")?.addEventListener("click", () => void this.saveSeedState());
     el.querySelector("#cfg-browser")?.addEventListener("click", () => {

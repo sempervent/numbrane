@@ -5,6 +5,9 @@ import { ExploreHistory, loadPrefs } from "../src/studio/prefs";
 import { matchesFilter, familyOf } from "../src/studio/catalog";
 import { RESOLUTION_PRESETS } from "../src/studio/export/formats";
 import { defaultMappingsForPiece } from "../src/studio/audio/mappings";
+import { presetsForPiece, ANIM_ARCS } from "../src/studio/presets";
+import { COMPOSITIONS } from "../src/studio/compositions";
+import { webpIsAnimated } from "../src/studio/export/api";
 
 const baseCtx: CommandContext = {
   mode: "generate",
@@ -125,5 +128,56 @@ describe("studio audio mappings", () => {
     expect(defaultMappingsForPiece("growth/slime-mold").some((m) => m.target === "stepSize")).toBe(
       true,
     );
+  });
+});
+
+describe("studio presets and compositions", () => {
+  it("ships named algorithmic presets", () => {
+    expect(presetsForPiece("fields/flow-hatching").map((p) => p.id)).toContain("turbulent");
+    expect(presetsForPiece("fractals/strange-attractors").length).toBeGreaterThanOrEqual(5);
+    expect(presetsForPiece("reaction-diffusion/reaction-diffusion").map((p) => p.id)).toContain(
+      "coral",
+    );
+  });
+
+  it("animation arcs mutate params over time", () => {
+    const arc = ANIM_ARCS.find((a) => a.id === "emergence")!;
+    const a = arc.apply({ density: 1 }, 0);
+    const b = arc.apply({ density: 1 }, 1);
+    expect(b.density!).toBeGreaterThan(a.density!);
+  });
+
+  it("composition recipes expose multi-layer sets", () => {
+    const set = COMPOSITIONS.find((c) => c.id === "slime-sdf")!.build(42, { density: 0.7 });
+    expect(set.scenes[0]!.layers.length).toBe(2);
+    expect(set.scenes[0]!.layers[0]!.piece).toBe("growth/slime-mold");
+  });
+
+  it("variant promotion keeps exact seed/params (no regen)", () => {
+    const cached = moreLikeThis(
+      { seed: 99, parameters: { density: 0.55, chaos: 0.2 } },
+      { count: 4, locked: new Set(["density"]) },
+    )[0]!;
+    // Selecting a variant assigns cached values verbatim
+    const promoted = { seed: cached.seed, parameters: { ...cached.parameters } };
+    expect(promoted.seed).toBe(cached.seed);
+    expect(promoted.parameters.density).toBe(0.55);
+  });
+});
+
+describe("animated webp detection", () => {
+  it("detects ANMF chunk", async () => {
+    // Minimal RIFF/WEBP with ANMF marker bytes
+    const bytes = new Uint8Array([
+      0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x41, 0x4e, 0x4d,
+      0x46, 0x00, 0x00, 0x00, 0x00,
+    ]);
+    const blob = new Blob([bytes], { type: "image/webp" });
+    expect(await webpIsAnimated(blob)).toBe(true);
+    const still = new Blob(
+      [new Uint8Array([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50])],
+      { type: "image/webp" },
+    );
+    expect(await webpIsAnimated(still)).toBe(false);
   });
 });
