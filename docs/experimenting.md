@@ -49,16 +49,27 @@ The visualization fills the viewport when controls are hidden.
 
 ```bash
 docker buildx bake --print
-docker buildx bake studio
+docker buildx bake studio render
 just docker-studio
+```
+
+Or:
+
+```bash
+docker buildx bake -f docker-bake.hcl studio render
+docker compose up studio renderer
 ```
 
 Then open `http://127.0.0.1:8080/studio.html`.
 
 **Microphone:** the browser uses `getUserMedia()` directly. Audio devices are **not**
-passed into the Docker container — the container only serves the app.
+passed into the Docker container — the container only serves the app and proxies
+`/api/*` to the `renderer` service.
 
-Artifacts from CLI/export land under `./artifacts/` (gitignored).
+**Exports:** server-side PNG/SVG/animated WebP/APNG/WebM land in `./artifacts/`
+(bind-mounted). Browser downloads may also go to your Downloads folder.
+
+No host Python/Node/Rust install is required for the Docker workflow.
 
 ## Generate first image (CLI)
 

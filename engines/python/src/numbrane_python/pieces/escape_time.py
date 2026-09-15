@@ -49,5 +49,8 @@ def render_escape_time(
             break
     field = escaped / max(max_iter, 1)
     field = np.nan_to_num(field, nan=0.0, posinf=1.0, neginf=0.0)
-    palette = str(params.get("palette", "void"))
+    # Lift interior blacks slightly so deep Mandelbrot sets remain readable
+    field = np.where(field <= 0, 0.04, field)
+    field = np.power(np.clip(field, 0, 1), 0.85)
+    palette = str(params.get("palette", "ink"))
     return gradient_map(field, get_palette(palette)).astype(np.uint8)

@@ -426,8 +426,12 @@ def _circles_preview(circles: np.ndarray, width: int, height: int) -> np.ndarray
     return img
 
 
-def _preview_from_field(field: np.ndarray, palette: str = "void") -> np.ndarray:
-    colors = gradient_map(field, get_palette(palette))
+def _preview_from_field(field: np.ndarray, palette: str = "ink") -> np.ndarray:
+    f = np.asarray(field, dtype=np.float32)
+    f = (f - f.min()) / (f.max() - f.min() + 1e-6)
+    # Early/low-iteration fields need contrast lift for gallery readability
+    f = np.power(np.clip(f * 1.15, 0, 1), 0.75)
+    colors = gradient_map(f, get_palette(palette))
     return colors.astype(np.uint8)
 
 
