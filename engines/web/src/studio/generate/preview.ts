@@ -8,7 +8,7 @@ export type GenerateRequest = {
   frame: number;
   width: number;
   height: number;
-  quality?: "preview" | "final";
+  quality?: "draft" | "preview" | "final";
   parameters: Record<string, number | string | boolean>;
 };
 
