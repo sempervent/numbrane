@@ -56,12 +56,67 @@ class StrangeAttractorsConfig(BaseModel):
     paper_style: str = Field(
         default="dark", description="Paper style: dark | warm-paper | white-ink | plotter"
     )
+    # Composition / style
+    render_mode: str = Field(
+        default="fine-ink",
+        description="fine-ink | dense-ink | long-exposure | calligraphic | ghost | technical",
+    )
+    background: str = Field(default="near-black")
+    center_bias: float = Field(default=0.55, ge=0.0, le=1.0)
+    off_center_x: float = Field(default=0.0, ge=-0.4, le=0.4)
+    off_center_y: float = Field(default=0.0, ge=-0.4, le=0.4)
+    stroke_opacity: float = Field(default=1.0, ge=0.2, le=1.5)
+    pfl_style: str = Field(default="")
 
 
 def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
-    """Render strange attractor."""
+    """Render strange attractor with composition-aware framing."""
+    from numbrane_python.composition.grammar import background_rgb
+    from numbrane_python.style.pfl import apply_style_to_params
+
+    # Optional PFL style merge into a working config view
+    if config.pfl_style:
+        from numbrane_python.style.pfl import apply_style_to_params
+
+        raw = apply_style_to_params(config.pfl_style, config.model_dump())
+        updates = {
+            k: raw[k] for k in ("palette", "paper_style", "background", "ink", "margin") if k in raw
+        }
+        config = config.model_copy(update=updates)
+
+    mode = config.render_mode
+    ink = float(config.ink) * float(config.stroke_opacity)
+    density_scale = float(config.density_scale)
+    soft_amt = 0.12
+    if mode == "dense-ink":
+        ink *= 1.35
+        density_scale = min(density_scale, 0.42)
+        soft_amt = 0.18
+    elif mode == "fine-ink":
+        ink *= 0.85
+        density_scale = max(density_scale, 0.5)
+        soft_amt = 0.08
+    elif mode == "long-exposure":
+        ink *= 1.55
+        density_scale = min(density_scale, 0.38)
+        soft_amt = 0.22
+    elif mode == "calligraphic":
+        ink *= 1.1
+        density_scale = 0.48
+        soft_amt = 0.05
+    elif mode == "ghost":
+        ink *= 0.55
+        density_scale = 0.65
+        soft_amt = 0.2
+    elif mode == "technical":
+        ink *= 1.0
+        density_scale = 0.55
+        soft_amt = 0.04
+
     canvas = Canvas(ctx.width, ctx.height, 3)
     layer = canvas.create_layer("main")
+    bg = background_rgb(config.background)
+    layer[:] = bg
     rng = np.random.default_rng(int(config.seed) & 0xFFFFFFFF)
 
     # Seed-driven initial conditions and bounded coefficient variation
@@ -77,18 +132,15 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         rc = config.rossler_c + float(rng.uniform(-0.4, 0.4))
     else:  # clifford
         x, y = (float(v) for v in rng.uniform(-0.1, 0.1, 2))
-        ca = config.clifford_a + float(rng.uniform(-0.35, 0.35))
-        cb = config.clifford_b + float(rng.uniform(-0.35, 0.35))
-        cc = config.clifford_c + float(rng.uniform(-0.25, 0.25))
-        cd = config.clifford_d + float(rng.uniform(-0.25, 0.25))
+        ca = config.clifford_a + float(rng.uniform(-0.45, 0.45))
+        cb = config.clifford_b + float(rng.uniform(-0.45, 0.45))
+        cc = config.clifford_c + float(rng.uniform(-0.35, 0.35))
+        cd = config.clifford_d + float(rng.uniform(-0.35, 0.35))
 
-    # Density map
     density = np.zeros((ctx.height, ctx.width), dtype=np.float32)
     samples: list[tuple[float, float]] = []
 
-    # Integration
     for i in range(config.steps + config.burn_in):
-        # Integrate
         if config.attractor_type == "lorenz":
             dx = sigma * (y - x)
             dy = x * (rho - z) - y
@@ -103,25 +155,22 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
             x += dx * config.dt
             y += dy * config.dt
             z += dz * config.dt
-        else:  # clifford (2D)
+        else:
             x_new = np.sin(ca * y) + cc * np.cos(ca * x)
             y_new = np.sin(cb * x) + cd * np.cos(cb * y)
             x, y = float(x_new), float(y_new)
 
-        # Skip burn-in
         if i < config.burn_in:
             continue
 
-        # Project to 2D
         if config.attractor_type == "clifford":
             px, py = x, y
         elif config.projection == "xy":
             px, py = x, y
         elif config.projection == "xz":
             px, py = x, z
-        else:  # yz
+        else:
             px, py = y, z
-
         samples.append((px, py))
 
     if not samples:
@@ -132,8 +181,11 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
     min_y, max_y = float(ys.min()), float(ys.max())
     span_x = max(max_x - min_x, 1e-6)
     span_y = max(max_y - min_y, 1e-6)
-    cx, cy = (min_x + max_x) * 0.5, (min_y + max_y) * 0.5
+    cx = (min_x + max_x) * 0.5 + float(config.off_center_x) * span_x
+    cy = (min_y + max_y) * 0.5 + float(config.off_center_y) * span_y
     margin = max(1.05, float(config.margin))
+    # More center_bias → tighter crop (less empty), less → more negative space
+    margin = margin * (0.9 + 0.35 * (1.0 - float(config.center_bias)))
     aspect = ctx.width / max(ctx.height, 1)
 
     if config.framing == "fixed":
@@ -141,10 +193,9 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         span_x_use = span * aspect
         span_y_use = span
     elif config.framing == "center":
-        # Independent axis fit — fills frame, may stretch slightly
         span_x_use = span_x * margin
         span_y_use = span_y * margin
-    else:  # fit — square world window preserving aspect
+    else:
         span = max(span_x, span_y) * margin
         span_x_use = span * aspect if aspect >= 1 else span
         span_y_use = span if aspect >= 1 else span / max(aspect, 1e-6)
@@ -153,9 +204,8 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         screen_x = int(((px - cx) / span_x_use + 0.5) * ctx.width)
         screen_y = int(((py - cy) / span_y_use + 0.5) * ctx.height)
         if 0 <= screen_x < ctx.width and 0 <= screen_y < ctx.height:
-            density[screen_y, screen_x] += float(config.ink)
+            density[screen_y, screen_x] += ink
 
-    # Soft neighborhood ink (deterministic 3x3) to reduce under-inking
     if density.max() > 0:
         padded = np.pad(density, 1, mode="constant")
         soft = density.copy()
@@ -163,18 +213,18 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
             for dx in (-1, 0, 1):
                 if dx == 0 and dy == 0:
                     continue
-                soft += padded[1 + dy : 1 + dy + ctx.height, 1 + dx : 1 + dx + ctx.width] * 0.12
+                soft += padded[1 + dy : 1 + dy + ctx.height, 1 + dx : 1 + dx + ctx.width] * soft_amt
         density = soft
 
-    # Normalize density with ink-friendly gamma
-    density = (density - density.min()) / (density.max() - density.min() + 1e-6)
-    gamma = max(0.25, float(config.density_scale))
-    density = np.power(density, gamma)
+    # Log tone-map so sparse trajectories read as ink, not single-pixel spikes
+    density = np.log1p(density * 8.0)
+    p99 = float(np.percentile(density, 99.5)) if density.max() > 0 else 1.0
+    density = np.clip(density / max(p99, 1e-6), 0.0, 1.0)
+    density = np.power(density, max(0.22, density_scale * 0.85))
 
-    # Map to colors / paper styles
     style = config.paper_style
-    if style == "warm-paper":
-        paper = np.full((ctx.height, ctx.width, 3), (246, 240, 228), dtype=np.float32)
+    if style == "warm-paper" or config.background == "warm-paper":
+        paper = np.full((ctx.height, ctx.width, 3), background_rgb("warm-paper"), dtype=np.float32)
         ink_rgb = np.array([28, 24, 22], dtype=np.float32)
         colors = paper * (1.0 - density[..., None]) + ink_rgb * density[..., None]
         layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
@@ -182,22 +232,27 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         paper = np.zeros((ctx.height, ctx.width, 3), dtype=np.float32)
         colors = paper + density[..., None] * 245.0
         layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
-    elif style == "plotter":
+    elif style == "plotter" or mode == "technical":
         paper = np.full((ctx.height, ctx.width, 3), 255, dtype=np.float32)
         colors = paper * (1.0 - np.clip(density * 1.2, 0, 1)[..., None])
         layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
     else:
-        palette_name = config.palette if config.palette != "void" else "ink"
+        palette_name = config.palette if config.palette not in {"void", ""} else "monochrome-ink"
         palette_colors = get_palette(palette_name)
-        colors = gradient_map(density, palette_colors)
-        layer[:] = colors
+        # Composite ink over intentional background
+        paper = np.full((ctx.height, ctx.width, 3), bg, dtype=np.float32)
+        mapped = gradient_map(density, palette_colors).astype(np.float32)
+        colors = paper * (1.0 - density[..., None]) + mapped * density[..., None]
+        layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
 
     image = canvas.get_image()
-
-    # Post-processing — light vignette; skip bloom for plotter/paper styles
-    if style == "dark":
-        image = apply_vignette(image, 0.22)
-        image = apply_bloom(image, intensity=0.18, threshold=0.55)
+    if style == "dark" and mode != "technical":
+        vig = 0.18 if mode != "ghost" else 0.12
+        image = apply_vignette(image, vig)
+        bloom = 0.14 if mode != "calligraphic" else 0.06
+        if mode == "long-exposure":
+            bloom = 0.22
+        image = apply_bloom(image, intensity=bloom, threshold=0.55)
     elif style == "white-ink":
         image = apply_vignette(image, 0.15)
 
