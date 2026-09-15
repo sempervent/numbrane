@@ -153,10 +153,15 @@ export async function createNoodlesLivePiece(
         trail[iy * simW + ix]! += 0.8 + audio.energy;
       }
       if (audio.onset > 0.5) {
+        let s = (seed ^ (last.frame * 9973)) >>> 0;
+        const rnd = () => {
+          s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+          return (s & 0xffff) / 0x10000;
+        };
         for (let k = 0; k < 8; k++) {
-          const i = (Math.random() * n) | 0;
-          positions[i * 2] = Math.random() * simW;
-          positions[i * 2 + 1] = Math.random() * simH;
+          const i = (rnd() * n) | 0;
+          positions[i * 2] = rnd() * simW;
+          positions[i * 2 + 1] = rnd() * simH;
         }
       }
       uploadTrail();

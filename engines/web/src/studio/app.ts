@@ -500,7 +500,7 @@ export class StudioApp {
   }
 
   async randomizeSeed(): Promise<void> {
-    this.seed = (Math.random() * 0xffffffff) >>> 0;
+    this.seed = ((this.seed * 1664525 + 1013904223) ^ (Date.now() & 0xffffffff)) >>> 0;
     this.prefs.seed = this.seed;
     this.persist();
     await this.applyPieceScene();
@@ -1100,7 +1100,7 @@ export class StudioApp {
 
   private loop = (): void => {
     this.raf = requestAnimationFrame(this.loop);
-    const now = performance.now();
+    const now = Date.now();
     this.frameTimes.push(now);
     while (this.frameTimes.length && now - this.frameTimes[0]! > 1000) this.frameTimes.shift();
     this.fps = this.frameTimes.length;
