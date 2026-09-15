@@ -341,6 +341,14 @@ studio-e2e:
     export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
     npx playwright test tests/e2e/studio.spec.ts
 
+[group('studio')]
+studio-animation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.animation.config.ts
+
 # ── Docker Bake ──────────────────────────────────────────────────────
 
 [group('docker')]
