@@ -62,8 +62,11 @@ export function slugify(name: string): string {
     .slice(0, 48) || "pfl-pack";
 }
 
+let _itemSeq = 0;
+
 export function newItemId(): string {
-  return `item-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4).toString(36)}`;
+  _itemSeq += 1;
+  return `item-${Date.now().toString(36)}-${_itemSeq.toString(36)}`;
 }
 
 export function emptyPack(name = "PFL Pack"): PflPack {
