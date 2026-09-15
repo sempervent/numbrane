@@ -113,6 +113,10 @@ describe("determinism hygiene", () => {
       if (file.includes(`${sep}live${sep}`)) {
         return;
       }
+      // Studio UI: preview latency, debounce, HUD FPS — not art RNG.
+      if (file.includes(`${sep}studio${sep}`)) {
+        return;
+      }
       if (/\bperformance\.now\s*\(/.test(text)) {
         hits.push(file);
       }
