@@ -1,5 +1,6 @@
 /**
  * Geometry IR LIVE — draws piece-specific structured IR (no shared Metatron fallback).
+ * Construction mode animates authentic progressive IR (centers → circles → edges → layers).
  */
 
 import type { FrameState, LivePiece, LiveTelemetry, RenderContext } from "../piece";
@@ -39,6 +40,10 @@ void main(){ o = texture(u, vec2(v.x, 1.0 - v.y)); }`;
   return { prog, buf, tex };
 }
 
+function compositionModeOf(params: Record<string, number | string | boolean>): string {
+  return String(params.composition_mode ?? params["comp.mode"] ?? "canonical");
+}
+
 export async function createGeometryIrPiece(
   gl: WebGL2RenderingContext,
   pieceId: string,
@@ -57,7 +62,7 @@ export async function createGeometryIrPiece(
     beatPhase: 0,
     bpm: 120,
   };
-  const params: Record<string, number> = {
+  const params: Record<string, number | string | boolean> = {
     chaos: 0.15,
     density: 0.7,
     zoom: 1,
@@ -66,11 +71,24 @@ export async function createGeometryIrPiece(
     exposure: 1.2,
     "geom.radius": 1,
     "geom.levels": 2,
+    composition_mode: "canonical",
   };
   const audio = { energy: 0, low: 0, mid: 0, high: 0, onset: 0 };
+  let lastBuildKey = "";
 
-  const rebuild = () => {
-    ir = buildGeometryIr(pieceId, seed, params);
+  const rebuild = (constructionProgress?: number) => {
+    const mode = compositionModeOf(params);
+    const anim = mode === "construction";
+    const progress =
+      constructionProgress ??
+      (anim ? Math.min(1, (last.t % 8) / 7.5) : undefined);
+    const key = `${seed}|${mode}|${params["geom.radius"]}|${params["geom.levels"]}|${params.count}|${anim ? progress?.toFixed(3) : "still"}`;
+    if (key === lastBuildKey) return;
+    lastBuildKey = key;
+    ir = buildGeometryIr(pieceId, seed, params, {
+      forAnimation: anim,
+      constructionProgress: anim ? progress : undefined,
+    });
   };
 
   return {
@@ -78,35 +96,50 @@ export async function createGeometryIrPiece(
     initialize(_recipe, s) {
       seed = s >>> 0;
       params.hue = ((seed % 1000) / 1000) * 0.15 + 0.45;
-      rebuild();
+      lastBuildKey = "";
+      rebuild(0);
     },
     resize() {},
     update(frame) {
       last = frame;
-      if (audio.onset > 0.55) params.rotation += 0.03;
-      params.rotation += audio.low * 0.008;
+      if (audio.onset > 0.55) params.rotation = Number(params.rotation) + 0.03;
+      params.rotation = Number(params.rotation) + audio.low * 0.008;
+      if (compositionModeOf(params) === "construction") {
+        rebuild();
+      }
     },
     setParameter(name, value) {
-      if (typeof value === "number") {
-        if (name.startsWith("audio.")) {
-          const k = name.slice(6) as keyof typeof audio;
-          if (k in audio) audio[k] = value;
-        } else {
-          params[name] = value;
-          if (name.startsWith("geom.") || name === "count" || name === "chaos") rebuild();
-        }
+      if (name.startsWith("audio.")) {
+        const k = name.slice(6) as keyof typeof audio;
+        if (k in audio && typeof value === "number") audio[k] = value;
+        return;
+      }
+      params[name] = value;
+      if (
+        name.startsWith("geom.") ||
+        name === "count" ||
+        name === "chaos" ||
+        name === "composition_mode" ||
+        name === "comp.mode"
+      ) {
+        lastBuildKey = "";
+        rebuild(compositionModeOf(params) === "construction" ? 0 : undefined);
       }
     },
     getParameter(name) {
       return params[name];
     },
     getBaseParameters() {
-      return { ...params };
+      const out: Record<string, number> = {};
+      for (const [k, v] of Object.entries(params)) {
+        if (typeof v === "number") out[k] = v;
+      }
+      return out;
     },
     getTelemetry(): LiveTelemetry {
       return {
         energy: audio.energy,
-        texture: params.density,
+        texture: Number(params.density),
         motion: Math.abs(Math.sin(last.t)),
         spectral: audio.mid,
       };
@@ -122,21 +155,32 @@ export async function createGeometryIrPiece(
       c2.fillRect(0, 0, ctx.width, ctx.height);
       const cx = ctx.width * 0.5;
       const cy = ctx.height * 0.5;
-      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom * (1 + audio.energy * 0.12);
-      const rot = params.rotation + last.t * 0.04 * params.chaos;
+      const offX = Number(ir.meta.off_center_x ?? 0);
+      const offY = Number(ir.meta.off_center_y ?? 0);
+      const margin = Number(ir.meta.margin ?? 1.2);
+      const viewZoom = Number(ir.meta.view_zoom ?? 1);
+      const zoom = Number(params.zoom) * viewZoom / Math.max(margin * 0.85, 0.5);
+      const scale =
+        Math.min(ctx.width, ctx.height) * 0.35 * zoom * (1 + audio.energy * 0.12);
+      const rot =
+        Number(params.rotation) +
+        Number(ir.meta.rotation ?? 0) +
+        last.t * 0.04 * Number(params.chaos);
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const rgb = `hsl(${params.hue * 360} 70% ${48 + audio.energy * 18}%)`;
+      const rgb = `hsl(${Number(params.hue) * 360} 70% ${48 + audio.energy * 18}%)`;
       c2.strokeStyle = rgb;
-      c2.lineWidth = 1.2 + params.density * 0.8;
+      c2.lineWidth = 1.2 + Number(params.density) * 0.8;
       c2.globalAlpha = 0.92;
       const xf = (x: number, y: number) => {
         const xr = x * cos - y * sin;
         const yr = x * sin + y * cos;
-        return [cx + xr * scale, cy + yr * scale] as const;
+        return [cx + (xr + offX) * scale, cy + (yr + offY) * scale] as const;
       };
       if (ir.primitives?.length) {
         for (const p of ir.primitives) {
+          const opacity = p.opacity !== undefined ? Number(p.opacity) : 0.92;
+          c2.globalAlpha = opacity;
           if (p.kind === "line") {
             const [x0, y0] = xf(Number(p.x1), Number(p.y1));
             const [x1, y1] = xf(Number(p.x2), Number(p.y2));
@@ -152,6 +196,7 @@ export async function createGeometryIrPiece(
           }
         }
       } else {
+        c2.globalAlpha = 0.92;
         for (const e of ir.edges) {
           const a = ir.centers[e.a];
           const b = ir.centers[e.b];
@@ -193,7 +238,7 @@ export async function createGeometryIrPiece(
       return {
         arrays: {},
         shapes: {},
-        json: { kind: "geometry-ir", ...ir },
+        json: { kind: "geometry-ir", ...ir, composition_mode: compositionModeOf(params) },
       };
     },
     importState(s) {
@@ -206,7 +251,9 @@ export async function createGeometryIrPiece(
           primitives: s.json.primitives as GeomIR["primitives"],
           meta: (s.json.meta as GeomIR["meta"]) ?? {},
         };
+        lastBuildKey = "imported";
       } else {
+        lastBuildKey = "";
         rebuild();
       }
     },

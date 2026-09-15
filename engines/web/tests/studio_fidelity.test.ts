@@ -96,6 +96,67 @@ describe("studio-piece-fidelity geometry IR", () => {
     expect((sri.primitives?.length ?? 0) > 0).toBe(true);
     expect(met.edges.length).toBeGreaterThan(10);
   });
+
+  it("composition_mode construction strips edges for stills", () => {
+    const full = buildGeometryIr("geometry/metatron", 42, { composition_mode: "canonical" });
+    const cons = buildGeometryIr("geometry/metatron", 42, { composition_mode: "construction" });
+    expect(full.edges.length).toBeGreaterThan(0);
+    expect(cons.edges.length).toBe(0);
+    expect(cons.meta.construction).toBe(true);
+  });
+
+  it("construction animation reveals progressive IR phases", () => {
+    const early = buildGeometryIr(
+      "geometry/metatron",
+      42,
+      { composition_mode: "construction" },
+      { forAnimation: true, constructionProgress: 0.1 },
+    );
+    expect(early.meta.construction_phase).toBe("centers");
+    expect(early.edges.length).toBe(0);
+
+    const circles = buildGeometryIr(
+      "geometry/flower-of-life",
+      42,
+      { composition_mode: "construction" },
+      { forAnimation: true, constructionProgress: 0.35 },
+    );
+    expect(circles.meta.construction_phase).toBe("circles");
+
+    const edges = buildGeometryIr(
+      "geometry/metatron",
+      42,
+      { composition_mode: "construction" },
+      { forAnimation: true, constructionProgress: 0.6 },
+    );
+    expect(edges.meta.construction_phase).toBe("edges");
+    expect(edges.edges.length).toBeGreaterThan(0);
+
+    const layers = buildGeometryIr(
+      "geometry/seed-of-life",
+      42,
+      { composition_mode: "construction" },
+      { forAnimation: true, constructionProgress: 0.95 },
+    );
+    expect(layers.meta.construction_phase).toBe("layers");
+  });
+
+  it("GEOM pieces expose composition_mode in paramSchema", () => {
+    for (const id of [
+      "geometry/metatron",
+      "geometry/seed-of-life",
+      "geometry/flower-of-life",
+      "geometry/sri-yantra",
+      "geometry/isometric",
+    ]) {
+      const schema = getPieceRuntime(id).paramSchema;
+      const field = schema.find((f) => f.key === "composition_mode");
+      expect(field?.type).toBe("choice");
+      expect(field?.choices).toContain("construction");
+      expect(field?.choices).toContain("fragment");
+      expect(field?.choices).toContain("layered");
+    }
+  });
 });
 
 describe("studio-piece-fidelity live errors", () => {

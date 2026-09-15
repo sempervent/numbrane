@@ -73,9 +73,14 @@ def build_sacred_geometry_ir(
     scale: float = 1.0,
     seed: int = 42,
     composition_mode: str = "canonical",
+    for_animation: bool = False,
+    construction_progress: float | None = None,
 ) -> dict[str, Any]:
     """Build sacred geometry IR. Seed applies bounded rotation / layer / scale variation."""
-    from numbrane_python.composition.grammar import apply_geometry_composition
+    from numbrane_python.composition.grammar import (
+        apply_geometry_composition,
+        reveal_construction_progress,
+    )
 
     rot = ((seed & 0xFFFFFFFF) % 360) * (math.pi / 180.0) * 0.12
     layer_nudge = (seed % 3) - 1
@@ -85,13 +90,15 @@ def build_sacred_geometry_ir(
         c, s = math.cos(rot), math.sin(rot)
         return (x * c - y * s, x * s + y * c)
 
+    anim = for_animation and composition_mode == "construction"
+
     if kind in {"flower-of-life", "geometry/flower-of-life"}:
         lyr = max(1, layers + layer_nudge)
         centers = [_rotate_xy(x, y) for x, y in flower_of_life_layers(radius * scale_nudge, lyr)]
         ir = geometry_ir_from_centers(centers, radius)
         ir["meta"] = {"kind": "flower-of-life", "layers": lyr, "seed": seed, "rotation": rot}
-        return apply_geometry_composition(ir, composition_mode, seed=seed)
-    if kind in {"sri-yantra", "geometry/sri-yantra"}:
+        ir = apply_geometry_composition(ir, composition_mode, seed=seed, for_animation=anim)
+    elif kind in {"sri-yantra", "geometry/sri-yantra"}:
         tri = sri_yantra_triangles(scale * scale_nudge)
         primitives: list[dict[str, Any]] = []
         for poly in tri["up"] + tri["down"]:
@@ -106,14 +113,19 @@ def build_sacred_geometry_ir(
             "primitives": primitives,
             "meta": {**tri, "seed": seed, "rotation": rot},
         }
-        return apply_geometry_composition(ir, composition_mode, seed=seed)
-    if kind in {"isometric", "geometry/isometric"}:
+        ir = apply_geometry_composition(ir, composition_mode, seed=seed, for_animation=anim)
+    elif kind in {"isometric", "geometry/isometric"}:
         n = 6 + (seed % 3)
         centers = [_rotate_xy(x, y) for x, y in isometric_nodes(cols=n, rows=n)]
         ir = geometry_ir_from_centers(centers, radius * 0.35)
         ir["meta"] = {"kind": "isometric", "seed": seed, "n": n}
-        return apply_geometry_composition(ir, composition_mode, seed=seed)
-    raise ValueError(f"unknown sacred geometry kind: {kind}")
+        ir = apply_geometry_composition(ir, composition_mode, seed=seed, for_animation=anim)
+    else:
+        raise ValueError(f"unknown sacred geometry kind: {kind}")
+
+    if anim and construction_progress is not None:
+        return reveal_construction_progress(ir, float(construction_progress))
+    return ir
 
 
 def sacred_to_preview_svg(ir: dict[str, Any], width: int = 1024, height: int = 1024) -> str:

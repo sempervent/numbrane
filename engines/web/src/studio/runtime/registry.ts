@@ -58,15 +58,70 @@ function d(
 
 const GEOM_SCHEMA: ParamField[] = [
   ...META,
+  {
+    key: "composition_mode",
+    label: "Composition",
+    type: "choice",
+    choices: ["canonical", "construction", "cropped", "fragment", "off-axis", "layered"],
+    default: "canonical",
+  },
   { key: "geom.radius", label: "Radius", type: "number", min: 0.4, max: 2, step: 0.05, default: 1 },
   { key: "geom.levels", label: "Layers", type: "number", min: 1, max: 5, step: 1, default: 2 },
   { key: "geom.rotation", label: "Rotation", type: "number", min: 0, max: 6.28, step: 0.01, default: 0 },
 ];
 
 const RD_SCHEMA: ParamField[] = [
+  {
+    key: "evolved_preset",
+    label: "Evolved look",
+    type: "choice",
+    choices: ["", "cells", "worms", "lace", "coral", "membrane", "islands"],
+    default: "coral",
+  },
   { key: "f", label: "Feed", type: "number", min: 0.01, max: 0.1, step: 0.001, default: 0.055 },
   { key: "k", label: "Kill", type: "number", min: 0.04, max: 0.08, step: 0.001, default: 0.062 },
+  {
+    key: "settle_steps",
+    label: "Settle",
+    type: "number",
+    min: 0,
+    max: 8000,
+    step: 100,
+    default: 0,
+  },
   { key: "iterations", label: "Iterations", type: "number", min: 50, max: 2500, step: 10, default: 400 },
+  ...META,
+];
+
+const DG_SCHEMA: ParamField[] = [
+  {
+    key: "initial_topology",
+    label: "Topology",
+    type: "choice",
+    choices: ["ring", "double-ring", "open-arc", "islands", "spiral", "geometry-derived"],
+    default: "ring",
+  },
+  {
+    key: "growth_stage",
+    label: "Stage",
+    type: "choice",
+    choices: ["young", "developed", "dense", "overgrown"],
+    default: "developed",
+  },
+  { key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 },
+  ...META,
+];
+
+const TRUCHET_SCHEMA: ParamField[] = [
+  {
+    key: "macro_composition",
+    label: "Macro",
+    type: "choice",
+    choices: ["uniform", "flow-directed", "bands", "vortices", "radial", "masked-void", "nested"],
+    default: "flow-directed",
+  },
+  { key: "tile_scale", label: "Tile scale", type: "number", min: 0.6, max: 2.5, step: 0.05, default: 1 },
+  { key: "pattern_continuity", label: "Continuity", type: "number", min: 0, max: 1, step: 0.05, default: 0.75 },
   ...META,
 ];
 
@@ -199,7 +254,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "python-api",
     "webgl-stateful",
     "webgl-stateful",
-    { paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META] },
+    { paramSchema: DG_SCHEMA },
   ),
   "growth/lsystem": d("growth/lsystem", "python-api", "python-api", null),
   "growth/slime-mold": d("growth/slime-mold", "python-api", "webgl-stateful", "webgl-stateful", {
@@ -222,7 +277,9 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     { paramSchema: RD_SCHEMA },
   ),
 
-  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "python-api", null),
+  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "python-api", null, {
+    paramSchema: TRUCHET_SCHEMA,
+  }),
   "tiling/voronoi-stained-glass": d("tiling/voronoi-stained-glass", "python-api", "python-api", null, {
     paramSchema: VORONOI_SCHEMA,
   }),

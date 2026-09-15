@@ -27,18 +27,61 @@ const PRESETS: Record<string, ArtisticPreset[]> = {
     { id: "technical", label: "technical", parameters: { density: 0.7, chaos: 0.15, render_mode: "technical", pfl_style: "pfl-machine" } },
   ],
   "reaction-diffusion/reaction-diffusion": [
-    { id: "coral", label: "coral", parameters: { f: 0.055, k: 0.062, density: 0.8 } },
-    { id: "cells", label: "cells", parameters: { f: 0.037, k: 0.06, density: 0.75 } },
-    { id: "worms", label: "worms", parameters: { f: 0.078, k: 0.061, density: 0.7 } },
-    { id: "mitosis", label: "mitosis", parameters: { f: 0.03, k: 0.062, density: 0.85 } },
-    { id: "lace", label: "lace", parameters: { f: 0.026, k: 0.053, density: 0.65 } },
+    { id: "coral", label: "coral", parameters: { evolved_preset: "coral", density: 0.8 } },
+    { id: "cells", label: "cells", parameters: { evolved_preset: "cells", density: 0.75 } },
+    { id: "worms", label: "worms", parameters: { evolved_preset: "worms", density: 0.7 } },
+    { id: "lace", label: "lace", parameters: { evolved_preset: "lace", density: 0.65 } },
+    { id: "membrane", label: "membrane", parameters: { evolved_preset: "membrane", density: 0.7 } },
+    { id: "islands", label: "islands", parameters: { evolved_preset: "islands", density: 0.75 } },
+  ],
+  "growth/differential-growth": [
+    { id: "ring-developed", label: "ring · developed", parameters: { initial_topology: "ring", growth_stage: "developed", density: 0.75 } },
+    { id: "islands-dense", label: "islands · dense", parameters: { initial_topology: "islands", growth_stage: "dense", density: 0.85 } },
+    { id: "spiral-overgrown", label: "spiral · overgrown", parameters: { initial_topology: "spiral", growth_stage: "overgrown", density: 0.9 } },
+    { id: "double-ring", label: "double ring", parameters: { initial_topology: "double-ring", growth_stage: "developed", density: 0.7 } },
+    { id: "young-arc", label: "young arc", parameters: { initial_topology: "open-arc", growth_stage: "young", density: 0.55 } },
+  ],
+  "tiling/truchet-tiles": [
+    { id: "flow-directed", label: "flow-directed", parameters: { macro_composition: "flow-directed", pattern_continuity: 0.85, density: 0.7 } },
+    { id: "bands", label: "bands", parameters: { macro_composition: "bands", pattern_continuity: 0.8, density: 0.75 } },
+    { id: "vortices", label: "vortices", parameters: { macro_composition: "vortices", pattern_continuity: 0.9, density: 0.8 } },
+    { id: "masked-void", label: "masked void", parameters: { macro_composition: "masked-void", pattern_continuity: 0.75, density: 0.65 } },
+    { id: "radial", label: "radial", parameters: { macro_composition: "radial", pattern_continuity: 0.8, density: 0.7 } },
   ],
   "geometry/metatron": [
-    { id: "construction", label: "construction", parameters: { density: 0.55, chaos: 0.05, zoom: 1 } },
-    { id: "minimal", label: "minimal", parameters: { density: 0.35, chaos: 0.02, zoom: 0.95 } },
-    { id: "dense", label: "dense", parameters: { density: 0.9, chaos: 0.1, zoom: 1.05 } },
-    { id: "ritual", label: "ritual", parameters: { density: 0.7, chaos: 0.15, hue: 0.08, zoom: 1.1 } },
-    { id: "broken-symmetry", label: "broken-symmetry", parameters: { density: 0.65, chaos: 0.45, rotation: 0.12 } },
+    {
+      id: "construction",
+      label: "construction",
+      parameters: { composition_mode: "construction", density: 0.55, chaos: 0.05, zoom: 1 },
+    },
+    {
+      id: "canonical",
+      label: "canonical",
+      parameters: { composition_mode: "canonical", density: 0.7, chaos: 0.08, zoom: 1 },
+    },
+    {
+      id: "cropped",
+      label: "cropped",
+      parameters: { composition_mode: "cropped", density: 0.65, chaos: 0.05, zoom: 1.05 },
+    },
+    {
+      id: "fragment",
+      label: "fragment",
+      parameters: { composition_mode: "fragment", density: 0.6, chaos: 0.2, zoom: 1 },
+    },
+    {
+      id: "off-axis",
+      label: "off-axis",
+      parameters: { composition_mode: "off-axis", density: 0.7, chaos: 0.12, zoom: 1.05 },
+    },
+    {
+      id: "layered",
+      label: "layered",
+      parameters: { composition_mode: "layered", density: 0.75, chaos: 0.1, zoom: 1 },
+    },
+    { id: "minimal", label: "minimal", parameters: { composition_mode: "canonical", density: 0.35, chaos: 0.02, zoom: 0.95 } },
+    { id: "dense", label: "dense", parameters: { composition_mode: "canonical", density: 0.9, chaos: 0.1, zoom: 1.05 } },
+    { id: "ritual", label: "ritual", parameters: { composition_mode: "layered", density: 0.7, chaos: 0.15, hue: 0.08, zoom: 1.1 } },
   ],
   "growth/slime-mold": [
     { id: "network", label: "network", parameters: { density: 0.7, chaos: 0.25 } },
@@ -60,6 +103,8 @@ export function presetsForPiece(pieceId: string): ArtisticPreset[] {
   if (pieceId.includes("flow")) return PRESETS["fields/flow-hatching"]!;
   if (pieceId.includes("attractor")) return PRESETS["fractals/strange-attractors"]!;
   if (pieceId.includes("reaction")) return PRESETS["reaction-diffusion/reaction-diffusion"]!;
+  if (pieceId.includes("differential")) return PRESETS["growth/differential-growth"]!;
+  if (pieceId.includes("truchet")) return PRESETS["tiling/truchet-tiles"]!;
   if (pieceId.includes("slime")) return PRESETS["growth/slime-mold"]!;
   return [
     { id: "balanced", label: "balanced", parameters: { density: 0.7, chaos: 0.3 } },
