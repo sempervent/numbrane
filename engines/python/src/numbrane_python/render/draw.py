@@ -137,11 +137,13 @@ def draw_gradient(
         direction: 'vertical' or 'horizontal'
     """
     h, w = canvas.shape[:2]
+    c1 = np.asarray(color1, dtype=np.float64).reshape(-1)
+    c2 = np.asarray(color2, dtype=np.float64).reshape(-1)
 
     if direction == "vertical":
-        t = np.linspace(0, 1, h)[:, np.newaxis]
+        t = np.linspace(0, 1, h, dtype=np.float64)[:, np.newaxis, np.newaxis]
     else:
-        t = np.linspace(0, 1, w)[np.newaxis, :]
+        t = np.linspace(0, 1, w, dtype=np.float64)[np.newaxis, :, np.newaxis]
 
-    gradient = color1 * (1 - t) + color2 * t
-    canvas[:] = gradient.astype(np.uint8)
+    gradient = c1 * (1.0 - t) + c2 * t
+    canvas[:] = np.clip(gradient, 0, 255).astype(np.uint8)

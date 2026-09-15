@@ -65,6 +65,10 @@ def _apply_preview_budgets(piece: str, params: dict[str, Any], quality: str) -> 
         out["line_spacing"] = max(float(out.get("line_spacing", 4)), 7.0)
         out["streamline_steps"] = min(int(out.get("streamline_steps", 24)), 12)
         out["density"] = min(float(out.get("density", 1.0)), 0.55)
+    if piece == "particles/noodles":
+        out["num_particles"] = min(int(out.get("num_particles", 200)), 40)
+        out["max_steps"] = min(int(out.get("max_steps", 2000)), 180)
+        out["field_octaves"] = min(int(out.get("field_octaves", 4)), 2)
     if piece.startswith("reaction-diffusion"):
         out["iterations"] = min(int(out.get("iterations", 400)), 220)
     if piece == "growth/slime-mold":

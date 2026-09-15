@@ -133,6 +133,10 @@ def _load_recipe(args: argparse.Namespace) -> dict:
             params["line_spacing"] = max(float(params.get("line_spacing", 4)), 7.0)
             params["streamline_steps"] = min(int(params.get("streamline_steps", 24)), 12)
             params["density"] = min(float(params.get("density", 1.0)), 0.55)
+        if piece == "particles/noodles":
+            params["num_particles"] = min(int(params.get("num_particles", 200)), 40)
+            params["max_steps"] = min(int(params.get("max_steps", 2000)), 180)
+            params["field_octaves"] = min(int(params.get("field_octaves", 4)), 2)
         if str(piece).startswith("reaction-diffusion"):
             params["iterations"] = min(int(params.get("iterations", 400)), 220)
         if piece == "growth/slime-mold":

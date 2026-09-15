@@ -35,15 +35,17 @@ Studio modes:
 
 | Key | Mode |
 |-----|------|
-| `1` | GENERATE |
-| `2` | ANIMATE |
-| `3` | REACT |
+| `1` | GENERATE — canonical still preview via `/api/render` (actual piece algorithms) |
+| `2` | ANIMATE — stateful WebGL/WASM or deterministic frame sequence |
+| `3` | REACT — microphone-first modulation of authentic runtimes |
 | `Tab` | show/hide controls |
 | `?` | keyboard help |
 | `F` | fullscreen |
-| `` ` `` | performance HUD |
+| `` ` `` | identity / performance HUD (piece, renderer, seed, digests) |
+| `R` | new deterministic seed (`crypto.getRandomValues`) |
+| `E` | export still / animation |
 
-The visualization fills the viewport when controls are hidden.
+Unsupported modes for a piece are reported in the UI — Studio does not substitute a generic shader.
 
 ## Docker Studio
 
