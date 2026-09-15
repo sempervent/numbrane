@@ -5,15 +5,17 @@
   "backend": "python",
   "version": "0.1.0",
   "author": "NUMBRANE",
-  "supported_artifacts": ["geometry-ir"],
+  "supported_artifacts": [
+    "geometry-ir"
+  ],
   "capabilities": {
     "deterministic": true,
     "animation": true,
     "interactive": false,
-    "audio": true,
+    "audio": false,
     "still": true,
-    "animated": true,
+    "animated": false,
     "realtime": true,
-    "audio_reactive": true
+    "audio_reactive": false
   }
 }

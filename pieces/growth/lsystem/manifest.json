@@ -15,7 +15,7 @@
     "audio": false,
     "still": true,
     "animated": true,
-    "realtime": true,
-    "audio_reactive": true
+    "realtime": false,
+    "audio_reactive": false
   }
 }

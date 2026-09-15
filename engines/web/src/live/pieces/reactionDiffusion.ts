@@ -248,9 +248,22 @@ export async function createReactionDiffusionPiece(
       gl.deleteFramebuffer(b.fbo);
     },
     exportState() {
-      // Readback not available without sync read — return seed metadata only.
-      // Studio IndexedDB capture uses recipe; GPU state reload uses seedArtifact URL.
-      return { arrays: {}, shapes: {}, json: { seed, simW, simH, kind: "rd" } };
+      const src = readA ? a : b;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, src.fbo);
+      const packed = new Float32Array(simW * simH * 4);
+      gl.readPixels(0, 0, simW, simH, gl.RGBA, gl.FLOAT, packed);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      const U = new Float32Array(simW * simH);
+      const V = new Float32Array(simW * simH);
+      for (let i = 0; i < simW * simH; i++) {
+        U[i] = packed[i * 4] ?? 1;
+        V[i] = packed[i * 4 + 1] ?? 0;
+      }
+      return {
+        arrays: { U, V },
+        shapes: { U: [simH, simW], V: [simH, simW] },
+        json: { seed, simW, simH, kind: "rd" },
+      };
     },
     importState(s: {
       arrays: Record<string, Float32Array>;

@@ -161,6 +161,36 @@ export class StudioApp {
       min: 0,
       max: 2,
     }));
+    const layers =
+      this.pieceId === "mashups/slime-on-sdf"
+        ? [
+            {
+              id: "L0",
+              piece: "growth/slime-mold",
+              opacity: 0.85,
+              blend: "normal" as const,
+              seed: this.seed,
+              parameters: { ...this.params },
+            },
+            {
+              id: "L1",
+              piece: "fractals/sdf-raymarch2d",
+              opacity: 0.55,
+              blend: "screen" as const,
+              seed: this.seed ^ 0x5f3759df,
+              parameters: { ...this.params, density: Math.min(1, this.params.density * 0.8) },
+            },
+          ]
+        : [
+            {
+              id: "L0",
+              piece: this.pieceId,
+              opacity: 1,
+              blend: "normal" as const,
+              seed: this.seed,
+              parameters: { ...this.params },
+            },
+          ];
     const set: SetDef = {
       protocol_version: "0.1.0",
       set_id: "studio-session",
@@ -169,16 +199,7 @@ export class StudioApp {
         {
           id: "main",
           name: this.pieceId,
-          layers: [
-            {
-              id: "L0",
-              piece: this.pieceId,
-              opacity: 1,
-              blend: "normal",
-              seed: this.seed,
-              parameters: { ...this.params },
-            },
-          ],
+          layers,
           modulation: mappings,
           post: { bloom: 0.2, feedback: 0.05 },
         },
@@ -187,8 +208,10 @@ export class StudioApp {
     };
     await this.session.loadSet(set);
     this.session.setSeed(this.seed);
-    for (const [k, v] of Object.entries(this.params)) {
-      this.session.runtime.getPiece("L0")?.setParameter(k, v);
+    for (const layer of layers) {
+      for (const [k, v] of Object.entries(this.params)) {
+        this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
+      }
     }
     this.session.startLoop();
     if (this.mode === "generate") {
@@ -738,7 +761,10 @@ export class StudioApp {
     const cfg = this.anim;
     toast("exporting animation…");
     try {
-      const result = await exportAnimation(cfg, async (_frame, _t) => {
+      const result = await exportAnimation(cfg, async (frame, _t) => {
+        // Advance logical simulation deterministically via session.frame
+        const wall = (frame / cfg.fps) * 1000;
+        this.session?.frame(wall);
         return this.canvas;
       }, (p) => {
         if (p === 0 || p > 0.95) toast(`export ${Math.round(p * 100)}%`);
@@ -930,8 +956,15 @@ export class StudioApp {
         <input id="cfg-zoom" type="range" min="0.2" max="2" step="0.01" value="${this.params.zoom}" />
         <label>Meta: organic ↔ geometric</label>
         <input id="cfg-meta-organic" type="range" min="0" max="1" step="0.01" value="${this.meta.organic}" />
-        <label>Lock density</label>
-        <input id="cfg-lock-density" type="checkbox" ${this.locked.has("density") ? "checked" : ""} />
+        <label>Meta: still ↔ kinetic</label>
+        <input id="cfg-meta-kinetic" type="range" min="0" max="1" step="0.01" value="${this.meta.kinetic}" />
+        <label>Locks</label>
+        <div class="row">
+          <label><input id="cfg-lock-density" type="checkbox" ${this.locked.has("density") ? "checked" : ""} /> density</label>
+          <label><input id="cfg-lock-chaos" type="checkbox" ${this.locked.has("chaos") ? "checked" : ""} /> chaos</label>
+          <label><input id="cfg-lock-hue" type="checkbox" ${this.locked.has("hue") ? "checked" : ""} /> hue</label>
+          <label><input id="cfg-lock-seed" type="checkbox" ${this.locked.has("seed") ? "checked" : ""} /> seed</label>
+        </div>
         <button type="button" id="cfg-save">Save Seed State</button>
         <button type="button" id="cfg-load-seeds">Refresh saved seeds</button>
         <div id="seed-list" class="muted"></div>
@@ -997,12 +1030,26 @@ export class StudioApp {
       const v = Number((e.target as HTMLInputElement).value);
       this.meta.organic = v;
       this.params = applyMetaAxis(this.params, "organic", v);
+      this.params.density = 0.95 - v * 0.55;
       this.session?.runtime.getPiece("L0")?.setParameter("chaos", this.params.chaos);
+      this.session?.runtime.getPiece("L0")?.setParameter("density", this.params.density);
     });
-    el.querySelector("#cfg-lock-density")?.addEventListener("change", (e) => {
-      if ((e.target as HTMLInputElement).checked) this.locked.add("density");
-      else this.locked.delete("density");
+    el.querySelector("#cfg-meta-kinetic")?.addEventListener("input", (e) => {
+      const v = Number((e.target as HTMLInputElement).value);
+      this.meta.kinetic = v;
+      this.params = applyMetaAxis(this.params, "kinetic", v);
+      this.session?.runtime.getPiece("L0")?.setParameter("zoom", this.params.zoom);
     });
+    const bindLock = (id: string, key: string) => {
+      el.querySelector(id)?.addEventListener("change", (e) => {
+        if ((e.target as HTMLInputElement).checked) this.locked.add(key);
+        else this.locked.delete(key);
+      });
+    };
+    bindLock("#cfg-lock-density", "density");
+    bindLock("#cfg-lock-chaos", "chaos");
+    bindLock("#cfg-lock-hue", "hue");
+    bindLock("#cfg-lock-seed", "seed");
     el.querySelector("#cfg-load-seeds")?.addEventListener("click", () => void this.refreshSeedList());
     void this.refreshSeedList();
   }
