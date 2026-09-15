@@ -32,6 +32,7 @@ export type StudioPrefs = {
   favorites: FavoriteEntry[];
   recent: HistoryEntry[];
   lastSetId: string;
+  color?: unknown;
 };
 
 const DEFAULTS: StudioPrefs = {

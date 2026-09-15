@@ -4,6 +4,9 @@
 
 import { FULLSCREEN_VERTEX_SHADER } from "../../gl";
 import type { FrameState, LivePiece, LiveTelemetry, RenderContext } from "../piece";
+import { defaultColorConfig, type ColorConfig } from "../../studio/color/model";
+import { bindColorUniforms, createColorGlBinding } from "../../studio/color/gl";
+import { COLOR_APPLY_FUNC, COLOR_UNIFORM_DECL } from "../../studio/color/shaderSnippets";
 
 const SDF_FRAG = `#version 300 es
 precision highp float;
@@ -15,6 +18,8 @@ uniform float u_chaos;
 uniform float u_density;
 uniform float u_zoom;
 uniform float u_seed;
+${COLOR_UNIFORM_DECL}
+${COLOR_APPLY_FUNC}
 
 float hash(float n){return fract(sin(n)*43758.5453);}
 float hash2(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
@@ -69,8 +74,13 @@ void main(){
 
   float hue=fract(u_hue+u_time*0.02+edge*0.1);
   vec3 col=hsl2rgb(vec3(hue,0.55,0.08+fill*0.35+glow*0.4+edge*0.25));
+  float rampT=clamp(glow+fill*0.6+edge*0.4,0.,1.);
+  col=applyPieceColor(col,rampT);
   float vig=1.-dot(uv,uv)*0.25;
   col*=vig;
+  vec3 bg=u_colorBg.rgb;
+  if(u_colorBg.a<0.5) bg=vec3(0.02,0.02,0.03);
+  col=mix(bg,col,clamp(col.r+col.g+col.b,0.,1.));
   o=vec4(col,1.0);
 }`;
 
@@ -101,6 +111,8 @@ export async function createSdfRaymarchLivePiece(
   pieceId: string,
 ): Promise<LivePiece> {
   const prog = compile(gl, SDF_FRAG);
+  const colorBinding = createColorGlBinding(gl);
+  let colorConfig: ColorConfig = defaultColorConfig();
   const loc = (n: string) => gl.getUniformLocation(prog, n);
   let seed = 42;
   const params: Record<string, number> = {
@@ -133,6 +145,15 @@ export async function createSdfRaymarchLivePiece(
     },
     setParameter(name, value) {
       if (typeof value === "number" && name in params) params[name] = value;
+      if (name === "color.mode" && typeof value === "string") {
+        colorConfig.mode = value as ColorConfig["mode"];
+      }
+      if (name === "color.rampMapping" && typeof value === "string") {
+        colorConfig.rampMapping = value as ColorConfig["rampMapping"];
+      }
+    },
+    setColorConfig(config: ColorConfig) {
+      colorConfig = config;
     },
     getParameter(name) {
       return params[name];
@@ -146,9 +167,11 @@ export async function createSdfRaymarchLivePiece(
     render(ctx: RenderContext) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, ctx.framebuffer);
       gl.viewport(0, 0, ctx.width, ctx.height);
-      gl.clearColor(0.02, 0.02, 0.03, 1);
+      const bg = colorConfig.transparentBackground ? [0, 0, 0, 0] : [0.02, 0.02, 0.03, 1];
+      gl.clearColor(bg[0]!, bg[1]!, bg[2]!, bg[3]!);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.useProgram(prog);
+      bindColorUniforms(gl, prog, colorBinding, colorConfig);
       gl.uniform2f(loc("u_res"), ctx.width, ctx.height);
       gl.uniform1f(loc("u_time"), last.t);
       gl.uniform1f(loc("u_hue"), params.hue);

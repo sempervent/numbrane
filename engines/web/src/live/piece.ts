@@ -3,6 +3,8 @@
  * Pieces do not own MIDI/audio devices, scenes, or OBS — only render state.
  */
 
+import type { ColorConfig } from "../studio/color/model";
+
 export type FrameState = {
   /** Logical frame index (when driven by fps). */
   frame: number;
@@ -43,6 +45,7 @@ export type LivePiece = {
   getBaseParameters(): Record<string, number>;
   getTelemetry(): LiveTelemetry;
   dispose(): void;
+  setColorConfig?: (config: ColorConfig) => void;
   exportState?: () => {
     arrays?: Record<string, Float32Array>;
     shapes?: Record<string, number[]>;
