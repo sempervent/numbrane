@@ -25,7 +25,7 @@ class TruchetTilesConfig(BaseModel):
 
     # Stylization
     line_width: float = Field(default=2.0, description="Line width")
-    palette: str = Field(default="void", description="Color palette")
+    palette: str = Field(default="ink", description="Color palette")
     background_color: tuple = Field(default=(0, 0, 0), description="Background color")
 
     # Noise for perturbation
@@ -43,19 +43,21 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
     # Create noise field for perturbation
     noise_field = NoiseField(scale=config.noise_scale, seed=ctx.rng.seed)
 
-    # Tile grid
-    num_tiles_x = ctx.width // config.tile_size + 1
-    num_tiles_y = ctx.height // config.tile_size + 1
-
     rng = ctx.rng.generator
     palette_colors = get_palette(config.palette)
-    color = np.array(palette_colors[0], dtype=np.uint8)
+    # Foreground must contrast with background (void[0] is near-black)
+    fg = palette_colors[-1] if len(palette_colors) > 1 else (220, 220, 230)
+    color = np.array(fg, dtype=np.uint8)
+    # Seed-sensitive tile size within a bounded range
+    tile_size = max(12, int(config.tile_size + (int(config.seed) % 17) - 8))
+    num_tiles_x = ctx.width // tile_size + 1
+    num_tiles_y = ctx.height // tile_size + 1
 
     # Draw tiles
     for ty in range(num_tiles_y):
         for tx in range(num_tiles_x):
-            tile_x = tx * config.tile_size
-            tile_y = ty * config.tile_size
+            tile_x = tx * tile_size
+            tile_y = ty * tile_size
 
             # Choose tile pattern (simplified - 4 basic patterns)
             pattern = rng.integers(0, 4)
@@ -67,28 +69,27 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                     np.array([tile_y / ctx.height]),
                 )[0]
                 * config.perturbation
-                * config.tile_size
+                * tile_size
             )
             perturb_y = (
                 noise_field.sample(
-                    np.array([tile_x / ctx.width]),
-                    np.array([tile_y / ctx.height]),
+                    np.array([(tile_x + 17) / ctx.width]),
+                    np.array([(tile_y + 31) / ctx.height]),
                 )[0]
                 * config.perturbation
-                * config.tile_size
+                * tile_size
             )
 
             tile_x += perturb_x
             tile_y += perturb_y
 
             # Draw tile pattern
-            center_x = tile_x + config.tile_size / 2
-            center_y = tile_y + config.tile_size / 2
-            half = config.tile_size / 2
+            center_x = tile_x + tile_size / 2
+            center_y = tile_y + tile_size / 2
+            half = tile_size / 2
 
             if pattern == 0:
                 # Top-left to bottom-right curve
-                # Simplified: draw arc as line segments
                 points = []
                 for i in range(20):
                     t = i / 19.0
@@ -112,7 +113,7 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                 draw_line(
                     layer,
                     (tile_x, tile_y),
-                    (tile_x + config.tile_size, tile_y + config.tile_size),
+                    (tile_x + tile_size, tile_y + tile_size),
                     config.line_width,
                     color,
                 )
@@ -120,8 +121,8 @@ def render(config: TruchetTilesConfig, ctx: RenderContext) -> RenderResult:
                 # Diagonal line top-right to bottom-left
                 draw_line(
                     layer,
-                    (tile_x + config.tile_size, tile_y),
-                    (tile_x, tile_y + config.tile_size),
+                    (tile_x + tile_size, tile_y),
+                    (tile_x, tile_y + tile_size),
                     config.line_width,
                     color,
                 )

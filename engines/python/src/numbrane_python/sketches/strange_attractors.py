@@ -18,7 +18,7 @@ class StrangeAttractorsConfig(BaseModel):
 
     # Attractor type
     attractor_type: str = Field(
-        default="lorenz", description="Attractor type (lorenz, rossler, clifford)"
+        default="clifford", description="Attractor type (lorenz, rossler, clifford)"
     )
 
     # Lorenz parameters
@@ -46,53 +46,67 @@ class StrangeAttractorsConfig(BaseModel):
     projection: str = Field(default="xy", description="Projection (xy, xz, yz)")
 
     # Rendering
-    palette: str = Field(default="void", description="Color palette")
-    density_scale: float = Field(default=1.0, description="Density scaling")
+    palette: str = Field(default="ink", description="Color palette")
+    density_scale: float = Field(default=0.55, description="Density gamma (<1 boosts ink)")
     trail_length: int = Field(default=100, description="Trail length for rendering")
+    framing: str = Field(default="fit", description="Framing mode: fit | center | fixed")
+    margin: float = Field(default=1.18, description="Framing margin multiplier")
+    view_span: float = Field(default=40.0, description="Fixed framing span (world units)")
+    ink: float = Field(default=1.35, description="Ink accumulation multiplier")
+    paper_style: str = Field(
+        default="dark", description="Paper style: dark | warm-paper | white-ink | plotter"
+    )
 
 
 def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
     """Render strange attractor."""
     canvas = Canvas(ctx.width, ctx.height, 3)
     layer = canvas.create_layer("main")
+    rng = np.random.default_rng(int(config.seed) & 0xFFFFFFFF)
 
-    # Initialize state
-    rng = ctx.rng.generator
+    # Seed-driven initial conditions and bounded coefficient variation
     if config.attractor_type == "lorenz":
-        x, y, z = 1.0, 1.0, 1.0
+        x, y, z = (float(v) for v in rng.uniform(-1.5, 1.5, 3))
+        sigma = config.lorenz_sigma + float(rng.uniform(-0.8, 0.8))
+        rho = config.lorenz_rho + float(rng.uniform(-2.5, 2.5))
+        beta = config.lorenz_beta + float(rng.uniform(-0.2, 0.2))
     elif config.attractor_type == "rossler":
-        x, y, z = 0.0, 0.0, 0.0
+        x, y, z = (float(v) for v in rng.uniform(-0.5, 0.5, 3))
+        ra = config.rossler_a + float(rng.uniform(-0.05, 0.05))
+        rb = config.rossler_b + float(rng.uniform(-0.05, 0.05))
+        rc = config.rossler_c + float(rng.uniform(-0.4, 0.4))
     else:  # clifford
-        x, y = 0.0, 0.0
+        x, y = (float(v) for v in rng.uniform(-0.1, 0.1, 2))
+        ca = config.clifford_a + float(rng.uniform(-0.35, 0.35))
+        cb = config.clifford_b + float(rng.uniform(-0.35, 0.35))
+        cc = config.clifford_c + float(rng.uniform(-0.25, 0.25))
+        cd = config.clifford_d + float(rng.uniform(-0.25, 0.25))
 
     # Density map
     density = np.zeros((ctx.height, ctx.width), dtype=np.float32)
+    samples: list[tuple[float, float]] = []
 
     # Integration
     for i in range(config.steps + config.burn_in):
         # Integrate
         if config.attractor_type == "lorenz":
-            dx = config.lorenz_sigma * (y - x)
-            dy = x * (config.lorenz_rho - z) - y
-            dz = x * y - config.lorenz_beta * z
+            dx = sigma * (y - x)
+            dy = x * (rho - z) - y
+            dz = x * y - beta * z
             x += dx * config.dt
             y += dy * config.dt
             z += dz * config.dt
         elif config.attractor_type == "rossler":
             dx = -(y + z)
-            dy = x + config.rossler_a * y
-            dz = config.rossler_b + z * (x - config.rossler_c)
+            dy = x + ra * y
+            dz = rb + z * (x - rc)
             x += dx * config.dt
             y += dy * config.dt
             z += dz * config.dt
         else:  # clifford (2D)
-            x_new = np.sin(config.clifford_a * y) + config.clifford_c * np.cos(
-                config.clifford_a * x
-            )
-            y_new = np.sin(config.clifford_b * x) + config.clifford_d * np.cos(
-                config.clifford_b * y
-            )
-            x, y = x_new, y_new
+            x_new = np.sin(ca * y) + cc * np.cos(ca * x)
+            y_new = np.sin(cb * x) + cd * np.cos(cb * y)
+            x, y = float(x_new), float(y_new)
 
         # Skip burn-in
         if i < config.burn_in:
@@ -108,29 +122,84 @@ def render(config: StrangeAttractorsConfig, ctx: RenderContext) -> RenderResult:
         else:  # yz
             px, py = y, z
 
-        # Map to screen coordinates
-        # Normalize and center
-        # (Simplified - would need proper scaling)
-        screen_x = int((px + 50) / 100 * ctx.width)
-        screen_y = int((py + 50) / 100 * ctx.height)
+        samples.append((px, py))
 
+    if not samples:
+        samples = [(0.0, 0.0)]
+    xs = np.array([p[0] for p in samples], dtype=np.float64)
+    ys = np.array([p[1] for p in samples], dtype=np.float64)
+    min_x, max_x = float(xs.min()), float(xs.max())
+    min_y, max_y = float(ys.min()), float(ys.max())
+    span_x = max(max_x - min_x, 1e-6)
+    span_y = max(max_y - min_y, 1e-6)
+    cx, cy = (min_x + max_x) * 0.5, (min_y + max_y) * 0.5
+    margin = max(1.05, float(config.margin))
+    aspect = ctx.width / max(ctx.height, 1)
+
+    if config.framing == "fixed":
+        span = max(float(config.view_span), 1e-6)
+        span_x_use = span * aspect
+        span_y_use = span
+    elif config.framing == "center":
+        # Independent axis fit — fills frame, may stretch slightly
+        span_x_use = span_x * margin
+        span_y_use = span_y * margin
+    else:  # fit — square world window preserving aspect
+        span = max(span_x, span_y) * margin
+        span_x_use = span * aspect if aspect >= 1 else span
+        span_y_use = span if aspect >= 1 else span / max(aspect, 1e-6)
+
+    for px, py in samples:
+        screen_x = int(((px - cx) / span_x_use + 0.5) * ctx.width)
+        screen_y = int(((py - cy) / span_y_use + 0.5) * ctx.height)
         if 0 <= screen_x < ctx.width and 0 <= screen_y < ctx.height:
-            density[screen_y, screen_x] += 1.0
+            density[screen_y, screen_x] += float(config.ink)
 
-    # Normalize density
+    # Soft neighborhood ink (deterministic 3x3) to reduce under-inking
+    if density.max() > 0:
+        padded = np.pad(density, 1, mode="constant")
+        soft = density.copy()
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                if dx == 0 and dy == 0:
+                    continue
+                soft += padded[1 + dy : 1 + dy + ctx.height, 1 + dx : 1 + dx + ctx.width] * 0.12
+        density = soft
+
+    # Normalize density with ink-friendly gamma
     density = (density - density.min()) / (density.max() - density.min() + 1e-6)
-    density = np.power(density, 1.0 / config.density_scale)
+    gamma = max(0.25, float(config.density_scale))
+    density = np.power(density, gamma)
 
-    # Map to colors
-    palette_colors = get_palette(config.palette)
-    colors = gradient_map(density, palette_colors)
-    layer[:] = colors
+    # Map to colors / paper styles
+    style = config.paper_style
+    if style == "warm-paper":
+        paper = np.full((ctx.height, ctx.width, 3), (246, 240, 228), dtype=np.float32)
+        ink_rgb = np.array([28, 24, 22], dtype=np.float32)
+        colors = paper * (1.0 - density[..., None]) + ink_rgb * density[..., None]
+        layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
+    elif style == "white-ink":
+        paper = np.zeros((ctx.height, ctx.width, 3), dtype=np.float32)
+        colors = paper + density[..., None] * 245.0
+        layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
+    elif style == "plotter":
+        paper = np.full((ctx.height, ctx.width, 3), 255, dtype=np.float32)
+        colors = paper * (1.0 - np.clip(density * 1.2, 0, 1)[..., None])
+        layer[:] = np.clip(colors, 0, 255).astype(np.uint8)
+    else:
+        palette_name = config.palette if config.palette != "void" else "ink"
+        palette_colors = get_palette(palette_name)
+        colors = gradient_map(density, palette_colors)
+        layer[:] = colors
 
     image = canvas.get_image()
 
-    # Post-processing
-    image = apply_vignette(image, 0.3)
-    image = apply_bloom(image, intensity=0.3, threshold=0.5)
+    # Post-processing — light vignette; skip bloom for plotter/paper styles
+    if style == "dark":
+        image = apply_vignette(image, 0.22)
+        image = apply_bloom(image, intensity=0.18, threshold=0.55)
+    elif style == "white-ink":
+        image = apply_vignette(image, 0.15)
 
     return RenderResult(
         image=image,
@@ -183,17 +252,67 @@ def defaults() -> dict:
 def presets() -> dict:
     """Return curated presets."""
     return {
+        "fine-line": {
+            "attractor_type": "clifford",
+            "steps": 250000,
+            "ink": 1.6,
+            "density_scale": 0.45,
+            "framing": "fit",
+            "paper_style": "plotter",
+            "palette": "ink",
+        },
+        "dense-cloud": {
+            "attractor_type": "lorenz",
+            "steps": 200000,
+            "ink": 1.8,
+            "density_scale": 0.4,
+            "framing": "fit",
+            "paper_style": "dark",
+            "palette": "duotone-teal",
+        },
+        "calligraphic": {
+            "attractor_type": "rossler",
+            "steps": 180000,
+            "ink": 1.5,
+            "density_scale": 0.5,
+            "framing": "center",
+            "paper_style": "warm-paper",
+            "palette": "earth",
+        },
+        "symmetry": {
+            "attractor_type": "clifford",
+            "clifford_a": -1.4,
+            "clifford_b": 1.6,
+            "clifford_c": 1.0,
+            "clifford_d": 0.7,
+            "steps": 300000,
+            "ink": 1.4,
+            "framing": "fit",
+            "paper_style": "white-ink",
+        },
+        "long-exposure": {
+            "attractor_type": "lorenz",
+            "steps": 400000,
+            "ink": 1.1,
+            "density_scale": 0.35,
+            "framing": "fit",
+            "paper_style": "dark",
+            "palette": "aurora",
+        },
         "lorenz_classic": {
             "attractor_type": "lorenz",
             "lorenz_sigma": 10.0,
             "lorenz_rho": 28.0,
             "lorenz_beta": 8.0 / 3.0,
+            "ink": 1.4,
+            "framing": "fit",
         },
         "rossler_chaos": {
             "attractor_type": "rossler",
             "rossler_a": 0.2,
             "rossler_b": 0.2,
             "rossler_c": 5.7,
+            "ink": 1.4,
         },
         "clifford_art": {
             "attractor_type": "clifford",
@@ -201,5 +320,7 @@ def presets() -> dict:
             "clifford_b": 1.6,
             "clifford_c": 1.0,
             "clifford_d": 0.7,
+            "ink": 1.5,
+            "paper_style": "plotter",
         },
     }

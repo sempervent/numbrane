@@ -18,8 +18,8 @@
     "interactive": false,
     "audio": false,
     "still": true,
-    "animated": true,
+    "animated": false,
     "realtime": true,
-    "audio_reactive": true
+    "audio_reactive": false
   }
 }

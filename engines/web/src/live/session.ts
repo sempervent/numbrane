@@ -4,7 +4,7 @@
 
 import { LiveRuntime } from "./runtime";
 import { Compositor } from "./compositor";
-import { createLivePiece } from "./pieces/registry";
+import { createLivePiece, UnsupportedLivePieceError } from "./pieces/registry";
 import { LIVE_PIECE_IDS } from "./pieces/pieceModes";
 import { LiveAudioInput } from "./inputs/audioInput";
 import {
@@ -139,14 +139,14 @@ export class LiveSession {
     return midi;
   }
 
-  async loadSet(set: SetDef): Promise<void> {
+  async loadSet(set: SetDef, liveMode: "animate" | "react" = "animate"): Promise<void> {
     this.runtime.clearPieces();
     this.runtime.loadSet(set);
-    await this.rebuildScenePieces();
+    await this.rebuildScenePieces(liveMode);
     this.emitStatus();
   }
 
-  private async rebuildScenePieces(): Promise<void> {
+  private async rebuildScenePieces(liveMode: "animate" | "react" = "animate"): Promise<void> {
     const scene = this.runtime.getScene();
     if (!scene) return;
     this.runtime.clearPieces();
@@ -163,7 +163,16 @@ export class LiveSession {
     this.canvas.height = h;
 
     for (const layer of scene.layers) {
-      const piece = await createLivePiece(gl, layer.piece);
+      let piece;
+      try {
+        piece = await createLivePiece(gl, layer.piece, liveMode);
+      } catch (err) {
+        if (err instanceof UnsupportedLivePieceError) {
+          console.warn(err.message);
+          continue;
+        }
+        throw err;
+      }
       const seed = layer.seed ?? this.runtime.getSeed();
       piece.initialize({ piece: layer.piece }, seed);
       piece.resize(w, h);

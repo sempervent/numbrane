@@ -92,4 +92,23 @@ def render_noise_landscape(recipe: dict[str, Any]) -> Image.Image:
         r = 1 + int(rng.random_f64() * 4)
         color = palette[int(rng.random_f64() * len(palette))]
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
+
+    overlay_kind = str(params.get("overlay", params.get("landscape.overlay", ""))).lower()
+    if overlay_kind in {"bezier", "concentric", "rects", "nested", "nested-rectangles"}:
+        from numbrane_python.landscape.overlays import (
+            bezier_overlay,
+            compose_landscape_with_overlay,
+            concentric_overlay,
+            nested_rectangles_overlay,
+        )
+
+        base = np.asarray(img, dtype=np.uint8)
+        if overlay_kind == "bezier":
+            ov = bezier_overlay(size, size, seed ^ 0xBEEF)
+        elif overlay_kind == "concentric":
+            ov = concentric_overlay(size, size, seed ^ 0xC0DE)
+        else:
+            ov = nested_rectangles_overlay(size, size, seed ^ 0xFACE)
+        composed = compose_landscape_with_overlay(base, ov)
+        img = Image.fromarray(composed)
     return img

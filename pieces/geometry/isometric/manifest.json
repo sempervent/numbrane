@@ -1,0 +1,21 @@
+{
+  "protocol_version": "0.1.0",
+  "piece_id": "geometry/isometric",
+  "name": "Isometric Lattice",
+  "backend": "python",
+  "version": "0.1.0",
+  "author": "NUMBRANE",
+  "supported_artifacts": [
+    "geometry-ir"
+  ],
+  "capabilities": {
+    "deterministic": true,
+    "animation": true,
+    "interactive": false,
+    "audio": false,
+    "still": true,
+    "animated": false,
+    "realtime": true,
+    "audio_reactive": false
+  }
+}

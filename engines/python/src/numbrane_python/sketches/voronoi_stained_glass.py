@@ -29,7 +29,7 @@ class VoronoiStainedGlassConfig(BaseModel):
     warp_strength: float = Field(default=0.2, description="Domain warp strength")
 
     # Post-processing
-    bloom_intensity: float = Field(default=0.3, description="Bloom intensity")
+    bloom_intensity: float = Field(default=0.12, description="Bloom intensity")
     vignette_strength: float = Field(default=0.2, description="Vignette strength")
 
 
@@ -122,7 +122,13 @@ def param_space():
 def presets() -> dict:
     """Return curated presets."""
     return {
-        "dense": {"num_points": 150, "voronoi_scale": 0.01},
-        "sparse": {"num_points": 30, "voronoi_scale": 0.05},
-        "colorful": {"palette": "sunset", "bloom_intensity": 0.5},
+        "dense": {"num_points": 150, "voronoi_scale": 0.01, "bloom_intensity": 0.08},
+        "sparse": {"num_points": 30, "voronoi_scale": 0.05, "bloom_intensity": 0.1},
+        "colorful": {"palette": "sunset", "bloom_intensity": 0.15},
+        "technical": {
+            "palette": "high-contrast",
+            "bloom_intensity": 0.0,
+            "edge_width": 1.5,
+            "num_points": 80,
+        },
     }

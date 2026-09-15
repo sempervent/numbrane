@@ -247,5 +247,36 @@ export async function createReactionDiffusionPiece(
       gl.deleteFramebuffer(a.fbo);
       gl.deleteFramebuffer(b.fbo);
     },
+    exportState() {
+      const src = readA ? a : b;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, src.fbo);
+      const packed = new Float32Array(simW * simH * 4);
+      gl.readPixels(0, 0, simW, simH, gl.RGBA, gl.FLOAT, packed);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      const U = new Float32Array(simW * simH);
+      const V = new Float32Array(simW * simH);
+      for (let i = 0; i < simW * simH; i++) {
+        U[i] = packed[i * 4] ?? 1;
+        V[i] = packed[i * 4 + 1] ?? 0;
+      }
+      return {
+        arrays: { U, V },
+        shapes: { U: [simH, simW], V: [simH, simW] },
+        json: { seed, simW, simH, kind: "rd" },
+      };
+    },
+    importState(s: {
+      arrays: Record<string, Float32Array>;
+      shapes: Record<string, number[]>;
+      json?: Record<string, unknown>;
+    }) {
+      const U = s.arrays.U;
+      const V = s.arrays.V;
+      if (!U || !V) return;
+      const shape = s.shapes.U ?? s.shapes.V;
+      const h = shape?.[0] ?? simH;
+      const w = shape?.[1] ?? Math.floor(U.length / Math.max(h, 1));
+      uploadState(U, V, w, h);
+    },
   };
 }

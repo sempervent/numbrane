@@ -229,5 +229,42 @@ export async function createSlimeMoldPiece(
       gl.deleteProgram(dispProg);
       gl.deleteTexture(tex);
     },
+    exportState() {
+      const agentsArr = new Float32Array(agents.length * 3);
+      for (let i = 0; i < agents.length; i++) {
+        agentsArr[i * 3] = agents[i]!.x;
+        agentsArr[i * 3 + 1] = agents[i]!.y;
+        agentsArr[i * 3 + 2] = agents[i]!.a;
+      }
+      return {
+        arrays: { agents: agentsArr, trail: trail.slice() },
+        shapes: {
+          agents: [agents.length, 3],
+          trail: [simH, simW],
+        },
+        json: { seed, kind: "slime" },
+      };
+    },
+    importState(s: {
+      arrays: Record<string, Float32Array>;
+      shapes: Record<string, number[]>;
+      json?: Record<string, unknown>;
+    }) {
+      const tr = s.arrays.trail;
+      const ag = s.arrays.agents;
+      if (tr && s.shapes.trail) {
+        simH = s.shapes.trail[0] ?? simH;
+        simW = s.shapes.trail[1] ?? simW;
+        trail = new Float32Array(tr);
+      }
+      if (ag) {
+        const n = s.shapes.agents?.[0] ?? Math.floor(ag.length / 3);
+        agents = [];
+        for (let i = 0; i < n; i++) {
+          agents.push({ x: ag[i * 3]!, y: ag[i * 3 + 1]!, a: ag[i * 3 + 2]! });
+        }
+      }
+      uploadTrail();
+    },
   };
 }

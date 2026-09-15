@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NUMBRANE Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Syne:wght@600;700&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --ink: #e8ecf4;
+        --mute: #8b93a7;
+        --accent: #7dd3fc;
+        --danger: #fb7185;
+        --panel: rgba(8, 10, 16, 0.82);
+        --line: rgba(255, 255, 255, 0.1);
+        --glow: rgba(125, 211, 252, 0.35);
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; background: #000; color: var(--ink); overflow: hidden; }
+      body {
+        font-family: "IBM Plex Mono", ui-monospace, monospace;
+        font-size: 12px;
+        cursor: none;
+      }
+      body.controls-visible, body.pointer-active { cursor: default; }
+      #stage-wrap { position: fixed; inset: 0; background: #000; }
+      #stage { width: 100%; height: 100%; display: block; }
+      #generate-preview {
+        position: absolute; inset: 0; width: 100%; height: 100%;
+        object-fit: contain; background: #000; display: none; z-index: 1;
+      }
+      #generate-preview.visible { display: block; }
+      #stage.hidden-live { visibility: hidden; }
+      #gen-status {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        color: var(--mute); letter-spacing: 0.08em; text-transform: uppercase;
+        pointer-events: none; z-index: 2; display: none;
+        background: rgba(0,0,0,0.55); padding: 0.6rem 1rem; border-radius: 8px;
+        border: 1px solid var(--line);
+      }
+      #gen-status.visible { display: block; }
+      #unsupported-banner {
+        position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%);
+        max-width: min(420px, 90vw); text-align: center; z-index: 3;
+        color: var(--ink); background: var(--panel); border: 1px solid var(--line);
+        border-radius: 12px; padding: 1rem 1.25rem; display: none;
+      }
+      #unsupported-banner.visible { display: block; }
+      #browser .piece img.thumb {
+        width: 100%; height: 72px; object-fit: cover; display: block;
+        margin-bottom: 0.35rem; border-radius: 4px; background: #111;
+      }
+      #chrome {
+        position: fixed; inset: 0; pointer-events: none; z-index: 20;
+      }
+      #chrome .panel {
+        pointer-events: auto;
+        background: var(--panel);
+        backdrop-filter: blur(14px);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+      }
+      #modebar {
+        position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
+        display: flex; gap: 0.35rem; padding: 0.35rem;
+        pointer-events: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        backdrop-filter: blur(12px);
+      }
+      #modebar button {
+        border: 0; background: transparent; color: var(--mute);
+        font: inherit; letter-spacing: 0.08em; padding: 0.45rem 0.9rem;
+        border-radius: 999px; cursor: pointer; text-transform: uppercase;
+      }
+      #modebar button.active { background: rgba(125,211,252,0.15); color: var(--accent); }
+      #config {
+        position: absolute; top: 4.2rem; right: 1rem; width: min(360px, calc(100vw - 2rem));
+        max-height: calc(100vh - 5.5rem); overflow: auto; padding: 0.9rem 1rem 1.1rem;
+        display: none;
+      }
+      #config.visible { display: block; }
+      #config h1 {
+        font-family: Syne, sans-serif; font-size: 1.05rem; margin: 0 0 0.35rem;
+        letter-spacing: 0.04em;
+      }
+      #config h2 {
+        margin: 0.85rem 0 0.35rem; font-size: 10px; letter-spacing: 0.1em;
+        text-transform: uppercase; color: var(--mute);
+      }
+      #config label { display: block; color: var(--mute); margin: 0.35rem 0 0.15rem; }
+      #config input, #config select, #config button, #config textarea {
+        width: 100%; margin: 0 0 0.4rem; padding: 0.4rem 0.5rem;
+        background: rgba(18, 22, 32, 0.9); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 6px; font: inherit;
+      }
+      #config button.primary { border-color: var(--accent); color: var(--accent); }
+      #config .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+      #config .row > * { width: 100%; }
+      #config .muted { color: var(--mute); line-height: 1.4; margin: 0 0 0.5rem; }
+      #config .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.5rem; }
+      #config .chips button { width: auto; padding: 0.25rem 0.5rem; margin: 0; font-size: 10px; }
+      #config .chips button.on { border-color: var(--accent); color: var(--accent); }
+      #help, #hud, #browser {
+        position: absolute; display: none;
+      }
+      #help.visible, #hud.visible, #browser.visible { display: block; }
+      #help {
+        left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: min(640px, calc(100vw - 2rem)); max-height: 80vh; overflow: auto;
+        padding: 1.1rem 1.25rem;
+      }
+      #help h1 { font-family: Syne, sans-serif; margin: 0 0 0.75rem; }
+      #help .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem 1.25rem; }
+      #help kbd {
+        display: inline-block; min-width: 2.2rem; text-align: center;
+        border: 1px solid var(--line); border-radius: 4px; padding: 0.1rem 0.35rem;
+        color: var(--accent); margin-right: 0.4rem; background: rgba(0,0,0,0.35);
+      }
+      #help .cmd { margin: 0.2rem 0; color: var(--ink); }
+      #hud {
+        left: 1rem; bottom: 1rem; padding: 0.65rem 0.8rem; min-width: 200px;
+        font-size: 11px; white-space: pre; line-height: 1.45;
+      }
+      #browser {
+        left: 1rem; top: 4.2rem; width: min(420px, calc(100vw - 2rem));
+        max-height: calc(100vh - 5.5rem); overflow: auto; padding: 0.9rem;
+      }
+      #browser .piece {
+        border: 1px solid var(--line); border-radius: 8px; padding: 0.55rem 0.65rem;
+        margin: 0 0 0.4rem; cursor: pointer;
+      }
+      #browser .piece:hover, #browser .piece.selected { border-color: var(--accent); }
+      #browser .piece .name { font-family: Syne, sans-serif; font-size: 13px; }
+      #browser .piece .meta { color: var(--mute); font-size: 10px; margin-top: 0.2rem; }
+      #toast {
+        position: absolute; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
+        background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+        padding: 0.45rem 0.8rem; pointer-events: none; opacity: 0; transition: opacity 0.2s;
+      }
+      #toast.show { opacity: 1; }
+      #meta-strip {
+        position: absolute; left: 1rem; bottom: 1rem; color: var(--mute);
+        font-size: 10px; letter-spacing: 0.04em; pointer-events: none;
+        text-shadow: 0 1px 4px #000;
+      }
+      body.controls-hidden #modebar,
+      body.controls-hidden #config,
+      body.controls-hidden #browser,
+      body.controls-hidden #meta-strip { display: none !important; }
+      body.fullscreen-art #modebar { opacity: 0; pointer-events: none; }
+      #variants {
+        display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; margin-top: 0.4rem;
+      }
+      #variants button {
+        aspect-ratio: 1; padding: 0; overflow: hidden; position: relative;
+      }
+      #variants canvas { width: 100%; height: 100%; display: block; }
+      .level {
+        height: 6px; background: rgba(255,255,255,0.08); border-radius: 3px; overflow: hidden;
+        margin: 0.25rem 0 0.5rem;
+      }
+      .level > span { display: block; height: 100%; width: 0%; background: var(--accent); }
+      details.advanced { margin-top: 0.5rem; color: var(--mute); }
+      details.advanced summary { cursor: pointer; margin-bottom: 0.35rem; }
+    </style>
+  </head>
+  <body class="controls-visible">
+    <div id="stage-wrap">
+      <canvas id="stage"></canvas>
+      <img id="generate-preview" alt="Generated preview" />
+      <div id="gen-status">Generating…</div>
+      <div id="unsupported-banner"></div>
+    </div>
+    <div id="chrome">
+      <div id="modebar">
+        <button type="button" data-mode="generate" class="active">Generate</button>
+        <button type="button" data-mode="animate">Animate</button>
+        <button type="button" data-mode="react">React</button>
+      </div>
+      <aside id="config" class="panel visible"></aside>
+      <aside id="browser" class="panel"></aside>
+      <div id="help" class="panel"></div>
+      <div id="hud" class="panel"></div>
+      <div id="meta-strip"></div>
+      <div id="toast"></div>
+    </div>
+    <script type="module" src="/src/studio/main.ts"></script>
+  </body>
+</html>

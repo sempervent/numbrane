@@ -3,6 +3,9 @@
 export const PIECE_MODE: Record<string, number> = {
   "geometry/metatron": 0,
   "geometry/seed-of-life": 0,
+  "geometry/flower-of-life": 0,
+  "geometry/sri-yantra": 0,
+  "geometry/isometric": 0,
   "geometry/circle-packing": 0,
   "reference/circle-lattice": 0,
   "fields/flow-hatching": 1,
@@ -35,6 +38,9 @@ export const PIECE_MODE: Record<string, number> = {
 export const PIECE_SUBMODE: Record<string, number> = {
   "geometry/seed-of-life": 0,
   "geometry/metatron": 1,
+  "geometry/flower-of-life": 0,
+  "geometry/sri-yantra": 1,
+  "geometry/isometric": 2,
   "geometry/circle-packing": 2,
   "reference/circle-lattice": 0,
   "fields/flow-hatching": 0,

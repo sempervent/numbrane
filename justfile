@@ -297,8 +297,82 @@ ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
 [group('ci')]
-ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke
+ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke studio-test studio-fidelity studio-smoke bake-print
     @echo "ci ok"
+
+# ── NUMBRANE Studio ──────────────────────────────────────────────────
+
+[group('studio')]
+studio:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    echo "NUMBRANE Studio → http://127.0.0.1:5173/studio.html"
+    echo "Mic stays in the browser (getUserMedia). Docker only serves static assets."
+    npm run dev -- --host 127.0.0.1 --port 5173 --open /studio.html
+
+[group('studio')]
+studio-test:
+    cd "{{root}}/engines/web" && npm run test:studio
+
+[group('studio')]
+studio-fidelity:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npm run test:studio-fidelity
+    cd "{{root}}/engines/python"
+    uv run pytest tests/test_studio_fidelity.py -q
+
+[group('studio')]
+studio-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npm run test:studio
+    npm run test:studio-fidelity
+    npm run typecheck
+
+[group('studio')]
+studio-e2e:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test tests/e2e/studio.spec.ts
+
+# ── Docker Bake ──────────────────────────────────────────────────────
+
+[group('docker')]
+bake *ARGS:
+    docker buildx bake -f docker-bake.hcl {{ARGS}}
+
+[group('docker')]
+bake-test:
+    docker buildx bake -f docker-bake.hcl test
+
+[group('docker')]
+bake-ci:
+    docker buildx bake -f docker-bake.hcl ci
+
+[group('docker')]
+bake-print:
+    docker buildx bake -f docker-bake.hcl --print
+
+[group('docker')]
+docker-studio:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    docker buildx bake -f docker-bake.hcl studio render
+    mkdir -p "{{root}}/artifacts"
+    echo "Studio → http://127.0.0.1:8080/studio.html"
+    echo "Microphone: browser getUserMedia (not passed into the container)."
+    echo "Exports land in ./artifacts/ via the renderer service."
+    docker compose up studio renderer
+
+[group('docker')]
+docker-test:
+    docker buildx bake -f docker-bake.hcl test
 
 # ── pieces / clean ───────────────────────────────────────────────────
 

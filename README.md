@@ -21,6 +21,23 @@ just seed-test && just render-test
 
 Seed Artifacts persist structured generative state for stills and continuation — see `docs/seeds.md`.
 
+## NUMBRANE Studio
+
+Unified **Generate / Animate / React** frontend (canvas-first, keyboard-driven):
+
+```bash
+just studio            # http://127.0.0.1:5173/studio.html
+just studio-test
+just studio-fidelity
+just docker-studio     # Bake image → http://127.0.0.1:8080/studio.html
+```
+
+**GENERATE** previews use the real piece renderer via `/api/render` (Python/reference algorithms), not a generic LIVE shader. **ANIMATE** / **REACT** use authentic stateful or deterministic runtimes per piece; unsupported modes are reported honestly.
+
+Keys: `1` Generate · `2` Animate · `3` React · `Tab` chrome · `?` help · `F` fullscreen · `` ` `` HUD · `R` new seed · `E` export.
+
+See `docs/experimenting.md` for a full playbook.
+
 ## Flagship: LATTICEFALL
 
 `pieces/flagship/latticefall` is a coherent polyglot artwork:

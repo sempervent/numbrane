@@ -426,8 +426,12 @@ def _circles_preview(circles: np.ndarray, width: int, height: int) -> np.ndarray
     return img
 
 
-def _preview_from_field(field: np.ndarray, palette: str = "void") -> np.ndarray:
-    colors = gradient_map(field, get_palette(palette))
+def _preview_from_field(field: np.ndarray, palette: str = "ink") -> np.ndarray:
+    f = np.asarray(field, dtype=np.float32)
+    f = (f - f.min()) / (f.max() - f.min() + 1e-6)
+    # Early/low-iteration fields need contrast lift for gallery readability
+    f = np.power(np.clip(f * 1.15, 0, 1), 0.75)
+    colors = gradient_map(f, get_palette(palette))
     return colors.astype(np.uint8)
 
 
@@ -450,9 +454,14 @@ def build_piece_state(
         "artifact_type": "parameter-state",
     }
 
-    if piece_id in {"geometry/seed-of-life", "geometry/metatron", "reference/circle-lattice"} or (
-        piece_id.endswith("circle-lattice")
-    ):
+    if piece_id in {
+        "geometry/seed-of-life",
+        "geometry/metatron",
+        "geometry/flower-of-life",
+        "geometry/sri-yantra",
+        "geometry/isometric",
+        "reference/circle-lattice",
+    } or piece_id.endswith("circle-lattice"):
         r = float(params.get("geom.radius", 1.0))
         if "seed-of-life" in piece_id:
             centers = seed_of_life_centers(r)
@@ -460,6 +469,15 @@ def build_piece_state(
         elif "metatron" in piece_id:
             centers = flower_of_life_centers(r, levels=int(params.get("geom.levels", 1)))
             ir = geometry_ir_from_centers(centers, r, edges=metatron_lines(centers))
+        elif "flower-of-life" in piece_id or "sri-yantra" in piece_id or "isometric" in piece_id:
+            from numbrane_python.geometry.sacred import build_sacred_geometry_ir
+
+            ir = build_sacred_geometry_ir(
+                piece_id,
+                radius=r,
+                layers=int(params.get("geom.layers", 3)),
+                scale=float(params.get("geom.scale", r)),
+            )
         else:
             ir = gen_lattice(recipe)
         out["geometry_ir"] = ir

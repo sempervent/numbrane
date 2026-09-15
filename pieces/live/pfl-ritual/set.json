@@ -1,0 +1,64 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-ritual",
+  "name": "PFL / Ritual",
+  "bpm": 96,
+  "default_transition": { "type": "crossfade", "duration_beats": 4 },
+  "scenes": [
+    {
+      "id": "ritual-meta",
+      "name": "Metatron",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "geometry/metatron",
+          "opacity": 1,
+          "parameters": { "density": 0.8, "hue": 0.48 }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.onset",
+          "destination": "layer.L0.density",
+          "amount": 0.45,
+          "min": 0.2,
+          "max": 1
+        },
+        {
+          "id": "m2",
+          "source": "audio.low",
+          "destination": "layer.L0.chaos",
+          "amount": 0.35,
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "post": { "bloom": 0.15, "chromatic": 0.05 }
+    },
+    {
+      "id": "ritual-yantra",
+      "name": "Sri Yantra",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "geometry/sri-yantra",
+          "opacity": 1,
+          "parameters": { "density": 0.75, "hue": 0.42 }
+        }
+      ],
+      "modulation": [
+        {
+          "id": "m1",
+          "source": "audio.energy",
+          "destination": "layer.L0.hue",
+          "amount": 0.25,
+          "min": 0,
+          "max": 1
+        }
+      ],
+      "post": { "bloom": 0.12 }
+    }
+  ],
+  "cues": []
+}
