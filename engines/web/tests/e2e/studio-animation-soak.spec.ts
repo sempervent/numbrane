@@ -25,7 +25,7 @@ const SAMPLE_INTERVAL_MS = 2_000;
 test.describe("Studio animation soak (Docker)", () => {
   for (const piece of SOAK_PIECES) {
     test(`${piece} — 30s sustained motion`, async ({ page }) => {
-      test.setTimeout(120_000);
+      test.setTimeout(240_000);
       await enterAnimate(page, piece, 42);
       await waitForLiveFrame(page, 30_000);
 

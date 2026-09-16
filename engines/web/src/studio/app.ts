@@ -4,7 +4,6 @@
 
 import { LiveSession } from "../live/session";
 import type { SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
-import { LIVE_PIECE_IDS } from "../live/pieces/pieceModes";
 import { createLivePiece } from "../live/pieces/registry";
 import {
   createStudioRegistry,
@@ -13,6 +12,11 @@ import {
 } from "./keyboard/registry";
 import { ExploreHistory, loadPrefs, savePrefs, type StudioPrefs } from "./prefs";
 import { fetchPieceCatalog, matchesFilter, type PieceInfo } from "./catalog";
+import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
+import {
+  resolveStudioDescriptor,
+  type StudioPieceDescriptor,
+} from "./descriptor/resolve";
 import {
   moreLikeThis,
   generateSeries,
@@ -188,6 +192,7 @@ export class StudioApp {
   private lastVisualChangeMs = Date.now();
   private pieceLoadedAt = Date.now();
   private lastVisualDigest = "";
+  private descriptors = new Map<string, StudioPieceDescriptor>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -204,12 +209,18 @@ export class StudioApp {
   async boot(): Promise<void> {
     try {
       this.pieces = await fetchPieceCatalog();
-    } catch {
-      this.pieces = LIVE_PIECE_IDS.map((piece_id) => ({
-        piece_id,
-        capabilities: { still: true, animated: true, realtime: true, audio_reactive: true },
-        family: piece_id.split("/")[0],
-      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast(`Catalog load failed: ${msg}`);
+      this.pieces = [];
+    }
+    this.descriptors.clear();
+    for (const p of this.pieces) {
+      try {
+        this.descriptors.set(p.piece_id, resolveStudioDescriptor(p));
+      } catch (err) {
+        console.error(`descriptor resolve failed for ${p.piece_id}`, err);
+      }
     }
 
     this.session = new LiveSession({
@@ -229,6 +240,7 @@ export class StudioApp {
     this.renderConfig();
     this.renderHelp();
     this.renderBrowser();
+    this.syncModebarCapabilities();
     this.syncChrome();
     this.syncUrl(false);
     this.pushHistory();
@@ -275,6 +287,8 @@ export class StudioApp {
       animationSource: this.session?.animationRuntime.spec.source ?? "generative",
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
+      buildSha: BUILD_SHA,
+      buildTime: BUILD_TIME,
     };
   }
 
@@ -364,24 +378,17 @@ export class StudioApp {
     const surface = studioSurface(this.pieceId, this.mode);
     const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
     const statusEl = document.getElementById("gen-status");
-    const banner = document.getElementById("unsupported-banner");
-    this.unsupportedMessage = "";
-
     if (surface === "unsupported") {
       this.session?.runtime.transport.stop();
       this.canvas.classList.add("hidden-live");
       previewEl?.classList.remove("visible");
       statusEl?.classList.remove("visible");
-      if (banner) {
-        const modeLabel = this.mode.toUpperCase();
-        this.unsupportedMessage = `This piece does not yet support ${modeLabel}`;
-        banner.textContent = this.unsupportedMessage;
-        banner.classList.add("visible");
-      }
+      this.showModeUnsupported(this.mode);
       this.syncChrome();
+      this.syncModebarCapabilities();
       return;
     }
-    banner?.classList.remove("visible");
+    this.clearFailureBanner();
 
     if (surface === "api-preview") {
       this.session?.runtime.transport.stop();
@@ -455,13 +462,15 @@ export class StudioApp {
     try {
       await this.session.loadSet(set, liveMode);
     } catch (err) {
-      this.unsupportedMessage =
-        err instanceof Error ? err.message : `Failed to load ${this.pieceId}`;
-      if (banner) {
-        banner.textContent = this.unsupportedMessage;
-        banner.classList.add("visible");
+      const backend = String(rendererKindFor(this.pieceId, this.mode) ?? "unknown");
+      if (this.mode === "animate" || this.mode === "react") {
+        this.showAnimationFailed(err, backend);
+      } else {
+        this.showFailureBanner(
+          "Scene load failed",
+          `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      toast(this.unsupportedMessage);
       return;
     }
     this.session.setSeed(this.seed);
@@ -944,10 +953,82 @@ export class StudioApp {
   private wireModebar(): void {
     document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (btn.disabled) return;
         const m = btn.dataset.mode as StudioMode;
         void this.setMode(m);
       });
     });
+  }
+
+  private descriptorFor(pieceId = this.pieceId): StudioPieceDescriptor | undefined {
+    return this.descriptors.get(pieceId);
+  }
+
+  private modeSupported(mode: StudioMode, pieceId = this.pieceId): boolean {
+    const d = this.descriptorFor(pieceId);
+    if (!d) return supportsMode(pieceId, mode);
+    if (mode === "generate") return d.generate.supported;
+    if (mode === "animate") return d.animate.supported;
+    return d.react.supported;
+  }
+
+  /** E2E helper — show chrome and optional piece browser without keyboard side effects. */
+  showChromeForTest(showBrowser = true): void {
+    this.controlsVisible = true;
+    if (showBrowser) this.browserVisible = true;
+    this.syncChrome();
+    if (showBrowser) this.renderBrowser();
+  }
+
+  syncModebarCapabilities(): void {
+    const d = this.descriptorFor();
+    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+      const mode = btn.dataset.mode as StudioMode;
+      const ok =
+        mode === "generate"
+          ? (d?.generate.supported ?? false)
+          : mode === "animate"
+            ? (d?.animate.supported ?? false)
+            : (d?.react.supported ?? false);
+      btn.disabled = !ok;
+      btn.title = ok ? "" : `${mode} unsupported for ${this.pieceId}`;
+      btn.style.opacity = ok ? "1" : "0.45";
+    });
+  }
+
+  private clearFailureBanner(): void {
+    const banner = document.getElementById("unsupported-banner");
+    if (banner) {
+      banner.textContent = "";
+      banner.classList.remove("visible");
+    }
+    this.unsupportedMessage = "";
+  }
+
+  private showFailureBanner(title: string, detail: string): void {
+    const banner = document.getElementById("unsupported-banner");
+    this.unsupportedMessage = `${title}\n\n${detail}`;
+    if (banner) {
+      banner.textContent = this.unsupportedMessage;
+      banner.style.whiteSpace = "pre-wrap";
+      banner.classList.add("visible");
+    }
+    toast(title);
+  }
+
+  private showModeUnsupported(mode: StudioMode): void {
+    this.showFailureBanner(
+      `${mode.toUpperCase()} unsupported`,
+      `Piece: ${this.pieceId}\nThis piece does not expose ${mode.toUpperCase()} in Studio.`,
+    );
+  }
+
+  private showAnimationFailed(err: unknown, backend: string): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    this.showFailureBanner(
+      "Animation failed",
+      `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${msg}`,
+    );
   }
 
   private wirePointerIdle(): void {
@@ -966,6 +1047,10 @@ export class StudioApp {
   }
 
   async setMode(mode: StudioMode): Promise<void> {
+    if (!this.modeSupported(mode)) {
+      this.showModeUnsupported(mode);
+      return;
+    }
     this.mode = mode;
     this.prefs.mode = mode;
     this.persist();
@@ -982,17 +1067,16 @@ export class StudioApp {
     await this.applyPieceScene();
     this.renderConfig();
     this.renderHelp();
+    this.syncModebarCapabilities();
     this.syncUrl(true);
-    if (!supportsMode(this.pieceId, mode)) {
-      toast(`This piece does not yet support ${mode.toUpperCase()}`);
-    } else {
-      toast(`${mode.toUpperCase()} mode`);
-    }
+    toast(`${mode.toUpperCase()} mode`);
   }
 
   async setPiece(pieceId: string): Promise<void> {
     this.pieceId = pieceId;
     this.prefs.pieceId = pieceId;
+    this.recipeDigest = "";
+    this.renderDigest = "";
     if (this.mode === "animate" || this.mode === "react") {
       this.playing = true;
     }
@@ -1014,6 +1098,7 @@ export class StudioApp {
     this.pushHistory();
     this.renderConfig();
     this.renderBrowser();
+    this.syncModebarCapabilities();
     this.syncUrl(true);
   }
 
@@ -1659,14 +1744,14 @@ export class StudioApp {
     for (const p of list) {
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
-      const caps = p.capabilities || {};
-      const rt = getPieceRuntime(p.piece_id);
-      const animateBroken =
-        this.mode === "animate" && !isBrowserNativeAnimate(rt.animate);
+      div.dataset.pieceId = p.piece_id;
+      const desc = this.descriptors.get(p.piece_id);
+      const capLabel = (label: string, ok: boolean) =>
+        `<span class="${ok ? "cap-ok" : "cap-na"}">${label}${ok ? "" : " · unsupported"}</span>`;
       div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" />
-        <div class="name">${p.title || p.name || p.piece_id}${animateBroken ? " · ANIMATE BROKEN" : ""}</div>
-        <div class="meta">${p.family || p.piece_id.split("/")[0]} · gen:${rt.generate} · anim:${rt.animate ?? "null"}
-        ${caps.still ? "still " : ""}${caps.animated ? "anim " : ""}${caps.realtime ? "rt " : ""}${caps.audio_reactive ? "audio" : ""}</div>
+        <div class="name">${p.title || p.name || p.piece_id}</div>
+        <div class="meta caps">${capLabel("Generate", desc?.generate.supported ?? false)} · ${capLabel("Animate", desc?.animate.supported ?? false)} · ${capLabel("React", desc?.react.supported ?? false)}</div>
+        <div class="meta">${p.family || p.piece_id.split("/")[0]} · ${desc?.animate.backend ?? "—"}</div>
         <div class="meta">${p.description || ""}</div>`;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       host.appendChild(div);
@@ -2351,6 +2436,9 @@ export class StudioApp {
           `css ${diag?.visibleCssWidth?.toFixed(0) ?? "?"}x${diag?.visibleCssHeight?.toFixed(0) ?? "?"}`,
           `audio ${this.audioEnabled ? "on" : "off"}`,
           `controls ${this.controlsVisible ? "shown" : "hidden"}`,
+          `build ${buildInfoLine()}`,
+          `BUILD_SHA ${BUILD_SHA}`,
+          `BUILD_TIME ${BUILD_TIME}`,
         ].join("\n");
       }
     }

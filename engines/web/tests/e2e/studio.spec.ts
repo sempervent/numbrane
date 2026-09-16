@@ -60,12 +60,25 @@ test.describe("NUMBRANE Studio", () => {
     const a = await read();
     expect(a.pieceId).toBe("geometry/metatron");
 
+    const firstDigest = a.recipeDigest;
     await page.evaluate(async () => {
       const s = (window as unknown as { __NUMBRANE_STUDIO__: { setPiece: (id: string) => Promise<void> } })
         .__NUMBRANE_STUDIO__;
       await s.setPiece("reaction-diffusion/reaction-diffusion");
     });
-    await page.waitForTimeout(1200);
+    await page.waitForFunction(
+      (prev) => {
+        const s = (window as unknown as { __NUMBRANE_STUDIO__?: { pieceId?: string; recipeDigest?: string } })
+          .__NUMBRANE_STUDIO__;
+        return (
+          s?.pieceId === "reaction-diffusion/reaction-diffusion" &&
+          !!s?.recipeDigest &&
+          s.recipeDigest !== prev
+        );
+      },
+      firstDigest,
+      { timeout: 15_000 },
+    );
     const b = await read();
     expect(b.pieceId).toBe("reaction-diffusion/reaction-diffusion");
     expect(b.pieceId).not.toBe(a.pieceId);

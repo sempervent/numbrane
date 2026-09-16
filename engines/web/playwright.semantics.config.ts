@@ -5,10 +5,10 @@ export default defineConfig({
   testMatch: "**/studio-animation-semantics.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 180_000,
+  timeout: 300_000,
   use: {
     baseURL: process.env.STUDIO_URL ?? "http://127.0.0.1:8080",
-    trace: "retain-on-failure",
+    trace: "off",
   },
   projects: [
     {

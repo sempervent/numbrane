@@ -137,6 +137,9 @@
       #browser .piece:hover, #browser .piece.selected { border-color: var(--accent); }
       #browser .piece .name { font-family: Syne, sans-serif; font-size: 13px; }
       #browser .piece .meta { color: var(--mute); font-size: 10px; margin-top: 0.2rem; }
+      #browser .piece .meta.caps .cap-ok { color: var(--accent); }
+      #browser .piece .meta.caps .cap-na { color: var(--danger); opacity: 0.85; }
+      #modebar button:disabled { opacity: 0.45; cursor: not-allowed; }
       #toast {
         position: absolute; left: 50%; bottom: 1.25rem; transform: translateX(-50%);
         background: var(--panel); border: 1px solid var(--line); border-radius: 8px;

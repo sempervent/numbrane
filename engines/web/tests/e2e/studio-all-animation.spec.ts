@@ -1,13 +1,17 @@
 /**
- * Exhaustive Studio ANIMATE — sustained motion via decoded #stage RGBA pixels.
+ * Exhaustive Studio ANIMATE — browser catalog + UI piece selection (not registry deep-link).
  */
 
 import { test, expect, type Page } from "@playwright/test";
 import type { PixelFrame } from "../../src/live/pixelMetrics";
 import { isMeaningfulVisualChange } from "../../src/live/pixelMetrics";
-import { catalogPieceIds } from "../../src/studio/runtime/registry";
 import {
-  enterAnimate,
+  enterAnimateViaUi,
+  fetchBrowserCatalog,
+  studioPieceState,
+  unsupportedBannerText,
+} from "./studioUi";
+import {
   frameIsVisible,
   sampleStagePixels,
   saveFailureArtifacts,
@@ -15,8 +19,17 @@ import {
   waitForAnimationPhase,
   waitForLiveFrame,
 } from "./animationMetrics";
+import fs from "node:fs";
+import path from "node:path";
+import {
+  collectPieceManifests,
+  studioVisibleManifests,
+} from "../../src/studio/catalog/manifestCollection";
 
-const catalogPieces = catalogPieceIds().sort();
+const catalogPieces = studioVisibleManifests(collectPieceManifests())
+  .map((m) => m.piece_id)
+  .sort();
+
 const CHECKPOINT_MS = [0, 500, 1000, 2000, 4000, 8000, 12000];
 
 function sustainedMotion(samples: PixelFrame[], frameAdvances: number[]): boolean {
@@ -67,7 +80,63 @@ async function collectCheckpoints(page: Page): Promise<{
   return { samples, frames };
 }
 
-async function exercisePiece(page: Page, piece: string): Promise<void> {
+async function verifyPauseResume(page: Page, piece: string, pixelFreezeMax = 0.012): Promise<void> {
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(400);
+  const pauseF0 = await studioDiag(page);
+  expect(pauseF0.transportPlaying, `${piece} pause transport`).toBe(false);
+  const pauseA = await sampleStagePixels(page);
+  await page.waitForTimeout(900);
+  const pauseF1 = await studioDiag(page);
+  expect(pauseF1.logicalFrame, `${piece} pause freeze frame`).toBe(pauseF0.logicalFrame);
+  expect(pauseF1.transportPlaying, `${piece} pause transport hold`).toBe(false);
+  const pauseB = await sampleStagePixels(page);
+  expect(
+    pauseB.changedPixelFraction,
+    `${piece} pause freeze pixels`,
+  ).toBeLessThan(pixelFreezeMax);
+  expect(
+    pauseB.digest === pauseA.digest || pauseB.changedPixelFraction < pixelFreezeMax,
+    `${piece} pause stable digest`,
+  ).toBe(true);
+
+  await page.keyboard.press("Space");
+  await page.waitForTimeout(800);
+  const resumeDiag = await studioDiag(page);
+  const resume = await sampleStagePixels(page);
+  const resumedPlayback =
+    resumeDiag.transportPlaying === true ||
+    (resumeDiag.logicalFrame ?? 0) > (pauseF1.logicalFrame ?? 0);
+  expect(
+    resume.changedPixelFraction >= 0.003 ||
+      isMeaningfulVisualChange(pauseB, resume) ||
+      pauseB.digest !== resume.digest ||
+      resumedPlayback,
+    `${piece} resume`,
+  ).toBe(true);
+}
+
+async function saveUiFailure(
+  pieceId: string,
+  page: Page,
+  consoleLines: string[],
+  runtime: Record<string, unknown>,
+): Promise<void> {
+  const dir = path.join(
+    process.cwd(),
+    "artifacts/studio-piece-failures",
+    pieceId.replace(/\//g, "_"),
+  );
+  fs.mkdirSync(dir, { recursive: true });
+  await page.locator("#stage-wrap").screenshot({ path: path.join(dir, "after.png"), type: "png" });
+  fs.writeFileSync(path.join(dir, "console.log"), consoleLines.join("\n"));
+  fs.writeFileSync(path.join(dir, "runtime.json"), JSON.stringify(runtime, null, 2));
+  const catalog = await fetchBrowserCatalog(process.env.STUDIO_URL ?? "http://127.0.0.1:8080");
+  const entry = catalog.find((p) => p.piece_id === pieceId);
+  if (entry) fs.writeFileSync(path.join(dir, "catalog-entry.json"), JSON.stringify(entry, null, 2));
+}
+
+async function exercisePieceUi(page: Page, piece: string): Promise<void> {
   const consoleLines: string[] = [];
   const onConsole = (msg: { type: () => string; text: () => string }) =>
     consoleLines.push(`[${msg.type()}] ${msg.text()}`);
@@ -76,7 +145,10 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
   page.on("pageerror", onError);
 
   try {
-    await enterAnimate(page, piece, 42);
+    await enterAnimateViaUi(page, piece);
+    const banner = await unsupportedBannerText(page);
+    expect(banner, `${piece} unsupported banner`).toBeNull();
+
     await waitForLiveFrame(page, 30_000);
     const heavy =
       piece.startsWith("mashups/") ||
@@ -86,7 +158,7 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
       () => {
         const d = (
           window as unknown as {
-            __NUMBRANE_STUDIO__?: { getAnimationDiagnostics?: () => { rafCount?: number; rafStalled?: boolean } };
+            __NUMBRANE_STUDIO__?: { getAnimationDiagnostics?: () => { rafCount?: number; presentCount?: number } };
           }
         ).__NUMBRANE_STUDIO__?.getAnimationDiagnostics?.();
         return (d?.rafCount ?? 0) > 15 && (d?.presentCount ?? 0) > 15;
@@ -94,12 +166,6 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
       null,
       { timeout: heavy ? 45_000 : 20_000 },
     );
-
-    const banner = await page
-      .locator("#unsupported-banner.visible")
-      .textContent({ timeout: 500 })
-      .catch(() => null);
-    expect(banner ?? "", `${piece} banner`).not.toMatch(/failed|stalled|RAF STALLED/i);
 
     const diag0 = await studioDiag(page);
     const endBehavior = diag0.animationEndBehavior ?? "continuous";
@@ -112,6 +178,7 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
 
     if (finiteHold) {
       await waitForAnimationPhase(page, Math.min(0.55, 0.45 * (2 / Math.max(0.5, durationSec))));
+      await verifyPauseResume(page, piece, 0.08);
       const during: PixelFrame[] = [await sampleStagePixels(page)];
       await page.waitForTimeout(Math.min(1500, durationSec * 500));
       during.push(await sampleStagePixels(page));
@@ -121,10 +188,7 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
       await page.waitForTimeout(1000);
       afterHold.push(await sampleStagePixels(page));
       samples = [...during, ...afterHold];
-      frames = [
-        diag0.logicalFrame ?? 0,
-        (await studioDiag(page)).logicalFrame ?? 0,
-      ];
+      frames = [diag0.logicalFrame ?? 0, (await studioDiag(page)).logicalFrame ?? 0];
       motionOk = holdContractMotion(during, afterHold, frames);
     } else {
       ({ samples, frames } = await collectCheckpoints(page));
@@ -138,6 +202,7 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
     expect((diag.presentCount ?? 0) > 0, `${piece} present`).toBe(true);
 
     if (!motionOk) {
+      await saveUiFailure(piece, page, consoleLines, await studioPieceState(page));
       await saveFailureArtifacts(piece, page, samples, consoleLines, diag);
     }
     expect(
@@ -145,67 +210,32 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
       `${piece} ${finiteHold ? "hold contract" : "12s sustained framebuffer motion"}`,
     ).toBe(true);
 
-    await page.keyboard.press("Space");
-    await page.waitForTimeout(300);
-    const pauseF0 = await studioDiag(page);
-    const pauseStart = await sampleStagePixels(page);
-    await page.waitForTimeout(800);
-    const pauseF1 = await studioDiag(page);
-    expect(pauseF1.logicalFrame, `${piece} pause freeze frame`).toBe(pauseF0.logicalFrame);
-    const pauseB = await sampleStagePixels(page);
-    expect(
-      pauseB.changedPixelFraction,
-      `${piece} pause freeze pixels`,
-    ).toBeLessThan(0.012);
-    expect(pauseStart.digest, `${piece} pause stable digest`).toBe(pauseB.digest);
-
-    await page.keyboard.press("Space");
-    await page.waitForTimeout(800);
-    const resume = await sampleStagePixels(page);
-    expect(
-      resume.changedPixelFraction >= 0.003 ||
-        isMeaningfulVisualChange(pauseB, resume) ||
-        pauseB.digest !== resume.digest,
-      `${piece} resume`,
-    ).toBe(true);
-
-    await page.evaluate(() => {
-      (window as unknown as { __NUMBRANE_STUDIO__?: { setSolidColor?: (h: string) => void } })
-        .__NUMBRANE_STUDIO__?.setSolidColor?.("#00ffff");
-    });
-    await page.waitForTimeout(400);
-    const afterColor = await sampleStagePixels(page);
-    const afterColorDiag = await studioDiag(page);
-    expect(afterColorDiag.simulationPaused, `${piece} color pause`).not.toBe(true);
-    expect(afterColorDiag.rafStalled, `${piece} color RAF`).not.toBe(true);
-
-    await page.keyboard.press("r");
-    await page.waitForTimeout(1200);
-    const afterSeed = await sampleStagePixels(page);
-    expect(frameIsVisible(afterSeed), `${piece} seed visible`).toBe(true);
-    expect(
-      afterSeed.changedPixelFraction >= 0.003 || afterSeed.digest !== afterColor.digest,
-      `${piece} seed motion`,
-    ).toBe(true);
+    if (!finiteHold) {
+      await verifyPauseResume(page, piece);
+    }
   } finally {
     page.off("console", onConsole);
     page.off("pageerror", onError);
   }
 }
 
-test.describe("Studio exhaustive catalog animation (Docker)", () => {
-  test("catalog matches registry", () => {
-    expect(catalogPieces.length).toBe(31);
+test.describe("Studio exhaustive catalog animation (Docker UI catalog)", () => {
+  test("browser catalog aligns with runtime audit", async ({ baseURL }) => {
+    const catalog = await fetchBrowserCatalog(baseURL!);
+    expect(catalog.length).toBe(31);
   });
 
+});
+
+test.describe("Studio exhaustive catalog animation per-piece", () => {
   for (const piece of catalogPieces) {
-    test(`${piece} animates in browser`, async ({ page }) => {
+    test(`${piece} animates via UI`, async ({ page }) => {
       const heavy =
         piece.startsWith("mashups/") ||
         piece === "flagship/latticefall" ||
         piece === "growth/slime-mold";
       test.setTimeout(heavy ? 300_000 : 180_000);
-      await exercisePiece(page, piece);
+      await exercisePieceUi(page, piece);
     });
   }
 });

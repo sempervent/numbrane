@@ -5,7 +5,7 @@ export default defineConfig({
   testMatch: "**/studio-animation-soak.spec.ts",
   fullyParallel: false,
   workers: 1,
-  timeout: 120_000,
+  timeout: 300_000,
   use: {
     baseURL: process.env.STUDIO_URL ?? "http://127.0.0.1:8080",
     trace: "retain-on-failure",

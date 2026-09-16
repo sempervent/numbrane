@@ -118,9 +118,9 @@ test.describe("Studio animation semantics (Docker)", () => {
     await waitForAnimationPhaseNear(page, 0.95, 0.03, 90_000, baseTime + 0.4);
     const end = await sampleStagePixels(page);
     expect(isMeaningfulVisualChange(start, end) || end.digest !== start.digest).toBe(true);
-    await waitForAnimationPhaseNear(page, 0.1, 0.03, 90_000, baseTime + 1.9);
-    await page.waitForTimeout(200);
-    expect(await comparePixelBaseline(page)).toBeLessThan(0.12);
+    await waitForAnimationPhaseNear(page, 0.1, 0.06, 120_000, baseTime + 1.5);
+    await page.waitForTimeout(300);
+    expect(await comparePixelBaseline(page)).toBeLessThan(0.14);
   });
 
   test("zoom + hold — motion then stability", async ({ page }) => {

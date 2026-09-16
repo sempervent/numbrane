@@ -231,12 +231,12 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     paramSchema: VORONOI_SCHEMA,
   }),
 
-  "audiovisual/nodes": d("audiovisual/nodes", "unsupported", "webgl-stateful", "webgl-stateful", {
+  "audiovisual/nodes": d("audiovisual/nodes", "webgl-stateful", "webgl-stateful", "webgl-stateful", {
     seedAffectsStructure: true,
   }),
   "reference/audiovisual-nodes": d(
     "reference/audiovisual-nodes",
-    "unsupported",
+    "webgl-stateful",
     "webgl-stateful",
     "webgl-stateful",
   ),

@@ -366,6 +366,10 @@ studio-animation-soak:
     npx playwright test -c playwright.soak.config.ts
 
 [group('studio')]
+studio-catalog-audit:
+    cd "{{root}}/engines/web" && npx tsx scripts/studio-catalog-audit.ts
+
+[group('studio')]
 studio-animation-semantics:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -380,7 +384,7 @@ animation-export:
     cd "{{root}}/engines/web"
     npm run test -- --run tests/export_backend.test.ts tests/animation_export_variation.test.ts tests/color.test.ts
     cd "{{root}}/engines/python"
-    uv run pytest tests/test_render_service.py -q -k "animation_job or export_frame"
+    uv run pytest tests/test_render_service.py -q
 
 # ── Docker Bake ──────────────────────────────────────────────────────
 
