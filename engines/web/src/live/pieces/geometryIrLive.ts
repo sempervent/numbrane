@@ -83,6 +83,9 @@ export async function createGeometryIrPiece(
     resize() {},
     update(frame) {
       last = frame;
+      const endBehavior = Math.floor(params["anim.endBehavior"] ?? 5);
+      const constructionT = params["anim.constructionT"] ?? 1;
+      if (endBehavior === 0 && constructionT >= 0.999) return;
       if (audio.onset > 0.55) params.rotation += 0.03;
       params.rotation += audio.low * 0.008;
     },
@@ -122,8 +125,18 @@ export async function createGeometryIrPiece(
       c2.fillRect(0, 0, ctx.width, ctx.height);
       const cx = ctx.width * 0.5;
       const cy = ctx.height * 0.5;
-      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom * (1 + audio.energy * 0.12);
-      const rot = params.rotation + last.t * 0.04 * params.chaos;
+      const constructionT = Math.min(1, Math.max(0, params["anim.constructionT"] ?? 1));
+      const endBehavior = params["anim.endBehavior"] ?? 5;
+      const buildProgress = constructionT;
+      const holdComplete = constructionT >= 0.999 && endBehavior === 0;
+      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom *
+        (holdComplete ? 1 : 1 + audio.energy * 0.12);
+      const breathe =
+        holdComplete ? 1 : 1 + 0.04 * Math.sin(last.t * 1.15) * (endBehavior === 5 ? 1 : 0);
+      const drawScale = scale * breathe;
+      const rot = holdComplete
+        ? params.rotation
+        : params.rotation + last.t * 0.04 * params.chaos;
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
       const rgb = `hsl(${params.hue * 360} 70% ${48 + audio.energy * 18}%)`;
@@ -139,12 +152,7 @@ export async function createGeometryIrPiece(
       const edgeCount = ir.edges.length;
       const centerCount = ir.centers.length;
       const totalSteps = Math.max(24, primitiveCount || edgeCount + centerCount);
-      const buildFrames = Math.max(120, totalSteps * 2);
-      // Loop construction continuously — ANIMATE must never freeze on a finished still.
-      const buildProgress = (last.frame % buildFrames) / buildFrames;
       const reveal = 0.15 + buildProgress * 0.85;
-      const breathe = 1 + 0.04 * Math.sin(last.t * 1.15);
-      const drawScale = scale * breathe;
       const maxPrimitives =
         primitiveCount > 0 ? Math.max(1, Math.floor(primitiveCount * buildProgress)) : 0;
       const maxEdges = edgeCount > 0 ? Math.max(1, Math.floor(edgeCount * buildProgress)) : 0;

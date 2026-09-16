@@ -20,7 +20,21 @@ import {
   type MetaAxis,
 } from "./explore/variants";
 import { COMPOSITIONS, compositionById } from "./compositions";
-import { presetsForPiece, ANIM_ARCS } from "./presets";
+import { presetsForPiece } from "./presets";
+import {
+  animationCapabilitiesFor,
+  defaultSpecForPiece,
+  normalizeSpecForPiece,
+} from "./animation/capabilities";
+import { panPresetViews } from "./animation/camera";
+import {
+  exportLoopFlag,
+  type AnimationEasing,
+  type AnimationEndBehavior,
+  type AnimationSource,
+  type AnimationSpec,
+  type PanPreset,
+} from "./animation/spec";
 import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
 import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
@@ -149,7 +163,7 @@ export class StudioApp {
     label: string;
     thumbUrl: string | null;
   }> = [];
-  animArc = "emergence";
+  animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
   compositionId: string | null = null;
   audioEnabled = false;
   audioLevel = 0;
@@ -253,6 +267,14 @@ export class StudioApp {
       visibleCssWidth: diag?.visibleCssWidth ?? 0,
       visibleCssHeight: diag?.visibleCssHeight ?? 0,
       stallError: this.stallError,
+      animationTimeSec: this.session?.animationRuntime.animationTimeSec ?? 0,
+      animationPhase:
+        this.session?.animationRuntime.evaluate().phase ?? 0,
+      animationDurationSec: this.session?.animationRuntime.spec.durationSec ?? 0,
+      animationEndBehavior: this.session?.animationRuntime.spec.endBehavior ?? "continuous",
+      animationSource: this.session?.animationRuntime.spec.source ?? "generative",
+      useSourceSnapshot:
+        this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
     };
   }
 
@@ -275,6 +297,17 @@ export class StudioApp {
     }
   }
 
+  pinPixelBaseline(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    this.session.readPresentedPixels(64, 36, true);
+    this.session.pinPresentedBaseline();
+  }
+
+  comparePixelBaseline(): number | null {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
+    return this.session.comparePresentedToBaseline(64, 36);
+  }
+
   private ensureAnimateTransport(): void {
     if (this.mode !== "animate" && this.mode !== "react") return;
     this.playing = true;
@@ -292,6 +325,17 @@ export class StudioApp {
       this.lastVisualDigest = stats.digest;
       this.lastVisualChangeMs = Date.now();
     }
+  }
+
+  syncAnimationSpecToSession(preview = true): void {
+    if (!this.session || this.mode !== "animate") return;
+    this.animationSpec = normalizeSpecForPiece(this.pieceId, {
+      ...this.animationSpec,
+      durationSec: this.anim.durationSec,
+    });
+    this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+    this.session.setAnimationSpec(this.animationSpec);
+    if (preview) this.kickLiveSurface();
   }
 
   private applyLiveColor(reloadScene = false): void {
@@ -463,6 +507,15 @@ export class StudioApp {
     } else {
       this.session.runtime.setSimulationPaused(true);
       this.session.runtime.transport.stop();
+    }
+    if (this.mode === "animate") {
+      this.animationSpec = normalizeSpecForPiece(
+        this.pieceId,
+        this.animationSpec.source ? this.animationSpec : defaultSpecForPiece(this.pieceId),
+      );
+      this.anim.durationSec = this.animationSpec.durationSec;
+      this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+      this.session.setAnimationSpec(this.animationSpec);
     }
     this.kickLiveSurface();
     this.stallError = "";
@@ -952,6 +1005,8 @@ export class StudioApp {
       }
     }
     this.params = next;
+    this.animationSpec = defaultSpecForPiece(pieceId);
+    this.anim.durationSec = this.animationSpec.durationSec;
     this.compositionId = null;
     this.frame = 0;
     this.persist();
@@ -1360,6 +1415,7 @@ export class StudioApp {
     toast(`exporting ${fmt} (${backend})…`);
     const frameCount = Math.max(1, Math.floor(cfg.fps * cfg.durationSec));
     const apiParams = paramsForApi(this.params, this.color);
+    cfg.loop = exportLoopFlag(this.animationSpec.endBehavior);
 
     try {
       if (backend === "runtime-frames") {
@@ -1444,24 +1500,27 @@ export class StudioApp {
     } catch (serverErr) {
       // Fallback: browser logical-frame WebM path
       try {
-        const arc = ANIM_ARCS.find((a) => a.id === this.animArc);
-        const result = await exportAnimation(cfg, async (frame, t) => {
-          const t01 = cfg.durationSec > 0 ? t / cfg.durationSec : 0;
-          if (arc) {
-            const numeric: Record<string, number> = {};
-            for (const [k, v] of Object.entries(this.params)) {
-              if (typeof v === "number") numeric[k] = v;
-            }
-            const next = arc.apply(numeric, Math.min(1, Math.max(0, t01)));
-            for (const [k, v] of Object.entries(next)) {
-              if (typeof v === "number") {
-                this.session?.runtime.getPiece("L0")?.setParameter(k, v);
+        const exportSpec = normalizeSpecForPiece(this.pieceId, this.animationSpec);
+        this.session?.setAnimationSpec(exportSpec);
+        let exportPrimed = false;
+        const result = await exportAnimation(
+          { ...cfg, loop: exportLoopFlag(exportSpec.endBehavior) },
+          async (_frame, t) => {
+            if (this.session) {
+              if (!exportPrimed) {
+                this.session.animationRuntime.reset();
+                exportPrimed = true;
               }
+              this.session.animationRuntime.seekTime(t);
+              this.session.animationRuntime.applyToPieces(
+                this.session.runtime.getPieces(),
+                new Map(),
+              );
+              this.session.frame(t * 1000);
             }
-          }
-          this.session?.frame((frame / cfg.fps) * 1000);
-          return this.canvas;
-        });
+            return this.canvas;
+          },
+        );
         const ext = result.format === "webm" ? "webm" : "webp";
         downloadBlob(
           result.blob,
@@ -1715,27 +1774,91 @@ export class StudioApp {
         <button type="button" class="primary" id="cfg-animate-this">Animate This</button>
         <div id="variants"></div>
       ` : ""}
-      ${this.mode === "animate" ? `
-        <label>FPS / duration (s)</label>
+      ${this.mode === "animate" ? (() => {
+        const caps = animationCapabilitiesFor(this.pieceId);
+        const src = this.animationSpec.source;
+        const motions =
+          src === "camera"
+            ? ["pan", "zoom", "pan-zoom"]
+            : src === "construction"
+              ? ["construction", "emergence", "reveal"]
+              : src === "parameters"
+                ? ["emergence", "growth", "drift", "settle", "collapse"]
+                : caps.motions;
+        const panPresets: PanPreset[] = [
+          "left-right",
+          "right-left",
+          "top-bottom",
+          "bottom-top",
+          "diag-down-right",
+          "diag-up-left",
+          "custom",
+        ];
+        return `
+        <h2>Animation</h2>
+        <label>Source</label>
+        <select id="cfg-anim-source">${caps.sources
+          .map(
+            (s) =>
+              `<option value="${s}" ${src === s ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`,
+          )
+          .join("")}</select>
+        <label>Motion</label>
+        <select id="cfg-anim-motion">${motions
+          .map(
+            (m) =>
+              `<option value="${m}" ${this.animationSpec.motion === m ? "selected" : ""}>${m}</option>`,
+          )
+          .join("")}</select>
+        <label>Duration (s)</label>
+        <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
+        <label>End</label>
+        <select id="cfg-anim-end">
+          ${(["continuous", "hold", "loop", "ping-pong", "restart", "stop"] as AnimationEndBehavior[])
+            .map(
+              (e) =>
+                `<option value="${e}" ${this.animationSpec.endBehavior === e ? "selected" : ""}>${e}</option>`,
+            )
+            .join("")}
+        </select>
+        <label>Easing</label>
+        <select id="cfg-anim-easing">
+          ${(["linear", "ease-in-out", "ease-in", "ease-out"] as AnimationEasing[])
+            .map(
+              (e) =>
+                `<option value="${e}" ${this.animationSpec.easing === e ? "selected" : ""}>${e}</option>`,
+            )
+            .join("")}
+        </select>
+        ${
+          src === "camera" || this.animationSpec.components.includes("camera")
+            ? `
+        <label>Pan preset</label>
+        <select id="cfg-pan-preset">${panPresets
+          .map(
+            (p) =>
+              `<option value="${p}" ${this.animationSpec.camera.panPreset === p ? "selected" : ""}>${p}</option>`,
+          )
+          .join("")}</select>
+        `
+            : ""
+        }
+        <label>FPS / format</label>
         <div class="row">
           <input id="cfg-fps" type="number" value="${this.anim.fps}" />
-          <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
+          <select id="cfg-anim-fmt">
+            <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>WebP</option>
+            <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
+            <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
+            <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+          </select>
         </div>
-        <label>Format</label>
-        <select id="cfg-anim-fmt">
-          <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>animated WebP</option>
-          <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
-          <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
-          <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
-        </select>
-        <label>Animation arc</label>
-        <select id="cfg-arc">${ANIM_ARCS.map((a) => `<option value="${a.id}" ${this.animArc === a.id ? "selected" : ""}>${a.label}</option>`).join("")}</select>
-        <p class="muted">start frame ${this.anim.startFrame} (Animate This continuity)</p>
+        <p class="muted">start frame ${this.anim.startFrame} · ${this.animationSpec.endBehavior} · ${this.animationSpec.source}</p>
         <div class="row">
           <button type="button" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
           <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
-        </div>
-      ` : ""}
+        </div>`;
+      })() : ""}
       ${this.mode === "react" ? `
         <h2>Audio</h2>
         <button type="button" class="primary" id="cfg-mic">${this.audioEnabled ? "Mic active" : "Enable microphone"}</button>
@@ -1902,8 +2025,52 @@ export class StudioApp {
     el.querySelector("#cfg-anim-fmt")?.addEventListener("change", (e) => {
       this.animFormat = (e.target as HTMLSelectElement).value as typeof this.animFormat;
     });
-    el.querySelector("#cfg-arc")?.addEventListener("change", (e) => {
-      this.animArc = (e.target as HTMLSelectElement).value;
+    el.querySelector("#cfg-anim-source")?.addEventListener("change", (e) => {
+      this.animationSpec.source = (e.target as HTMLSelectElement).value as AnimationSource;
+      const caps = animationCapabilitiesFor(this.pieceId);
+      if (!caps.motions.includes(this.animationSpec.motion)) {
+        this.animationSpec.motion =
+          this.animationSpec.source === "camera" ? "pan" : caps.defaultMotion;
+      }
+      if (this.animationSpec.source === "camera") {
+        this.animationSpec.camera.motion = "pan";
+        const views = panPresetViews(this.animationSpec.camera.panPreset);
+        this.animationSpec.camera.start = views.start;
+        this.animationSpec.camera.end = views.end;
+      }
+      this.syncAnimationSpecToSession();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-anim-motion")?.addEventListener("change", (e) => {
+      this.animationSpec.motion = (e.target as HTMLSelectElement).value;
+      if (this.animationSpec.source === "camera") {
+        this.animationSpec.camera.motion =
+          this.animationSpec.motion === "pan-zoom"
+            ? "pan-zoom"
+            : this.animationSpec.motion === "zoom"
+              ? "zoom"
+              : "pan";
+        if (this.animationSpec.motion === "zoom") {
+          this.animationSpec.camera.zoomMode = "in";
+        }
+      }
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-anim-end")?.addEventListener("change", (e) => {
+      this.animationSpec.endBehavior = (e.target as HTMLSelectElement)
+        .value as AnimationEndBehavior;
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-anim-easing")?.addEventListener("change", (e) => {
+      this.animationSpec.easing = (e.target as HTMLSelectElement).value as AnimationEasing;
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-pan-preset")?.addEventListener("change", (e) => {
+      this.animationSpec.camera.panPreset = (e.target as HTMLSelectElement).value as PanPreset;
+      const views = panPresetViews(this.animationSpec.camera.panPreset);
+      this.animationSpec.camera.start = views.start;
+      this.animationSpec.camera.end = views.end;
+      this.syncAnimationSpecToSession();
     });
     el.querySelector("#cfg-mic")?.addEventListener("click", () => void this.enableMic());
     el.querySelector("#cfg-save")?.addEventListener("click", () => void this.saveSeedState());
@@ -1929,6 +2096,8 @@ export class StudioApp {
     });
     el.querySelector("#cfg-dur")?.addEventListener("change", (e) => {
       this.anim.durationSec = Number((e.target as HTMLInputElement).value) || 4;
+      this.animationSpec.durationSec = this.anim.durationSec;
+      this.syncAnimationSpecToSession();
     });
     el.querySelectorAll<HTMLElement>("[data-param]").forEach((node) => {
       const key = node.getAttribute("data-param")!;

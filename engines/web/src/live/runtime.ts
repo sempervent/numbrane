@@ -35,6 +35,7 @@ export class LiveRuntime {
   private blackout = false;
   /** When true, pieces still render but update() is skipped (Studio Pause). */
   private simulationPaused = false;
+  private freezePieceUpdates = false;
   private transition: TransitionState = {
     active: false,
     type: "cut",
@@ -77,6 +78,10 @@ export class LiveRuntime {
 
   getPiece(layerId: string): LivePiece | undefined {
     return this.pieces.get(layerId);
+  }
+
+  getPieces(): LivePiece[] {
+    return [...this.pieces.values()];
   }
 
   clearPieces(): void {
@@ -190,6 +195,14 @@ export class LiveRuntime {
     return this.simulationPaused;
   }
 
+  setFreezePieceUpdates(frozen: boolean): void {
+    this.freezePieceUpdates = frozen;
+  }
+
+  isPieceUpdatesFrozen(): boolean {
+    return this.freezePieceUpdates;
+  }
+
   /** Safe reset: clear blackout, stop transition, reset feedback-ish flags. */
   panic(): void {
     this.blackout = false;
@@ -225,7 +238,7 @@ export class LiveRuntime {
       bpm: snap.bpm,
     };
 
-    if (!this.simulationPaused) {
+    if (!this.simulationPaused && !this.freezePieceUpdates) {
       for (const piece of this.pieces.values()) {
         piece.update(frame);
       }
@@ -241,6 +254,10 @@ export class LiveRuntime {
 
   getSeed(): number {
     return this.seed;
+  }
+
+  getFps(): number {
+    return this.fps;
   }
 
   setSeed(seed: number): void {

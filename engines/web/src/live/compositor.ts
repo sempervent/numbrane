@@ -3,6 +3,7 @@
  */
 
 import { loadShader } from "../gl";
+import type { CameraView } from "../studio/animation/spec";
 import type { BlendMode, PostDef } from "./types";
 
 const BLEND_INDEX: Record<BlendMode, number> = {
@@ -84,6 +85,9 @@ export class Compositor {
   private outFbo!: WebGLFramebuffer;
   private blendProg!: WebGLProgram;
   private postProg!: WebGLProgram;
+  private cameraProg!: WebGLProgram;
+  private snapTex!: WebGLTexture;
+  private snapFbo!: WebGLFramebuffer;
   private quadVao!: WebGLVertexArrayObject;
   private ready = false;
   transparent = false;
@@ -104,6 +108,7 @@ export class Compositor {
     const vert = await loadShader("live_quad.vert");
     this.blendProg = await compile(gl, vert, "live_blend.frag");
     this.postProg = await compile(gl, vert, "live_post.frag");
+    this.cameraProg = await compile(gl, vert, "live_camera.frag");
 
     const buf = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -139,6 +144,7 @@ export class Compositor {
     rebuild(this.accumTexB, this.accumFboB);
     rebuild(this.feedbackTex, this.feedbackFbo);
     rebuild(this.outTex, this.outFbo);
+    rebuild(this.snapTex, this.snapFbo);
 
     this.layerTex = createTex(gl, this.w, this.h, true);
     this.layerFbo = createFbo(gl, this.layerTex);
@@ -150,7 +156,51 @@ export class Compositor {
     this.feedbackFbo = createFbo(gl, this.feedbackTex);
     this.outTex = createTex(gl, this.w, this.h, true);
     this.outFbo = createFbo(gl, this.outTex);
+    this.snapTex = createTex(gl, this.w, this.h, true);
+    this.snapFbo = createFbo(gl, this.snapTex);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** Copy post-processed output into frozen source snapshot (camera-only pan/zoom). */
+  capturePresentationSnapshot(): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.snapFbo);
+    gl.viewport(0, 0, this.w, this.h);
+    gl.useProgram(this.blendProg);
+    gl.bindVertexArray(this.quadVao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
+    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
+    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
+    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_progress"), 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+  }
+
+  private drawCameraPresent(camera: CameraView, tex: WebGLTexture): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+    gl.useProgram(this.cameraProg);
+    gl.bindVertexArray(this.quadVao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(gl.getUniformLocation(this.cameraProg, "u_tex"), 0);
+    gl.uniform4f(
+      gl.getUniformLocation(this.cameraProg, "u_cam"),
+      camera.centerX,
+      camera.centerY,
+      camera.scale,
+      camera.rotation,
+    );
+    gl.clearColor(0, 0, 0, this.transparent ? 0 : 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
   }
 
   getLayerTarget(): { framebuffer: WebGLFramebuffer; width: number; height: number } {
@@ -198,7 +248,13 @@ export class Compositor {
     blackout: boolean,
     t: number,
     drawToScreen = true,
+    camera: CameraView | null = null,
+    presentFromSnapshot = false,
   ): void {
+    if (presentFromSnapshot && camera && drawToScreen) {
+      this.drawCameraPresent(camera, this.snapTex);
+      return;
+    }
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo);
     gl.viewport(0, 0, this.w, this.h);
@@ -246,20 +302,24 @@ export class Compositor {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     if (drawToScreen) {
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-      gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
-      gl.useProgram(this.blendProg);
-      gl.activeTexture(gl.TEXTURE0);
-      gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-      gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
-      gl.activeTexture(gl.TEXTURE1);
-      gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-      gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
-      gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
-      gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
-      gl.clearColor(0, 0, 0, this.transparent ? 0 : 1);
-      gl.clear(gl.COLOR_BUFFER_BIT);
-      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      if (camera) {
+        this.drawCameraPresent(camera, this.outTex);
+      } else {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
+        gl.useProgram(this.blendProg);
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
+        gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
+        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
+        gl.clearColor(0, 0, 0, this.transparent ? 0 : 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
     }
     gl.bindVertexArray(null);
   }

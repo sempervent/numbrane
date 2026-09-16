@@ -39,6 +39,9 @@ import {
   downsampleRgba,
   type PixelFrame,
 } from "./pixelMetrics";
+import { AnimationRuntime } from "./animationRuntime";
+import type { AnimationSpec } from "../studio/animation/spec";
+import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
 
 export type HudStats = {
   fps: number;
@@ -128,9 +131,14 @@ export class LiveSession {
   private pixelDigest = "";
   private lastPresentedGrid: Uint8Array | null = null;
   private lastPresentedStats: PixelFrame | null = null;
+  private baselinePresentedGrid: Uint8Array | null = null;
+  private baselinePresentedStats: PixelFrame | null = null;
   private webglError: string | null = null;
   private lastDigestSampleMs = 0;
   private frozenPresentT = 0;
+  /** Wall-clock delta source for animation envelope (preview/export seek uses explicit time). */
+  private lastAnimWallMs = 0;
+  readonly animationRuntime = new AnimationRuntime(defaultAnimationSpec());
   private baseParams = new Map<string, Record<string, number>>();
   private basePost: PostDef = {};
   private layerOpacity = new Map<string, number>();
@@ -245,6 +253,16 @@ export class LiveSession {
     for (let i = 0; i < count; i++) {
       this.frame(wallNowMs + i * (1000 / 60));
     }
+  }
+
+  setAnimationSpec(spec: AnimationSpec): void {
+    this.animationRuntime.setSpec(spec);
+    this.animationRuntime.reset();
+    this.lastAnimWallMs = 0;
+  }
+
+  getAnimationSpec(): AnimationSpec {
+    return this.animationRuntime.spec;
   }
 
   getDiagnostics(): LiveDiagnostics {
@@ -509,6 +527,30 @@ export class LiveSession {
     cancelAnimationFrame(this.raf);
   }
 
+  /** Pin last presented grid as baseline for cross-cycle comparison. */
+  pinPresentedBaseline(): void {
+    if (!this.lastPresentedGrid || !this.lastPresentedStats) return;
+    this.baselinePresentedGrid = this.lastPresentedGrid.slice();
+    this.baselinePresentedStats = this.lastPresentedStats;
+  }
+
+  /** Fraction of pixels changed vs stored baseline grid. */
+  comparePresentedToBaseline(gridW = 64, gridH = 36): number | null {
+    if (!this.baselinePresentedGrid) return null;
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const stats = analyzeRgbaGrid(grid, gridW, gridH, {
+      pixels: this.baselinePresentedGrid,
+      stats: this.baselinePresentedStats!,
+    });
+    return stats.changedPixelFraction;
+  }
+
   /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
     const gl = this.compositor.gl;
@@ -569,8 +611,19 @@ export class LiveSession {
     }
     this.lastOnset = this.features.onset;
 
-    const frame = this.runtime.tick(wallNowMs);
     const snap = this.runtime.transport.getSnapshot();
+    const simPaused = this.runtime.isSimulationPaused();
+    const animWallDt =
+      this.lastAnimWallMs > 0
+        ? Math.min(0.25, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
+        : 0;
+    this.lastAnimWallMs = wallNowMs;
+    this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    const animSt = this.animationRuntime.evaluate();
+    this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
+    this.runtime.setFreezePieceUpdates(animSt.useSourceSnapshot);
+
+    const frame = this.runtime.tick(wallNowMs);
 
     // On beat edges trigger subtle envelope
     if (frame.beatPhase < 0.05 && snap.playing) {
@@ -710,26 +763,32 @@ export class LiveSession {
       ? this.postFrame
       : this.basePost;
     const tr = this.runtime.getTransition();
+    const animSt = this.animationRuntime.evaluate();
+    const spec = this.animationRuntime.spec;
+    const cameraActive = hasComponent(spec, "camera");
+    const camera = cameraActive ? animSt.camera : null;
 
-    this.compositor.beginFrame();
-    for (const layer of scene.layers) {
-      const piece = this.runtime.getPiece(layer.id);
-      if (!piece) continue;
-      const target = this.compositor.getLayerTarget();
-      piece.render({
-        framebuffer: target.framebuffer,
-        width: target.width,
-        height: target.height,
-        transparent: this.compositor.transparent,
-      });
-      let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
-      if (tr.active && tr.type === "crossfade") {
-        opacity *= tr.progress;
+    if (!animSt.useSourceSnapshot) {
+      this.compositor.beginFrame();
+      for (const layer of scene.layers) {
+        const piece = this.runtime.getPiece(layer.id);
+        if (!piece) continue;
+        const target = this.compositor.getLayerTarget();
+        piece.render({
+          framebuffer: target.framebuffer,
+          width: target.width,
+          height: target.height,
+          transparent: this.compositor.transparent,
+        });
+        let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
+        if (tr.active && tr.type === "crossfade") {
+          opacity *= tr.progress;
+        }
+        this.compositor.compositeLayer(
+          this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
+          opacity,
+        );
       }
-      this.compositor.compositeLayer(
-        this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
-        opacity,
-      );
     }
     // Transition overlays via post exposure for fade-through-black
     const postOut = { ...post };
@@ -744,9 +803,14 @@ export class LiveSession {
       }
     }
     const paused = this.runtime.isSimulationPaused();
-    if (!paused) this.frozenPresentT = frame.t;
-    const presentT = paused ? this.frozenPresentT : frame.t;
-    const postPresent = paused
+    const envelopeComplete =
+      (spec.endBehavior === "hold" || spec.endBehavior === "stop") &&
+      animSt.phase >= 0.999 &&
+      !hasComponent(spec, "generative");
+    const freezePost = paused || envelopeComplete;
+    if (!freezePost) this.frozenPresentT = frame.t;
+    const presentT = freezePost ? this.frozenPresentT : frame.t;
+    const postPresent = freezePost
       ? { ...postOut, grain: 0, feedback: 0, chromatic: 0 }
       : postOut;
     this.compositor.endFrame(
@@ -754,7 +818,16 @@ export class LiveSession {
       this.runtime.isBlackout(),
       presentT,
       true,
+      camera,
+      animSt.useSourceSnapshot,
     );
+    if (animSt.freezeGenerative && !animSt.useSourceSnapshot) {
+      this.compositor.capturePresentationSnapshot();
+      this.animationRuntime.markSnapshotReady(this.pixelDigest);
+    }
+    if (animSt.sourceDigest) {
+      this.animationRuntime.noteSourceDigest(animSt.sourceDigest);
+    }
     this.presentCount += 1;
   }
 

@@ -160,9 +160,15 @@ export async function createLSystemLivePiece(
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, ink);
       }
       if (cursor >= segs.length) {
-        rebuild(seed);
+        const endBehavior = Math.floor(params["anim.endBehavior"] ?? 0);
+        if (endBehavior === 1 || endBehavior === 3) {
+          rebuild(seed);
+        }
       }
-      params.hue = (params.hue + frame.dt * 0.02) % 1;
+      const endBehavior = Math.floor(params["anim.endBehavior"] ?? 5);
+      if (endBehavior === 5) {
+        params.hue = (params.hue + frame.dt * 0.02) % 1;
+      }
     },
     setParameter(name, value) {
       if (typeof value === "number" && name in params) params[name] = value;
