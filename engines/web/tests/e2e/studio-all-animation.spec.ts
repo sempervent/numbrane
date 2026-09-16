@@ -12,6 +12,7 @@ import {
   sampleStagePixels,
   saveFailureArtifacts,
   studioDiag,
+  waitForAnimationPhase,
   waitForLiveFrame,
 } from "./animationMetrics";
 
@@ -28,6 +29,25 @@ function sustainedMotion(samples: PixelFrame[], frameAdvances: number[]): boolea
     }
   }
   return hits >= 4;
+}
+
+function holdContractMotion(
+  during: PixelFrame[],
+  afterHold: PixelFrame[],
+  frameAdvances: number[],
+): boolean {
+  if (frameAdvances[frameAdvances.length - 1]! - frameAdvances[0]! < 20) return false;
+  const earlyMotion = during.some(
+    (s, i) =>
+      i > 0 &&
+      (s.changedPixelFraction >= 0.004 ||
+        s.rmsDifference >= 3.5 ||
+        s.digest !== during[i - 1]!.digest),
+  );
+  const stable =
+    afterHold.length >= 2 &&
+    afterHold.slice(1).every((s) => s.changedPixelFraction < 0.015);
+  return earlyMotion && stable;
 }
 
 async function collectCheckpoints(page: Page): Promise<{
@@ -81,18 +101,49 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
       .catch(() => null);
     expect(banner ?? "", `${piece} banner`).not.toMatch(/failed|stalled|RAF STALLED/i);
 
-    const { samples, frames } = await collectCheckpoints(page);
+    const diag0 = await studioDiag(page);
+    const endBehavior = diag0.animationEndBehavior ?? "continuous";
+    const durationSec = diag0.animationDurationSec ?? 12;
+    const finiteHold = endBehavior === "hold" || endBehavior === "stop";
+
+    let motionOk: boolean;
+    let samples: PixelFrame[] = [];
+    let frames: number[] = [];
+
+    if (finiteHold) {
+      await waitForAnimationPhase(page, Math.min(0.55, 0.45 * (2 / Math.max(0.5, durationSec))));
+      const during: PixelFrame[] = [await sampleStagePixels(page)];
+      await page.waitForTimeout(Math.min(1500, durationSec * 500));
+      during.push(await sampleStagePixels(page));
+      await waitForAnimationPhase(page, 1);
+      await page.waitForTimeout(600);
+      const afterHold = [await sampleStagePixels(page)];
+      await page.waitForTimeout(1000);
+      afterHold.push(await sampleStagePixels(page));
+      samples = [...during, ...afterHold];
+      frames = [
+        diag0.logicalFrame ?? 0,
+        (await studioDiag(page)).logicalFrame ?? 0,
+      ];
+      motionOk = holdContractMotion(during, afterHold, frames);
+    } else {
+      ({ samples, frames } = await collectCheckpoints(page));
+      motionOk = sustainedMotion(samples, frames);
+    }
+
     expect(frameIsVisible(samples[0]!), `${piece} visible`).toBe(true);
 
     const diag = await studioDiag(page);
     expect(diag.rafStalled, `${piece} RAF`).not.toBe(true);
     expect((diag.presentCount ?? 0) > 0, `${piece} present`).toBe(true);
 
-    const motionOk = sustainedMotion(samples, frames);
     if (!motionOk) {
       await saveFailureArtifacts(piece, page, samples, consoleLines, diag);
     }
-    expect(motionOk, `${piece} 12s sustained framebuffer motion`).toBe(true);
+    expect(
+      motionOk,
+      `${piece} ${finiteHold ? "hold contract" : "12s sustained framebuffer motion"}`,
+    ).toBe(true);
 
     await page.keyboard.press("Space");
     await page.waitForTimeout(300);

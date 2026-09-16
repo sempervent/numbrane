@@ -32,7 +32,100 @@ export type StudioDiag = {
   simulationPaused?: boolean;
   transportPlaying?: boolean;
   presentedFrame?: PixelFrame | null;
+  animationTimeSec?: number;
+  animationPhase?: number;
+  animationDurationSec?: number;
+  animationEndBehavior?: string;
+  animationSource?: string;
+  useSourceSnapshot?: boolean;
 };
+
+export async function waitForAnimationPhase(
+  page: Page,
+  minPhase: number,
+  timeoutMs = 60_000,
+): Promise<StudioDiag> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const d = await studioDiag(page);
+    if ((d.animationPhase ?? 0) >= minPhase - 0.01) return d;
+    await page.waitForTimeout(100);
+  }
+  throw new Error(`Timed out waiting for animation phase >= ${minPhase}`);
+}
+
+/** Wait until envelope phase is near a target (handles loop/ping-pong wrap). */
+export async function waitForAnimationPhaseNear(
+  page: Page,
+  targetPhase: number,
+  tolerance = 0.03,
+  timeoutMs = 90_000,
+  minTimeSec = 0,
+): Promise<StudioDiag> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const d = await studioDiag(page);
+    const phase = d.animationPhase ?? 0;
+    if (
+      (d.animationTimeSec ?? 0) >= minTimeSec - 0.02 &&
+      Math.abs(phase - targetPhase) <= tolerance
+    ) {
+      return d;
+    }
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`Timed out waiting for animation phase ~ ${targetPhase}`);
+}
+
+export async function pinPixelBaseline(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as { __NUMBRANE_STUDIO__?: { pinPixelBaseline?: () => void } })
+      .__NUMBRANE_STUDIO__?.pinPixelBaseline?.();
+  });
+}
+
+export async function comparePixelBaseline(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const v = (
+      window as unknown as { __NUMBRANE_STUDIO__?: { comparePixelBaseline?: () => number | null } }
+    ).__NUMBRANE_STUDIO__?.comparePixelBaseline?.();
+    if (v == null) throw new Error("comparePixelBaseline unavailable");
+    return v;
+  });
+}
+
+export async function waitForAnimationTime(
+  page: Page,
+  targetSec: number,
+  timeoutMs = 90_000,
+): Promise<StudioDiag> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const d = await studioDiag(page);
+    if ((d.animationTimeSec ?? 0) >= targetSec - 0.05) return d;
+    await page.waitForTimeout(50);
+  }
+  throw new Error(`Timed out waiting for animationTimeSec >= ${targetSec}`);
+}
+
+export async function waitForAnimationCycle(
+  page: Page,
+  cycleCount: number,
+  timeoutMs = 90_000,
+): Promise<StudioDiag> {
+  const start = Date.now();
+  let cycles = 0;
+  let lastPhase = -1;
+  while (Date.now() - start < timeoutMs) {
+    const d = await studioDiag(page);
+    const phase = d.animationPhase ?? 0;
+    if (lastPhase > 0.7 && phase < 0.15) cycles += 1;
+    lastPhase = phase;
+    if (cycles >= cycleCount) return d;
+    await page.waitForTimeout(80);
+  }
+  throw new Error(`Timed out waiting for ${cycleCount} animation cycle(s)`);
+}
 
 export async function sampleStagePixels(page: Page): Promise<PixelFrame> {
   const sample = await page.evaluate(() => {

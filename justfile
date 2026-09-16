@@ -366,6 +366,14 @@ studio-animation-soak:
     npx playwright test -c playwright.soak.config.ts
 
 [group('studio')]
+studio-animation-semantics:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.semantics.config.ts
+
+[group('studio')]
 animation-export:
     #!/usr/bin/env bash
     set -euo pipefail
