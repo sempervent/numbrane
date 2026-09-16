@@ -408,6 +408,8 @@ bake-print:
 docker-studio:
     #!/usr/bin/env bash
     set -euo pipefail
+    export BUILD_SHA="$(git -C "{{root}}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     docker buildx bake -f docker-bake.hcl studio render
     mkdir -p "{{root}}/artifacts"
     echo "Studio → http://127.0.0.1:8080/studio.html"

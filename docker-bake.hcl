@@ -19,6 +19,18 @@ target "studio" {
   dockerfile = "Dockerfile"
   target = "studio-runtime"
   tags = ["numbrane-studio:local"]
+  args = {
+    NUMBRANE_BUILD_SHA = "${BUILD_SHA}"
+    NUMBRANE_BUILD_TIME = "${BUILD_TIME}"
+  }
+}
+
+variable "BUILD_SHA" {
+  default = "unknown"
+}
+
+variable "BUILD_TIME" {
+  default = ""
 }
 
 target "python" {

@@ -94,10 +94,11 @@ function collectPieces(): unknown[] {
 
 function gitSha(): string {
   try {
-    return spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+    const sha = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
       cwd: repoRoot,
       encoding: "utf8",
     }).stdout.trim();
+    return sha || process.env.NUMBRANE_BUILD_SHA || "unknown";
   } catch {
     return process.env.NUMBRANE_BUILD_SHA ?? "unknown";
   }
