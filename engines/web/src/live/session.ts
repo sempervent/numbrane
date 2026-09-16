@@ -44,6 +44,22 @@ export type HudStats = {
   quality: QualityProfile;
 };
 
+export type LiveDiagnostics = {
+  updateCount: number;
+  renderCount: number;
+  logicalFrame: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  visibleCssWidth: number;
+  visibleCssHeight: number;
+  lastSuccessfulDrawMs: number;
+  pixelDigest: string;
+  webglError: string | null;
+  simulationPaused: boolean;
+  transportPlaying: boolean;
+  visualFps: number;
+};
+
 const QUALITY_SCALE: Record<QualityProfile, number> = {
   low: 0.5,
   medium: 0.75,
@@ -87,6 +103,11 @@ export class LiveSession {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private fpsLast = 0;
+  private renderCount = 0;
+  private lastSuccessfulDrawMs = 0;
+  private pixelDigest = "";
+  private webglError: string | null = null;
+  private lastDigestSampleMs = 0;
   private baseParams = new Map<string, Record<string, number>>();
   private basePost: PostDef = {};
   private layerOpacity = new Map<string, number>();
@@ -162,17 +183,18 @@ export class LiveSession {
     this.canvas.width = w;
     this.canvas.height = h;
 
+    let loaded = 0;
     for (const layer of scene.layers) {
       let piece;
       try {
         piece = await createLivePiece(gl, layer.piece, liveMode);
       } catch (err) {
         if (err instanceof UnsupportedLivePieceError) {
-          console.warn(err.message);
-          continue;
+          throw new Error(`${layer.piece}: ${err.message}`);
         }
         throw err;
       }
+      loaded += 1;
       const seed = layer.seed ?? this.runtime.getSeed();
       piece.initialize({ piece: layer.piece }, seed);
       piece.resize(w, h);
@@ -190,6 +212,36 @@ export class LiveSession {
     this.postFrame = { ...this.basePost };
     this.modulation.setMappings(this.sceneMappings(scene));
     this.compositor.resetFeedback();
+    if (loaded === 0) {
+      throw new Error("No live runtimes loaded for scene");
+    }
+  }
+
+  /** Paint one or more logical frames immediately (Studio first-frame guarantee). */
+  paintFrames(count = 2, wallNowMs = performance.now()): void {
+    for (let i = 0; i < count; i++) {
+      this.frame(wallNowMs + i * (1000 / 60));
+    }
+  }
+
+  getDiagnostics(): LiveDiagnostics {
+    const rect = this.canvas.getBoundingClientRect();
+    const snap = this.runtime.transport.getSnapshot();
+    return {
+      updateCount: this.runtime.getUpdateCount(),
+      renderCount: this.renderCount,
+      logicalFrame: this.runtime.getFrame(),
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      visibleCssWidth: rect.width,
+      visibleCssHeight: rect.height,
+      lastSuccessfulDrawMs: this.lastSuccessfulDrawMs,
+      pixelDigest: this.pixelDigest,
+      webglError: this.webglError,
+      simulationPaused: this.runtime.isSimulationPaused(),
+      transportPlaying: snap.playing,
+      visualFps: this.hud.fps,
+    };
   }
 
   private sceneMappings(scene: SceneDef): ModMapping[] {
@@ -495,6 +547,16 @@ export class LiveSession {
     const g0 = performance.now();
     this.renderFrame(frame);
     this.hud.glMs = performance.now() - g0;
+    this.renderCount += 1;
+    this.lastSuccessfulDrawMs = performance.now();
+    if (wallNowMs - this.lastDigestSampleMs > 250) {
+      this.lastDigestSampleMs = wallNowMs;
+      this.samplePixelDigest();
+    }
+    const err = this.compositor.gl.getError();
+    if (err !== this.compositor.gl.NO_ERROR) {
+      this.webglError = `GL ${err}`;
+    }
     this.hud.frameMs = performance.now() - t0;
     this.hud.layers = scene?.layers.length ?? 0;
 
@@ -540,6 +602,15 @@ export class LiveSession {
       }
     }
     this.postFrame = post;
+  }
+
+  private samplePixelDigest(): void {
+    const gl = this.compositor.gl;
+    const x = Math.max(0, Math.floor(this.canvas.width / 2) - 1);
+    const y = Math.max(0, Math.floor(this.canvas.height / 2) - 1);
+    const buf = new Uint8Array(4);
+    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    this.pixelDigest = `${buf[0]}-${buf[1]}-${buf[2]}-${buf[3]}`;
   }
 
   private renderFrame(frame: FrameState): void {

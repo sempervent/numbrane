@@ -31,6 +31,7 @@ export class LiveRuntime {
   private fps: number;
   private seed: number;
   private frame = 0;
+  private updateCount = 0;
   private blackout = false;
   /** When true, pieces still render but update() is skipped (Studio Pause). */
   private simulationPaused = false;
@@ -81,6 +82,8 @@ export class LiveRuntime {
   clearPieces(): void {
     for (const p of this.pieces.values()) p.dispose();
     this.pieces.clear();
+    this.frame = 0;
+    this.updateCount = 0;
   }
 
   nextScene(): void {
@@ -227,8 +230,13 @@ export class LiveRuntime {
         piece.update(frame);
       }
       this.frame += 1;
+      this.updateCount += 1;
     }
     return frame;
+  }
+
+  getUpdateCount(): number {
+    return this.updateCount;
   }
 
   getSeed(): number {

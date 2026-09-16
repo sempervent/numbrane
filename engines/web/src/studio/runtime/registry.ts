@@ -231,31 +231,31 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     paramSchema: VORONOI_SCHEMA,
   }),
 
-  "audiovisual/nodes": d("audiovisual/nodes", "unsupported", "shader-native", "shader-native", {
+  "audiovisual/nodes": d("audiovisual/nodes", "unsupported", "webgl-stateful", "webgl-stateful", {
     seedAffectsStructure: true,
   }),
   "reference/audiovisual-nodes": d(
     "reference/audiovisual-nodes",
     "unsupported",
-    "shader-native",
-    "shader-native",
+    "webgl-stateful",
+    "webgl-stateful",
   ),
 
-  // Mashups: ANIMATE unsupported until component-composed live runtimes exist.
-  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", null, null),
+  // Mashups: multi-layer live compositor scenes (see studio/mashups.ts).
+  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", "shader-native", null),
   "mashups/bureaucratic-growth-forms": d(
     "mashups/bureaucratic-growth-forms",
     "python-api",
-    null,
+    "webgl-stateful",
     null,
   ),
-  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", null, null),
-  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", null, null),
+  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", "webgl-stateful", null),
+  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", "geometry-ir", null),
   "mashups/slime-on-sdf": d("mashups/slime-on-sdf", "python-api", "webgl-stateful", "webgl-stateful"),
   "mashups/striped-worms-eating-boxes": d(
     "mashups/striped-worms-eating-boxes",
     "python-api",
-    null,
+    "webgl-stateful",
     null,
   ),
 
@@ -297,10 +297,24 @@ export function supportsMode(
   return kind !== null && kind !== "unsupported";
 }
 
-/** Pieces allowed to use createShaderPiece — explicit only. */
+const BROWSER_NATIVE_ANIMATE = new Set<RendererKind>([
+  "geometry-ir",
+  "webgl-stateful",
+  "wasm",
+  "shader-native",
+]);
+
+/** Studio ANIMATE must use a browser-native backend (not python-api / null). */
+export function isBrowserNativeAnimate(kind: RendererKind | null): boolean {
+  return kind !== null && BROWSER_NATIVE_ANIMATE.has(kind);
+}
+
+export function catalogPieceIds(): string[] {
+  return Object.keys(PIECE_RUNTIMES);
+}
+
+/** Pieces allowed to use createShaderPiece — explicit generic shader only (not maintained catalog defaults). */
 export const SHADER_NATIVE_PIECES = new Set<string>([
-  "audiovisual/nodes",
-  "reference/audiovisual-nodes",
   "fractals/escape-time",
   "reference/escape-time",
   "fractals/sdf-raymarch2d",

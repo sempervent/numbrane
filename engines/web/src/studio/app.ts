@@ -58,8 +58,10 @@ import { BufferedFrameAnimationController } from "./animate/controller";
 import {
   defaultsForPiece,
   getPieceRuntime,
+  isBrowserNativeAnimate,
   supportsMode,
 } from "./runtime/registry";
+import { buildMashupSet } from "./mashups";
 import {
   cryptoSeed,
   paramsForApi,
@@ -168,6 +170,9 @@ export class StudioApp {
   private animBackend = "";
   private displayedFrame = 0;
   private webglStatus = "—";
+  private stallError = "";
+  private lastVisualChangeMs = Date.now();
+  private lastVisualDigest = "";
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -199,6 +204,7 @@ export class StudioApp {
       transparent: false,
     });
     await this.session.init();
+    window.__NUMBRANE_STUDIO__ = this;
     this.params = { ...defaultsForPiece(this.pieceId), ...this.params };
     await this.applyPieceScene();
 
@@ -212,9 +218,73 @@ export class StudioApp {
     this.syncUrl(false);
     this.pushHistory();
 
-    window.__NUMBRANE_STUDIO__ = this;
     this.loop();
     toast("NUMBRANE Studio — press ? for keys");
+  }
+
+  getAnimationDiagnostics(): Record<string, unknown> {
+    const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+    const diag = this.session?.getDiagnostics();
+    return {
+      piece: this.pieceId,
+      backend: kind,
+      animBackend: this.animBackend || kind,
+      mode: this.mode,
+      surface: studioSurface(this.pieceId, this.mode),
+      playing: this.playing,
+      visualFps: this.fps,
+      logicalFrame: diag?.logicalFrame ?? this.frame,
+      updateCount: diag?.updateCount ?? 0,
+      renderCount: diag?.renderCount ?? 0,
+      pixelDigest: diag?.pixelDigest ?? "",
+      lastSuccessfulDrawMs: diag?.lastSuccessfulDrawMs ?? 0,
+      simulationPaused: diag?.simulationPaused ?? false,
+      transportPlaying: diag?.transportPlaying ?? false,
+      webglError: diag?.webglError ?? this.webglStatus,
+      canvasWidth: diag?.canvasWidth ?? this.canvas.width,
+      canvasHeight: diag?.canvasHeight ?? this.canvas.height,
+      visibleCssWidth: diag?.visibleCssWidth ?? 0,
+      visibleCssHeight: diag?.visibleCssHeight ?? 0,
+      stallError: this.stallError,
+    };
+  }
+
+  private ensureAnimateTransport(): void {
+    if (this.mode !== "animate" && this.mode !== "react") return;
+    this.playing = true;
+    this.session?.runtime.setSimulationPaused(false);
+    this.session?.runtime.transport.start();
+  }
+
+  private paintLiveFrames(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    this.session.paintFrames(3);
+    const digest = this.session.getDiagnostics().pixelDigest;
+    if (digest) {
+      this.lastVisualDigest = digest;
+      this.lastVisualChangeMs = Date.now();
+    }
+  }
+
+  private applyLiveColor(reloadScene = false): void {
+    this.syncColorToParams();
+    if (reloadScene || studioSurface(this.pieceId, this.mode) !== "live" || !this.session) {
+      void this.applyPieceScene();
+      return;
+    }
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void; setParameter?: (n: string, v: number) => void }
+        | undefined;
+      piece?.setColorConfig?.(this.color);
+      if (typeof this.params.hue === "number") {
+        piece?.setParameter?.("hue", Number(this.params.hue));
+      }
+    }
+    this.paintLiveFrames();
+    this.persist();
   }
 
   private async applyPieceScene(): Promise<void> {
@@ -278,12 +348,11 @@ export class StudioApp {
     );
     const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
     const liveMode = this.mode === "react" ? "react" : "animate";
-    // Mashup slime-on-sdf: live = slime only (authentic RD trail), not fake SDF shader
-    const livePieceId =
-      this.pieceId === "mashups/slime-on-sdf" ? "growth/slime-mold" : this.pieceId;
+    const apiParams = paramsForApi(this.params, this.color);
+    const mashupSet = buildMashupSet(this.pieceId, this.seed, apiParams);
     const set: SetDef = composition
       ? composition.build(this.seed, this.params)
-      : {
+      : mashupSet ?? {
           protocol_version: "0.1.0",
           set_id: "studio-session",
           name: "Studio",
@@ -294,11 +363,11 @@ export class StudioApp {
               layers: [
                 {
                   id: "L0",
-                  piece: livePieceId,
+                  piece: this.pieceId,
                   opacity: 1,
                   blend: "normal",
                   seed: this.seed,
-                  parameters: paramsForApi(this.params, this.color),
+                  parameters: apiParams,
                 },
               ],
               modulation: mappings,
@@ -329,6 +398,10 @@ export class StudioApp {
           this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
         }
       }
+      const lp = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void }
+        | undefined;
+      lp?.setColorConfig?.(this.color);
     }
     if (this.pendingImportState) {
       const piece = this.session.runtime.getPiece("L0") as
@@ -347,17 +420,14 @@ export class StudioApp {
       }
       this.pendingImportState = null;
     }
-    const livePiece = this.session.runtime.getPiece("L0") as
-      | { setColorConfig?: (c: ColorConfig) => void }
-      | undefined;
-    livePiece?.setColorConfig?.(this.color);
     this.syncColorToParams();
     this.session.startLoop();
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
       this.session.runtime.setSimulationPaused(true);
-      // Still render current state once via the running loop (dt=0).
+    } else if (this.mode === "animate" || this.mode === "react") {
+      this.ensureAnimateTransport();
     } else if (this.playing) {
       this.session.runtime.setSimulationPaused(false);
       this.session.runtime.transport.start();
@@ -365,6 +435,9 @@ export class StudioApp {
       this.session.runtime.setSimulationPaused(true);
       this.session.runtime.transport.stop();
     }
+    this.paintLiveFrames();
+    this.stallError = "";
+    this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
     this.syncChrome();
   }
@@ -836,6 +909,9 @@ export class StudioApp {
   async setPiece(pieceId: string): Promise<void> {
     this.pieceId = pieceId;
     this.prefs.pieceId = pieceId;
+    if (this.mode === "animate" || this.mode === "react") {
+      this.playing = true;
+    }
     // Reset to piece defaults; keep shared meta axes that map meaningfully
     const defaults = defaultsForPiece(pieceId);
     const next: Record<string, number | string | boolean> = { ...defaults };
@@ -862,6 +938,9 @@ export class StudioApp {
     }
     this.seed = cryptoSeed();
     this.prefs.seed = this.seed;
+    if (this.mode === "animate" || this.mode === "react") {
+      this.playing = true;
+    }
     this.persist();
     await this.applyPieceScene();
     this.pushHistory();
@@ -1401,9 +1480,7 @@ export class StudioApp {
       this.color.rampPreset = presetId;
       this.color.ramp = JSON.parse(JSON.stringify(ramp.ramp));
     }
-    this.syncColorToParams();
-    void this.applyPieceScene();
-    this.persist();
+    this.applyLiveColor(true);
   }
 
   private syncUrl(push: boolean): void {
@@ -1494,9 +1571,11 @@ export class StudioApp {
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
       const caps = p.capabilities || {};
       const rt = getPieceRuntime(p.piece_id);
+      const animateBroken =
+        this.mode === "animate" && !isBrowserNativeAnimate(rt.animate);
       div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" />
-        <div class="name">${p.title || p.name || p.piece_id}</div>
-        <div class="meta">${p.family || p.piece_id.split("/")[0]} · gen:${rt.generate}
+        <div class="name">${p.title || p.name || p.piece_id}${animateBroken ? " · ANIMATE BROKEN" : ""}</div>
+        <div class="meta">${p.family || p.piece_id.split("/")[0]} · gen:${rt.generate} · anim:${rt.animate ?? "null"}
         ${caps.still ? "still " : ""}${caps.animated ? "anim " : ""}${caps.realtime ? "rt " : ""}${caps.audio_reactive ? "audio" : ""}</div>
         <div class="meta">${p.description || ""}</div>`;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
@@ -1876,26 +1955,22 @@ export class StudioApp {
     el.querySelector("#cfg-color-mode")?.addEventListener("change", (e) => {
       this.color.mode = (e.target as HTMLSelectElement).value as ColorConfig["mode"];
       this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor(true);
     });
     el.querySelector("#cfg-color-primary")?.addEventListener("input", (e) => {
       if (this.locked.has("color")) return;
       this.color.primary.value = (e.target as HTMLInputElement).value;
       this.color.mode = "solid";
-      this.syncColorToParams();
-      this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor();
     });
     el.querySelector("#cfg-color-bg")?.addEventListener("input", (e) => {
       if (this.locked.has("color")) return;
       this.color.background.value = (e.target as HTMLInputElement).value;
-      this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor(true);
     });
     el.querySelector("#cfg-color-transparent")?.addEventListener("change", (e) => {
       this.color.transparentBackground = (e.target as HTMLInputElement).checked;
-      this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor(true);
     });
     el.querySelector("#cfg-ramp-preset")?.addEventListener("change", (e) => {
       if (this.locked.has("ramp")) return;
@@ -1909,15 +1984,12 @@ export class StudioApp {
       if (!preset) return;
       this.color.mode = "solid";
       this.color.primary = { ...preset.color };
-      this.syncColorToParams();
-      this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor();
       this.renderConfig();
     });
     el.querySelector("#cfg-ramp-mapping")?.addEventListener("change", (e) => {
       this.color.rampMapping = (e.target as HTMLSelectElement).value as ColorConfig["rampMapping"];
-      this.persist();
-      void this.applyPieceScene();
+      this.applyLiveColor(true);
     });
     el.querySelector("#cfg-hue-adv")?.addEventListener("input", (e) => {
       if (this.locked.has("hue")) return;
@@ -1995,28 +2067,69 @@ export class StudioApp {
     this.frameTimes.push(now);
     while (this.frameTimes.length && now - this.frameTimes[0]! > 1000) this.frameTimes.shift();
     this.fps = this.frameTimes.length;
+    if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
+      const diag = this.session.getDiagnostics();
+      if (diag.pixelDigest && diag.pixelDigest !== this.lastVisualDigest) {
+        this.lastVisualDigest = diag.pixelDigest;
+        this.lastVisualChangeMs = now;
+        this.stallError = "";
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner?.textContent?.startsWith("Animation stalled")) {
+          stallBanner.classList.remove("visible");
+        }
+      }
+      if (
+        diag.renderCount > 0 &&
+        now - this.lastVisualChangeMs > 2000 &&
+        !this.session.runtime.isSimulationPaused()
+      ) {
+        const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+        this.stallError = [
+          "Animation stalled",
+          `piece: ${this.pieceId}`,
+          `backend: ${kind}`,
+          `update count: ${diag.updateCount}`,
+          `render count: ${diag.renderCount}`,
+        ].join("\n");
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner) {
+          stallBanner.textContent = this.stallError;
+          stallBanner.classList.add("visible");
+        }
+      }
+      this.frame = diag.logicalFrame;
+    }
     if (this.hudVisible && now - this.lastHud > 200) {
       this.lastHud = now;
       const hud = document.getElementById("hud");
       const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+      const diag = this.session?.getDiagnostics();
       if (hud) {
         hud.textContent = [
           `FPS ${this.fps}`,
+          `visualFps ${diag?.visualFps?.toFixed(1) ?? "—"}`,
           `mode ${this.mode}`,
           `piece ${this.pieceId}`,
-          `renderer ${kind}`,
+          `backend ${kind}`,
           `animBackend ${this.animBackend || kind}`,
           `seed ${this.seed}`,
-          `logicalFrame ${this.frame}`,
+          `logicalFrame ${diag?.logicalFrame ?? this.frame}`,
+          `updateCount ${diag?.updateCount ?? 0}`,
+          `renderCount ${diag?.renderCount ?? 0}`,
+          `pixelDigest ${diag?.pixelDigest ?? "—"}`,
+          `lastDraw ${diag?.lastSuccessfulDrawMs ? new Date(diag.lastSuccessfulDrawMs).toISOString().slice(11, 23) : "—"}`,
           `displayedFrame ${this.displayedFrame || this.frame}`,
           `updateFps ${this.animUpdateFps.toFixed(1)}`,
           `latencyMs ${this.lastRenderMs.toFixed(0)}`,
           `playing ${this.playing ? "yes" : "pause"}`,
-          `webgl ${this.webglStatus}`,
+          `simPaused ${diag?.simulationPaused ? "yes" : "no"}`,
+          `transport ${diag?.transportPlaying ? "run" : "stop"}`,
+          `webgl ${diag?.webglError ?? this.webglStatus}`,
           `recipe ${this.recipeDigest || "—"}`,
           `state ${this.renderDigest || "—"}`,
           `surface ${studioSurface(this.pieceId, this.mode)}`,
-          `res ${this.canvas.width}x${this.canvas.height}`,
+          `canvas ${diag?.canvasWidth ?? this.canvas.width}x${diag?.canvasHeight ?? this.canvas.height}`,
+          `css ${diag?.visibleCssWidth?.toFixed(0) ?? "?"}x${diag?.visibleCssHeight?.toFixed(0) ?? "?"}`,
           `audio ${this.audioEnabled ? "on" : "off"}`,
           `controls ${this.controlsVisible ? "shown" : "hidden"}`,
         ].join("\n");

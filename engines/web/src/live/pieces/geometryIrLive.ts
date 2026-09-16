@@ -135,38 +135,61 @@ export async function createGeometryIrPiece(
         const yr = x * sin + y * cos;
         return [cx + xr * scale, cy + yr * scale] as const;
       };
+      const primitiveCount = ir.primitives?.length ?? 0;
+      const edgeCount = ir.edges.length;
+      const centerCount = ir.centers.length;
+      const totalSteps = Math.max(24, primitiveCount || edgeCount + centerCount);
+      const buildFrames = Math.max(120, totalSteps * 2);
+      const buildProgress = Math.min(1, last.frame / buildFrames);
+      const reveal = 0.15 + buildProgress * 0.85;
+      const maxPrimitives =
+        primitiveCount > 0 ? Math.max(1, Math.floor(primitiveCount * buildProgress)) : 0;
+      const maxEdges = edgeCount > 0 ? Math.max(1, Math.floor(edgeCount * buildProgress)) : 0;
+      const maxCenters = centerCount > 0 ? Math.max(1, Math.floor(centerCount * buildProgress)) : 0;
       if (ir.primitives?.length) {
-        for (const p of ir.primitives) {
+        for (let i = 0; i < maxPrimitives; i++) {
+          const p = ir.primitives[i]!;
+          const local = Math.min(1, buildProgress * totalSteps - i);
           if (p.kind === "line") {
             const [x0, y0] = xf(Number(p.x1), Number(p.y1));
             const [x1, y1] = xf(Number(p.x2), Number(p.y2));
+            const mx = x0 + (x1 - x0) * local;
+            const my = y0 + (y1 - y0) * local;
             c2.beginPath();
             c2.moveTo(x0, y0);
-            c2.lineTo(x1, y1);
+            c2.lineTo(mx, my);
             c2.stroke();
           } else if (p.kind === "circle") {
             const [x, y] = xf(Number(p.cx), Number(p.cy));
+            const r = Math.max(2, Number(p.r) * scale * reveal * local);
             c2.beginPath();
-            c2.arc(x, y, Math.max(2, Number(p.r) * scale), 0, Math.PI * 2);
+            c2.arc(x, y, r, 0, Math.PI * 2);
             c2.stroke();
           }
         }
       } else {
-        for (const e of ir.edges) {
+        for (let i = 0; i < maxEdges; i++) {
+          const e = ir.edges[i]!;
           const a = ir.centers[e.a];
           const b = ir.centers[e.b];
           if (!a || !b) continue;
+          const local = Math.min(1, buildProgress * totalSteps - i);
           const [x0, y0] = xf(a.x, a.y);
           const [x1, y1] = xf(b.x, b.y);
+          const mx = x0 + (x1 - x0) * local;
+          const my = y0 + (y1 - y0) * local;
           c2.beginPath();
           c2.moveTo(x0, y0);
-          c2.lineTo(x1, y1);
+          c2.lineTo(mx, my);
           c2.stroke();
         }
-        for (const p of ir.centers) {
+        for (let i = 0; i < maxCenters; i++) {
+          const p = ir.centers[i]!;
+          const local = Math.min(1, buildProgress * totalSteps - (edgeCount + i));
           const [x, y] = xf(p.x, p.y);
+          const r = Math.max(2, p.r * scale * reveal * Math.max(0.2, local));
           c2.beginPath();
-          c2.arc(x, y, Math.max(2, p.r * scale), 0, Math.PI * 2);
+          c2.arc(x, y, r, 0, Math.PI * 2);
           c2.stroke();
         }
       }

@@ -20,6 +20,7 @@ import { createStrangeAttractorLivePiece } from "./strangeAttractorLive";
 import { createFieldFlowLivePiece } from "./fieldFlowLive";
 import { createTilingLivePiece } from "./tilingLive";
 import { createLSystemLivePiece } from "./lsystemLive";
+import { createNodesLivePiece } from "./nodesLive";
 
 export { createShaderPiece } from "./shaderPiece";
 
@@ -58,9 +59,8 @@ export async function createLivePiece(
     if (pieceId === "growth/differential-growth") {
       return createDifferentialGrowthPiece(gl, pieceId);
     }
-    if (pieceId === "mashups/slime-on-sdf") {
-      // Compositor uses multi-layer; primary layer is slime
-      return createSlimeMoldPiece(gl, "growth/slime-mold");
+    if (pieceId === "audiovisual/nodes" || pieceId === "reference/audiovisual-nodes") {
+      return createNodesLivePiece(gl, pieceId);
     }
   }
 
