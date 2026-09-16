@@ -133,15 +133,18 @@ export async function createGeometryIrPiece(
       const xf = (x: number, y: number) => {
         const xr = x * cos - y * sin;
         const yr = x * sin + y * cos;
-        return [cx + xr * scale, cy + yr * scale] as const;
+        return [cx + xr * drawScale, cy + yr * drawScale] as const;
       };
       const primitiveCount = ir.primitives?.length ?? 0;
       const edgeCount = ir.edges.length;
       const centerCount = ir.centers.length;
       const totalSteps = Math.max(24, primitiveCount || edgeCount + centerCount);
       const buildFrames = Math.max(120, totalSteps * 2);
-      const buildProgress = Math.min(1, last.frame / buildFrames);
+      // Loop construction continuously — ANIMATE must never freeze on a finished still.
+      const buildProgress = (last.frame % buildFrames) / buildFrames;
       const reveal = 0.15 + buildProgress * 0.85;
+      const breathe = 1 + 0.04 * Math.sin(last.t * 1.15);
+      const drawScale = scale * breathe;
       const maxPrimitives =
         primitiveCount > 0 ? Math.max(1, Math.floor(primitiveCount * buildProgress)) : 0;
       const maxEdges = edgeCount > 0 ? Math.max(1, Math.floor(edgeCount * buildProgress)) : 0;
@@ -161,7 +164,7 @@ export async function createGeometryIrPiece(
             c2.stroke();
           } else if (p.kind === "circle") {
             const [x, y] = xf(Number(p.cx), Number(p.cy));
-            const r = Math.max(2, Number(p.r) * scale * reveal * local);
+            const r = Math.max(2, Number(p.r) * drawScale * reveal * local);
             c2.beginPath();
             c2.arc(x, y, r, 0, Math.PI * 2);
             c2.stroke();
@@ -187,7 +190,7 @@ export async function createGeometryIrPiece(
           const p = ir.centers[i]!;
           const local = Math.min(1, buildProgress * totalSteps - (edgeCount + i));
           const [x, y] = xf(p.x, p.y);
-          const r = Math.max(2, p.r * scale * reveal * Math.max(0.2, local));
+          const r = Math.max(2, p.r * drawScale * reveal * Math.max(0.2, local));
           c2.beginPath();
           c2.arc(x, y, r, 0, Math.PI * 2);
           c2.stroke();

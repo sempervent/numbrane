@@ -159,10 +159,10 @@ export async function createLSystemLivePiece(
         gl.bindTexture(gl.TEXTURE_2D, tex);
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, W, H, gl.RED, gl.UNSIGNED_BYTE, ink);
       }
-      // Loop construction after full reveal
-      if (cursor >= segs.length && frame.frame % 180 === 0) {
-        rebuild(seed + 1);
+      if (cursor >= segs.length) {
+        rebuild(seed);
       }
+      params.hue = (params.hue + frame.dt * 0.02) % 1;
     },
     setParameter(name, value) {
       if (typeof value === "number" && name in params) params[name] = value;

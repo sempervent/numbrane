@@ -5,6 +5,7 @@
 import { FULLSCREEN_VERTEX_SHADER, loadShader } from "../../gl";
 import type { FrameState, LivePiece, LiveTelemetry, RenderContext } from "../piece";
 import { fetchNpyFloat32 } from "../npy";
+import { uploadScalarFieldTexture } from "../trailTexture";
 
 function compile(gl: WebGL2RenderingContext, vsSrc: string, fsSrc: string): WebGLProgram {
   const vs = gl.createShader(gl.VERTEX_SHADER)!;
@@ -97,18 +98,7 @@ export async function createNoodlesLivePiece(
   };
 
   const uploadTrail = () => {
-    const rgba = new Float32Array(simW * simH * 4);
-    let max = 1e-6;
-    for (let i = 0; i < trail.length; i++) max = Math.max(max, trail[i]!);
-    for (let i = 0; i < trail.length; i++) {
-      const v = trail[i]! / max;
-      rgba[i * 4] = v;
-      rgba[i * 4 + 1] = v * 0.7;
-      rgba[i * 4 + 2] = v * 0.4;
-      rgba[i * 4 + 3] = 1;
-    }
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, simW, simH, 0, gl.RGBA, gl.FLOAT, rgba);
+    uploadScalarFieldTexture(gl, tex, trail, simW, simH);
   };
 
   return {

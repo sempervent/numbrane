@@ -16,12 +16,12 @@ NUMBRANE is **not** a generative-AI product.
 
 Forbidden in the runtime, generation pipeline, creative engine, or architectural assumptions:
 
-- generative AI / LLM calls
-- image-generation models / diffusion models
-- neural-network generation / inference APIs
-- model weights
+- cloud generative AI / LLM calls for art generation
+- remote image-generation / diffusion / inference APIs
 - prompt-to-image subsystems
-- any runtime dependency on AI services
+- any required dependency on cloud AI services
+
+Allowed when strictly client-side: small browser-local ML models (TensorFlow.js, ONNX Runtime Web, WebGPU/WASM) for assistive analysis or steering — optional, documented, reproducible, and never a substitute for the mathematical art algorithms.
 
 An LLM may be used **externally** as a software-development tool to edit this repository. It must never become part of NUMBRANE’s art-producing runtime.
 

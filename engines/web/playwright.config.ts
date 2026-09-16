@@ -10,7 +10,11 @@ const extraArgs = (process.env.PW_CHROMIUM_ARGS ?? "--use-angle=swiftshader")
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testIgnore: ["**/studio-animation.spec.ts", "**/studio-all-animation.spec.ts"],
+  testIgnore: [
+    "**/studio-animation.spec.ts",
+    "**/studio-all-animation.spec.ts",
+    "**/studio-animation-soak.spec.ts",
+  ],
   timeout: 120_000,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,

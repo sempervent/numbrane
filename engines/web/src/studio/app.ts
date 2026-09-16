@@ -172,6 +172,7 @@ export class StudioApp {
   private webglStatus = "—";
   private stallError = "";
   private lastVisualChangeMs = Date.now();
+  private pieceLoadedAt = Date.now();
   private lastVisualDigest = "";
 
   constructor(canvas: HTMLCanvasElement) {
@@ -233,10 +234,16 @@ export class StudioApp {
       surface: studioSurface(this.pieceId, this.mode),
       playing: this.playing,
       visualFps: this.fps,
+      rafCount: diag?.rafCount ?? 0,
+      rafHz: diag?.rafHz ?? 0,
+      rafStalled: diag?.rafStalled ?? false,
+      tickCount: diag?.tickCount ?? 0,
       logicalFrame: diag?.logicalFrame ?? this.frame,
       updateCount: diag?.updateCount ?? 0,
       renderCount: diag?.renderCount ?? 0,
+      presentCount: diag?.presentCount ?? 0,
       pixelDigest: diag?.pixelDigest ?? "",
+      presentedFrame: diag?.presentedFrame ?? null,
       lastSuccessfulDrawMs: diag?.lastSuccessfulDrawMs ?? 0,
       simulationPaused: diag?.simulationPaused ?? false,
       transportPlaying: diag?.transportPlaying ?? false,
@@ -249,6 +256,25 @@ export class StudioApp {
     };
   }
 
+  /** Live solid color update without scene reload (tests + picker). */
+  setSolidColor(hex: string): void {
+    if (this.locked.has("color")) return;
+    this.color.primary.value = hex;
+    this.color.mode = "solid";
+    this.applyLiveColor();
+    this.renderConfig();
+  }
+
+  /** Sample visible #stage RGBA grid (64×36 default) for tests/diagnostics. */
+  samplePresentedPixels(gridW = 64, gridH = 36): import("../live/pixelMetrics").PixelFrame | null {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
+    try {
+      return this.session.readPresentedPixels(gridW, gridH);
+    } catch {
+      return null;
+    }
+  }
+
   private ensureAnimateTransport(): void {
     if (this.mode !== "animate" && this.mode !== "react") return;
     this.playing = true;
@@ -256,12 +282,14 @@ export class StudioApp {
     this.session?.runtime.transport.start();
   }
 
-  private paintLiveFrames(): void {
+  private kickLiveSurface(): void {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
-    this.session.paintFrames(3);
-    const digest = this.session.getDiagnostics().pixelDigest;
-    if (digest) {
-      this.lastVisualDigest = digest;
+    this.session.ensureLoopRunning();
+    // One immediate present — ongoing motion must come from RAF, not repeated paintFrames().
+    this.session.frame(performance.now());
+    const stats = this.session.getDiagnostics().presentedFrame;
+    if (stats?.digest) {
+      this.lastVisualDigest = stats.digest;
       this.lastVisualChangeMs = Date.now();
     }
   }
@@ -283,7 +311,7 @@ export class StudioApp {
         piece?.setParameter?.("hue", Number(this.params.hue));
       }
     }
-    this.paintLiveFrames();
+    this.kickLiveSurface();
     this.persist();
   }
 
@@ -336,16 +364,17 @@ export class StudioApp {
     this.animBackend = String(rendererKindFor(this.pieceId, this.mode) ?? "live");
     if (!this.session) return;
 
-    const mappings = defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map(
-      (m, i) => ({
-        id: `studio-${i}`,
-        source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
-        destination: `layer.L0.${m.target}`,
-        amount: m.amount,
-        min: 0,
-        max: 2,
-      }),
-    );
+    const mappings =
+      this.mode === "react"
+        ? defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map((m, i) => ({
+            id: `studio-${i}`,
+            source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
+            destination: `layer.L0.${m.target}`,
+            amount: m.amount,
+            min: 0,
+            max: 2,
+          }))
+        : [];
     const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
     const liveMode = this.mode === "react" ? "react" : "animate";
     const apiParams = paramsForApi(this.params, this.color);
@@ -421,7 +450,7 @@ export class StudioApp {
       this.pendingImportState = null;
     }
     this.syncColorToParams();
-    this.session.startLoop();
+    this.session.ensureLoopRunning();
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
@@ -435,8 +464,10 @@ export class StudioApp {
       this.session.runtime.setSimulationPaused(true);
       this.session.runtime.transport.stop();
     }
-    this.paintLiveFrames();
+    this.kickLiveSurface();
     this.stallError = "";
+    this.pieceLoadedAt = Date.now();
+    this.lastVisualChangeMs = Date.now();
     this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
     this.syncChrome();
@@ -2069,6 +2100,7 @@ export class StudioApp {
     this.fps = this.frameTimes.length;
     if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
       const diag = this.session.getDiagnostics();
+      const warmupMs = Date.now() - this.pieceLoadedAt;
       if (diag.pixelDigest && diag.pixelDigest !== this.lastVisualDigest) {
         this.lastVisualDigest = diag.pixelDigest;
         this.lastVisualChangeMs = now;
@@ -2078,7 +2110,20 @@ export class StudioApp {
           stallBanner.classList.remove("visible");
         }
       }
-      if (
+      if (warmupMs > 2500 && diag.rafStalled && !document.hidden) {
+        this.stallError = [
+          "RAF STALLED",
+          `piece: ${this.pieceId}`,
+          `rafCount: ${diag.rafCount}`,
+          `rafHz: ${diag.rafHz.toFixed(1)}`,
+        ].join("\n");
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner) {
+          stallBanner.textContent = this.stallError;
+          stallBanner.classList.add("visible");
+        }
+      } else if (
+        warmupMs > 2500 &&
         diag.renderCount > 0 &&
         now - this.lastVisualChangeMs > 2000 &&
         !this.session.runtime.isSimulationPaused()
@@ -2090,6 +2135,7 @@ export class StudioApp {
           `backend: ${kind}`,
           `update count: ${diag.updateCount}`,
           `render count: ${diag.renderCount}`,
+          `present count: ${diag.presentCount}`,
         ].join("\n");
         const stallBanner = document.getElementById("unsupported-banner");
         if (stallBanner) {
@@ -2114,9 +2160,13 @@ export class StudioApp {
           `animBackend ${this.animBackend || kind}`,
           `seed ${this.seed}`,
           `logicalFrame ${diag?.logicalFrame ?? this.frame}`,
+          `raf ${diag?.rafCount ?? 0} @ ${diag?.rafHz?.toFixed(1) ?? "—"}Hz`,
+          `tick ${diag?.tickCount ?? 0}`,
           `updateCount ${diag?.updateCount ?? 0}`,
           `renderCount ${diag?.renderCount ?? 0}`,
+          `presentCount ${diag?.presentCount ?? 0}`,
           `pixelDigest ${diag?.pixelDigest ?? "—"}`,
+          `changedPx ${diag?.presentedFrame?.changedPixelFraction?.toFixed(4) ?? "—"}`,
           `lastDraw ${diag?.lastSuccessfulDrawMs ? new Date(diag.lastSuccessfulDrawMs).toISOString().slice(11, 23) : "—"}`,
           `displayedFrame ${this.displayedFrame || this.frame}`,
           `updateFps ${this.animUpdateFps.toFixed(1)}`,

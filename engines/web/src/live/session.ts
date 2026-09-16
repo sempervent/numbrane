@@ -34,6 +34,11 @@ import type {
 } from "./types";
 import { parseResolution } from "./types";
 import type { FrameState } from "./piece";
+import {
+  analyzeRgbaGrid,
+  downsampleRgba,
+  type PixelFrame,
+} from "./pixelMetrics";
 
 export type HudStats = {
   fps: number;
@@ -45,8 +50,13 @@ export type HudStats = {
 };
 
 export type LiveDiagnostics = {
+  rafCount: number;
+  rafHz: number;
+  rafLastTimestamp: number;
+  tickCount: number;
   updateCount: number;
   renderCount: number;
+  presentCount: number;
   logicalFrame: number;
   canvasWidth: number;
   canvasHeight: number;
@@ -54,10 +64,12 @@ export type LiveDiagnostics = {
   visibleCssHeight: number;
   lastSuccessfulDrawMs: number;
   pixelDigest: string;
+  presentedFrame: PixelFrame | null;
   webglError: string | null;
   simulationPaused: boolean;
   transportPlaying: boolean;
   visualFps: number;
+  rafStalled: boolean;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -104,10 +116,21 @@ export class LiveSession {
   private fpsFrames = 0;
   private fpsLast = 0;
   private renderCount = 0;
+  private presentCount = 0;
+  private tickCount = 0;
+  private rafCount = 0;
+  private rafLastTimestamp = 0;
+  private rafProgressMs = 0;
+  private rafHz = 0;
+  private rafHzFrames = 0;
+  private rafHzLast = 0;
   private lastSuccessfulDrawMs = 0;
   private pixelDigest = "";
+  private lastPresentedGrid: Uint8Array | null = null;
+  private lastPresentedStats: PixelFrame | null = null;
   private webglError: string | null = null;
   private lastDigestSampleMs = 0;
+  private frozenPresentT = 0;
   private baseParams = new Map<string, Record<string, number>>();
   private basePost: PostDef = {};
   private layerOpacity = new Map<string, number>();
@@ -196,7 +219,7 @@ export class LiveSession {
       }
       loaded += 1;
       const seed = layer.seed ?? this.runtime.getSeed();
-      piece.initialize({ piece: layer.piece }, seed);
+      await piece.initialize({ piece: layer.piece }, seed);
       piece.resize(w, h);
       if (layer.parameters) {
         for (const [k, v] of Object.entries(layer.parameters)) {
@@ -227,9 +250,15 @@ export class LiveSession {
   getDiagnostics(): LiveDiagnostics {
     const rect = this.canvas.getBoundingClientRect();
     const snap = this.runtime.transport.getSnapshot();
+    const now = performance.now();
     return {
+      rafCount: this.rafCount,
+      rafHz: this.rafHz,
+      rafLastTimestamp: this.rafLastTimestamp,
+      tickCount: this.tickCount,
       updateCount: this.runtime.getUpdateCount(),
       renderCount: this.renderCount,
+      presentCount: this.presentCount,
       logicalFrame: this.runtime.getFrame(),
       canvasWidth: this.canvas.width,
       canvasHeight: this.canvas.height,
@@ -237,10 +266,15 @@ export class LiveSession {
       visibleCssHeight: rect.height,
       lastSuccessfulDrawMs: this.lastSuccessfulDrawMs,
       pixelDigest: this.pixelDigest,
+      presentedFrame: this.lastPresentedStats,
       webglError: this.webglError,
       simulationPaused: this.runtime.isSimulationPaused(),
       transportPlaying: snap.playing,
       visualFps: this.hud.fps,
+      rafStalled:
+        this.running &&
+        this.rafCount > 20 &&
+        now - this.rafProgressMs > 1500,
     };
   }
 
@@ -447,15 +481,27 @@ export class LiveSession {
     this.features = f;
   }
 
-  startLoop(): void {
-    if (this.running) return;
+  /** Start or recover the RAF driver (re-schedule if heartbeat stalled). */
+  startLoop(force = false): void {
+    const now = performance.now();
+    const stalled = this.running && now - this.rafLastTimestamp > 500;
+    if (this.running && !force && !stalled) return;
+    if (this.running) {
+      cancelAnimationFrame(this.raf);
+    }
     this.running = true;
     this.fpsLast = performance.now();
-    const loop = (now: number) => {
+    this.rafHzLast = this.fpsLast;
+    const loop = (t: number) => {
+      if (!this.running) return;
       this.raf = requestAnimationFrame(loop);
-      this.frame(now);
+      this.frame(t);
     };
     this.raf = requestAnimationFrame(loop);
+  }
+
+  ensureLoopRunning(): void {
+    this.startLoop(this.running && performance.now() - this.rafLastTimestamp > 500);
   }
 
   stopLoop(): void {
@@ -463,8 +509,41 @@ export class LiveSession {
     cancelAnimationFrame(this.raf);
   }
 
+  /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */
+  readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const prior =
+      trackForComparison && this.lastPresentedGrid
+        ? { pixels: this.lastPresentedGrid, stats: this.lastPresentedStats! }
+        : undefined;
+    const stats = analyzeRgbaGrid(grid, gridW, gridH, prior);
+    if (trackForComparison) {
+      this.lastPresentedGrid = grid;
+      this.lastPresentedStats = stats;
+    }
+    this.pixelDigest = stats.digest;
+    return stats;
+  }
+
   /** Single deterministic tick (tests / smoke). */
   frame(wallNowMs: number): FrameState {
+    this.rafCount += 1;
+    this.rafLastTimestamp = performance.now();
+    this.rafProgressMs = this.rafLastTimestamp;
+    this.rafHzFrames += 1;
+    if (this.rafLastTimestamp - this.rafHzLast >= 500) {
+      this.rafHz =
+        (this.rafHzFrames * 1000) / Math.max(1, this.rafLastTimestamp - this.rafHzLast);
+      this.rafHzFrames = 0;
+      this.rafHzLast = this.rafLastTimestamp;
+    }
+    this.tickCount += 1;
     const t0 = performance.now();
     // Audio
     const a0 = performance.now();
@@ -551,7 +630,12 @@ export class LiveSession {
     this.lastSuccessfulDrawMs = performance.now();
     if (wallNowMs - this.lastDigestSampleMs > 250) {
       this.lastDigestSampleMs = wallNowMs;
-      this.samplePixelDigest();
+      try {
+        // Digest-only — do not advance the comparison chain used by tests/diagnostics.
+        this.readPresentedPixels(64, 36, false);
+      } catch {
+        /* readPixels may fail during resize; keep last digest */
+      }
     }
     const err = this.compositor.gl.getError();
     if (err !== this.compositor.gl.NO_ERROR) {
@@ -579,12 +663,19 @@ export class LiveSession {
     if (ev.type === "param") this.midiCcSources.set(ev.path, ev.value);
   }
 
+  /** Blend mod matrix output with stored base — silence must not zero simulation params. */
+  private modulatedValue(base: number, modValue: number): number {
+    if (modValue <= 1e-6) return base;
+    return base * (1 + modValue);
+  }
+
   private applyMods(mods: Record<string, number>): void {
     const post: PostDef = { ...this.basePost };
     for (const [dest, value] of Object.entries(mods)) {
       if (dest.startsWith("post.")) {
         const key = dest.slice(5) as keyof PostDef;
-        (post as Record<string, number>)[key] = value;
+        const baseVal = (this.basePost as Record<string, number>)[key] ?? 0;
+        (post as Record<string, number>)[key] = this.modulatedValue(baseVal, value);
         continue;
       }
       if (dest.startsWith("layer.")) {
@@ -598,19 +689,17 @@ export class LiveSession {
           continue;
         }
         const piece = this.runtime.getPiece(layerId);
-        if (piece) piece.setParameter(param, value);
+        if (!piece) continue;
+        const baseMap = this.baseParams.get(layerId);
+        const baseVal = baseMap?.[param];
+        if (typeof baseVal === "number") {
+          piece.setParameter(param, this.modulatedValue(baseVal, value));
+        } else {
+          piece.setParameter(param, value);
+        }
       }
     }
     this.postFrame = post;
-  }
-
-  private samplePixelDigest(): void {
-    const gl = this.compositor.gl;
-    const x = Math.max(0, Math.floor(this.canvas.width / 2) - 1);
-    const y = Math.max(0, Math.floor(this.canvas.height / 2) - 1);
-    const buf = new Uint8Array(4);
-    gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, buf);
-    this.pixelDigest = `${buf[0]}-${buf[1]}-${buf[2]}-${buf[3]}`;
   }
 
   private renderFrame(frame: FrameState): void {
@@ -654,12 +743,19 @@ export class LiveSession {
         postOut.chromatic = (postOut.chromatic ?? 0) + tr.progress * 0.5;
       }
     }
+    const paused = this.runtime.isSimulationPaused();
+    if (!paused) this.frozenPresentT = frame.t;
+    const presentT = paused ? this.frozenPresentT : frame.t;
+    const postPresent = paused
+      ? { ...postOut, grain: 0, feedback: 0, chromatic: 0 }
+      : postOut;
     this.compositor.endFrame(
-      postOut,
+      postPresent,
       this.runtime.isBlackout(),
-      frame.t,
+      presentT,
       true,
     );
+    this.presentCount += 1;
   }
 
   getFeatures(): AudioFeatures {

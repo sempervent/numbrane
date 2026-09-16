@@ -21,7 +21,7 @@ MacBook microphone (or any browser audio input)
 
 No Ableton, MIDI, DAW, or OBS is required. OBS is an optional output target only — it does not carry audio into NUMBRANE.
 
-No AI, ML, or external generative services. Analysis and visuals are algorithmic / procedural / human-controlled.
+No cloud generative-AI or remote inference services. Analysis and visuals are algorithmic / procedural / human-controlled. Optional browser-local ML (client-side only) may assist analysis or parameter steering when it degrades gracefully and does not replace core algorithms.
 
 ## Startup
 

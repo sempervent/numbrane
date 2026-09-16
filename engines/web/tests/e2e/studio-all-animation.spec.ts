@@ -1,24 +1,50 @@
 /**
- * Exhaustive Studio ANIMATE liveness — every maintained catalog piece.
- * Requires Docker Studio on :8080.
+ * Exhaustive Studio ANIMATE — sustained motion via decoded #stage RGBA pixels.
  */
 
 import { test, expect, type Page } from "@playwright/test";
+import type { PixelFrame } from "../../src/live/pixelMetrics";
+import { isMeaningfulVisualChange } from "../../src/live/pixelMetrics";
 import { catalogPieceIds } from "../../src/studio/runtime/registry";
 import {
   enterAnimate,
-  hasMeaningfulMotion,
-  sampleCanvas,
-  sampleDifference,
+  frameIsVisible,
+  sampleStagePixels,
   saveFailureArtifacts,
   studioDiag,
   waitForLiveFrame,
 } from "./animationMetrics";
 
 const catalogPieces = catalogPieceIds().sort();
+const CHECKPOINT_MS = [0, 500, 1000, 2000, 4000, 8000, 12000];
 
-async function screenshotBuffer(page: Page): Promise<Buffer> {
-  return page.locator("#stage").screenshot({ type: "png", timeout: 20_000 });
+function sustainedMotion(samples: PixelFrame[], frameAdvances: number[]): boolean {
+  if (frameAdvances[frameAdvances.length - 1]! - frameAdvances[0]! < 30) return false;
+  let hits = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const s = samples[i]!;
+    if (s.changedPixelFraction >= 0.004 || s.rmsDifference >= 3.5 || s.digest !== samples[i - 1]!.digest) {
+      hits += 1;
+    }
+  }
+  return hits >= 4;
+}
+
+async function collectCheckpoints(page: Page): Promise<{
+  samples: PixelFrame[];
+  frames: number[];
+}> {
+  const samples: PixelFrame[] = [];
+  const frames: number[] = [];
+  let elapsed = 0;
+  for (const target of CHECKPOINT_MS) {
+    const wait = target - elapsed;
+    if (wait > 0) await page.waitForTimeout(wait);
+    elapsed = target;
+    samples.push(await sampleStagePixels(page));
+    frames.push((await studioDiag(page)).logicalFrame ?? 0);
+  }
+  return { samples, frames };
 }
 
 async function exercisePiece(page: Page, piece: string): Promise<void> {
@@ -31,72 +57,84 @@ async function exercisePiece(page: Page, piece: string): Promise<void> {
 
   try {
     await enterAnimate(page, piece, 42);
-    await waitForLiveFrame(page, 25_000);
+    await waitForLiveFrame(page, 30_000);
+    const heavy =
+      piece.startsWith("mashups/") ||
+      piece === "flagship/latticefall" ||
+      piece === "growth/slime-mold";
+    await page.waitForFunction(
+      () => {
+        const d = (
+          window as unknown as {
+            __NUMBRANE_STUDIO__?: { getAnimationDiagnostics?: () => { rafCount?: number; rafStalled?: boolean } };
+          }
+        ).__NUMBRANE_STUDIO__?.getAnimationDiagnostics?.();
+        return (d?.rafCount ?? 0) > 15 && (d?.presentCount ?? 0) > 15;
+      },
+      null,
+      { timeout: heavy ? 45_000 : 20_000 },
+    );
 
     const banner = await page
       .locator("#unsupported-banner.visible")
       .textContent({ timeout: 500 })
       .catch(() => null);
-    expect(banner ?? "", `${piece} unsupported banner`).not.toMatch(/failed|stalled/i);
+    expect(banner ?? "", `${piece} banner`).not.toMatch(/failed|stalled|RAF STALLED/i);
 
-    const aSample = await sampleCanvas(page);
-    expect(aSample.nonBlack, `${piece} visible`).toBeGreaterThan(0.002);
-    expect(aSample.occupancy + aSample.variance, `${piece} structure`).toBeGreaterThan(0.003);
+    const { samples, frames } = await collectCheckpoints(page);
+    expect(frameIsVisible(samples[0]!), `${piece} visible`).toBe(true);
 
-    const diagA = await studioDiag(page);
-    const aShot = await screenshotBuffer(page);
-    const digestA = diagA.pixelDigest ?? "";
+    const diag = await studioDiag(page);
+    expect(diag.rafStalled, `${piece} RAF`).not.toBe(true);
+    expect((diag.presentCount ?? 0) > 0, `${piece} present`).toBe(true);
 
-    await page.waitForTimeout(500);
-    const bSample = await sampleCanvas(page);
-    const digestB = (await studioDiag(page)).pixelDigest ?? "";
-
-    await page.waitForTimeout(1000);
-    const cSample = await sampleCanvas(page);
-    const cShot = await screenshotBuffer(page);
-    const diagC = await studioDiag(page);
-    const digestC = diagC.pixelDigest ?? "";
-
-    const diagMid = diagC;
-    expect((diagMid.renderCount ?? 0) > 0, `${piece} render count`).toBe(true);
-    expect((diagMid.logicalFrame ?? 0) > 3, `${piece} logical frame`).toBe(true);
-
-    const frameAdvance = (diagC.logicalFrame ?? 0) - (diagA.logicalFrame ?? 0);
-    const motionOk =
-      hasMeaningfulMotion(aSample, bSample, cSample) ||
-      (digestA !== digestB && digestB !== digestC) ||
-      sampleDifference(aSample, cSample) > 0.006 ||
-      frameAdvance > 12;
-
+    const motionOk = sustainedMotion(samples, frames);
     if (!motionOk) {
-      await saveFailureArtifacts(piece, page, aShot, cShot, consoleLines, diagMid);
+      await saveFailureArtifacts(piece, page, samples, consoleLines, diag);
     }
-    expect(motionOk, `${piece} A/B/C visual motion`).toBe(true);
+    expect(motionOk, `${piece} 12s sustained framebuffer motion`).toBe(true);
 
     await page.keyboard.press("Space");
-    await page.waitForTimeout(200);
-    const dSample = await sampleCanvas(page);
-    await page.waitForTimeout(700);
-    const eSample = await sampleCanvas(page);
-    expect(sampleDifference(dSample, eSample), `${piece} pause freeze`).toBeLessThan(0.012);
+    await page.waitForTimeout(300);
+    const pauseF0 = await studioDiag(page);
+    const pauseStart = await sampleStagePixels(page);
+    await page.waitForTimeout(800);
+    const pauseF1 = await studioDiag(page);
+    expect(pauseF1.logicalFrame, `${piece} pause freeze frame`).toBe(pauseF0.logicalFrame);
+    const pauseB = await sampleStagePixels(page);
+    expect(
+      pauseB.changedPixelFraction,
+      `${piece} pause freeze pixels`,
+    ).toBeLessThan(0.012);
+    expect(pauseStart.digest, `${piece} pause stable digest`).toBe(pauseB.digest);
 
     await page.keyboard.press("Space");
-    await page.waitForTimeout(900);
-    const fSample = await sampleCanvas(page);
-    const digestE = (await studioDiag(page)).pixelDigest ?? "";
+    await page.waitForTimeout(800);
+    const resume = await sampleStagePixels(page);
+    expect(
+      resume.changedPixelFraction >= 0.003 ||
+        isMeaningfulVisualChange(pauseB, resume) ||
+        pauseB.digest !== resume.digest,
+      `${piece} resume`,
+    ).toBe(true);
+
+    await page.evaluate(() => {
+      (window as unknown as { __NUMBRANE_STUDIO__?: { setSolidColor?: (h: string) => void } })
+        .__NUMBRANE_STUDIO__?.setSolidColor?.("#00ffff");
+    });
     await page.waitForTimeout(400);
-    const digestF = (await studioDiag(page)).pixelDigest ?? "";
-    const resumed =
-      sampleDifference(eSample, fSample) > 0.003 || digestE !== digestF;
-    expect(resumed, `${piece} resume`).toBe(true);
+    const afterColor = await sampleStagePixels(page);
+    const afterColorDiag = await studioDiag(page);
+    expect(afterColorDiag.simulationPaused, `${piece} color pause`).not.toBe(true);
+    expect(afterColorDiag.rafStalled, `${piece} color RAF`).not.toBe(true);
 
     await page.keyboard.press("r");
     await page.waitForTimeout(1200);
-    const afterSeed = await sampleCanvas(page);
-    expect(afterSeed.nonBlack, `${piece} seed restart visible`).toBeGreaterThan(0.002);
+    const afterSeed = await sampleStagePixels(page);
+    expect(frameIsVisible(afterSeed), `${piece} seed visible`).toBe(true);
     expect(
-      sampleDifference(cSample, afterSeed) > 0.003 || afterSeed.variance > 0.001,
-      `${piece} seed restart motion`,
+      afterSeed.changedPixelFraction >= 0.003 || afterSeed.digest !== afterColor.digest,
+      `${piece} seed motion`,
     ).toBe(true);
   } finally {
     page.off("console", onConsole);
@@ -113,11 +151,9 @@ test.describe("Studio exhaustive catalog animation (Docker)", () => {
     test(`${piece} animates in browser`, async ({ page }) => {
       const heavy =
         piece.startsWith("mashups/") ||
-        piece === "audiovisual/nodes" ||
-        piece === "reference/audiovisual-nodes" ||
-        piece === "growth/slime-mold" ||
-        piece === "flagship/latticefall";
-      test.setTimeout(heavy ? 240_000 : 150_000);
+        piece === "flagship/latticefall" ||
+        piece === "growth/slime-mold";
+      test.setTimeout(heavy ? 300_000 : 180_000);
       await exercisePiece(page, piece);
     });
   }
