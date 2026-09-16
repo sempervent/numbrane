@@ -33,6 +33,7 @@ export function auditStudioCatalog(
   const orphanRuntime = [...runtimeIds].filter((id) => !catalogIds.has(id)).sort();
   const capabilityMismatches: CatalogAuditReport["capabilityMismatches"] = [];
   const nonAnimateCatalog: string[] = [];
+  const nonGenerateCatalog: string[] = [];
 
   for (const m of visible) {
     const id = m.piece_id;
@@ -42,6 +43,14 @@ export function auditStudioCatalog(
       capabilityMismatches.push({ pieceId: id, reason: "missing runtime descriptor" });
       nonAnimateCatalog.push(id);
       continue;
+    }
+    const generateOk = rt.generate !== "unsupported";
+    if (!generateOk) {
+      capabilityMismatches.push({
+        pieceId: id,
+        reason: "runtime generate unsupported for catalog piece",
+      });
+      nonGenerateCatalog.push(id);
     }
     const animateOk = isBrowserNativeAnimate(rt.animate);
     if (!animateOk) {
@@ -79,6 +88,7 @@ export function auditStudioCatalog(
     orphanRuntime,
     capabilityMismatches,
     nonAnimateCatalog: nonAnimateCatalog.sort(),
+    nonGenerateCatalog: nonGenerateCatalog.sort(),
   };
 }
 

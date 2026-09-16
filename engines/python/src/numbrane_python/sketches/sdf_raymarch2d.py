@@ -54,8 +54,8 @@ def render(config: SDFRaymarch2DConfig, ctx: RenderContext) -> RenderResult:
 
     # Create coordinate grid
     y, x = np.ogrid[: ctx.height, : ctx.width]
-    x_norm = (x / ctx.width - 0.5) * 2
-    y_norm = (y / ctx.height - 0.5) * 2
+    x_norm = np.broadcast_to((x / ctx.width - 0.5) * 2, (ctx.height, ctx.width))
+    y_norm = np.broadcast_to((y / ctx.height - 0.5) * 2, (ctx.height, ctx.width))
     coords = np.stack([x_norm, y_norm], axis=-1)
 
     # Generate SDF shapes
@@ -118,8 +118,9 @@ def render(config: SDFRaymarch2DConfig, ctx: RenderContext) -> RenderResult:
     palette_colors = get_palette(config.palette)
     colors = gradient_map(sdf_normalized, palette_colors)
 
-    # Apply lighting
-    colors = (colors.astype(np.float32) * lighting[..., np.newaxis]).astype(np.uint8)
+    # Apply lighting — keep a visible floor for Studio GENERATE previews
+    lit = colors.astype(np.float32) * lighting[..., np.newaxis]
+    colors = np.clip(lit + 18.0, 18, 255).astype(np.uint8)
     layer[:] = colors
 
     image = canvas.get_image()

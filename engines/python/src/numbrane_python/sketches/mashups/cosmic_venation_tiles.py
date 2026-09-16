@@ -79,14 +79,13 @@ def render(config: CosmicVenationTilesConfig, ctx: RenderContext) -> "RenderResu
     from numbrane_python.render.draw import draw_polyline, draw_line
     from numbrane_python.render.palettes import get_palette
     from numbrane_python.render.postfx import apply_vignette
-    from numbrane_python.sketches.truchet_tiles import render_truchet_tile
     import numpy as np
 
     # Create canvas
     canvas = Canvas(ctx.width, ctx.height, 3)
 
     # Draw background
-    canvas.fill(config.tile_bg_color)
+    canvas.fill_background(config.tile_bg_color)
 
     # Draw Truchet tiles
     tile_size = config.tile_size
@@ -94,6 +93,8 @@ def render(config: CosmicVenationTilesConfig, ctx: RenderContext) -> "RenderResu
     num_tiles_y = ctx.height // tile_size
 
     tile_layer = canvas.create_layer("tiles")
+    vein_layer = canvas.create_layer("veins")
+    edge_color = np.array([100, 100, 100], dtype=np.uint8)
     for y in range(num_tiles_y):
         for x in range(num_tiles_x):
             tile_x = x * tile_size
@@ -105,8 +106,8 @@ def render(config: CosmicVenationTilesConfig, ctx: RenderContext) -> "RenderResu
             x2, y2 = int(min(tile_x + tile_size, ctx.width)), int(min(tile_y + tile_size, ctx.height))
             tile_layer[y1:y2, x1:x2] = tile_color
             # Draw tile boundary
-            draw_line(canvas, tile_x, tile_y, tile_x + tile_size, tile_y, 1, (100, 100, 100))
-            draw_line(canvas, tile_x, tile_y, tile_x, tile_y + tile_size, 1, (100, 100, 100))
+            draw_line(tile_layer, (float(tile_x), float(tile_y)), (float(tile_x + tile_size), float(tile_y)), 1, edge_color)
+            draw_line(tile_layer, (float(tile_x), float(tile_y)), (float(tile_x), float(tile_y + tile_size)), 1, edge_color)
 
     # Space colonization for venation
     palette = get_palette(config.palette)
@@ -154,17 +155,25 @@ def render(config: CosmicVenationTilesConfig, ctx: RenderContext) -> "RenderResu
 
         # Draw vein
         if closest["parent"] is not None:
-            color = palette[int(new_node["length"] / config.max_length * (len(palette) - 1))]
+            color = np.array(
+                palette[int(new_node["length"] / config.max_length * (len(palette) - 1))],
+                dtype=np.uint8,
+            )
             draw_polyline(
-                canvas,
-                [closest["pos"], new_node["pos"]],
+                vein_layer,
+                np.array([closest["pos"], new_node["pos"]]),
                 config.vein_thickness,
                 color,
             )
 
     # Apply post-processing
-    image = canvas.composite()
+    image = canvas.get_image()
     if config.vignette_strength > 0:
         image = apply_vignette(image, config.vignette_strength)
 
-    return RenderResult(image=image, metadata={"nodes": len(nodes)})
+    return RenderResult(
+        image=image,
+        seed=config.seed,
+        sketch_name="cosmic_venation_tiles",
+        config=config,
+    )

@@ -32,13 +32,26 @@ import {
 } from "./animation/capabilities";
 import { panPresetViews } from "./animation/camera";
 import {
+  RANDOM_METHOD_ID,
+  animationMethodsForPiece,
+  applyAnimationMethod,
+  defaultAnimationMethodId,
+} from "./animation/methods";
+import { RandomAnimationSequencer } from "./animation/randomSequencer";
+import {
   exportLoopFlag,
+  hasComponent,
   type AnimationEasing,
   type AnimationEndBehavior,
   type AnimationSource,
   type AnimationSpec,
+  type CameraView,
   type PanPreset,
 } from "./animation/spec";
+import {
+  applyPreviewCameraStyle,
+  samplePreviewImageGrid,
+} from "./animate/apiPreviewPresent";
 import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
 import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
@@ -55,6 +68,7 @@ import { RAMP_PRESETS, RAMP_PRESET_LIST, SOLID_PRESETS, rampMappingsForPiece } f
 import type { GenerateRequest } from "./generate/preview";
 import {
   RESOLUTION_PRESETS,
+  canvasToPngBlob,
   exportStillPng,
   exportAnimation,
   exportSvgText,
@@ -168,6 +182,15 @@ export class StudioApp {
     thumbUrl: string | null;
   }> = [];
   animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
+  animationMethodId = "pan-left-right";
+  animationSequenceSeed = 137;
+  randomIntervalSec = 10;
+  randomAllowedMethodIds: string[] = [];
+  private randomSequencer: RandomAnimationSequencer | null = null;
+  private lastRandomTickMs = 0;
+  private lastAnimTickMs = 0;
+  private apiPreviewPresentGrid: Uint8Array | null = null;
+  private apiPreviewPresentStats: import("../live/pixelMetrics").PixelFrame | null = null;
   compositionId: string | null = null;
   audioEnabled = false;
   audioLevel = 0;
@@ -301,14 +324,41 @@ export class StudioApp {
     this.renderConfig();
   }
 
-  /** Sample visible #stage RGBA grid (64×36 default) for tests/diagnostics. */
+  /** Sample visible presented art (live canvas or api-preview img) for tests/diagnostics. */
   samplePresentedPixels(gridW = 64, gridH = 36): import("../live/pixelMetrics").PixelFrame | null {
-    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
-    try {
-      return this.session.readPresentedPixels(gridW, gridH);
-    } catch {
-      return null;
+    const surface = studioSurface(this.pieceId, this.mode);
+    if (surface === "live" && this.session) {
+      try {
+        return this.session.readPresentedPixels(gridW, gridH);
+      } catch {
+        return null;
+      }
     }
+    if (surface === "api-preview") {
+      return this.samplePreviewImagePixels(gridW, gridH);
+    }
+    return null;
+  }
+
+  private samplePreviewImagePixels(
+    gridW: number,
+    gridH: number,
+  ): import("../live/pixelMetrics").PixelFrame | null {
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    if (!img?.complete || img.naturalWidth < 1 || img.naturalHeight < 1) return null;
+    let camera: CameraView = { centerX: 0, centerY: 0, scale: 1, rotation: 0 };
+    if (this.mode === "animate" && this.apiPreviewUsesCamera() && this.session) {
+      camera = this.session.animationRuntime.evaluate().camera;
+    }
+    const prior =
+      this.apiPreviewPresentGrid && this.apiPreviewPresentStats
+        ? { pixels: this.apiPreviewPresentGrid, stats: this.apiPreviewPresentStats }
+        : undefined;
+    const sampled = samplePreviewImageGrid(img, gridW, gridH, camera, prior);
+    if (!sampled) return null;
+    this.apiPreviewPresentGrid = sampled.grid;
+    this.apiPreviewPresentStats = sampled.stats;
+    return sampled.stats;
   }
 
   pinPixelBaseline(): void {
@@ -349,7 +399,94 @@ export class StudioApp {
     });
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     this.session.setAnimationSpec(this.animationSpec);
+    if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+      this.syncApiPreviewAnimate(preview);
+      return;
+    }
     if (preview) this.kickLiveSurface();
+  }
+
+  private apiPreviewUsesCamera(): boolean {
+    return (
+      hasComponent(this.animationSpec, "camera") && !hasComponent(this.animationSpec, "generative")
+    );
+  }
+
+  private syncApiPreviewAnimate(preview: boolean): void {
+    if (this.apiPreviewUsesCamera()) {
+      this.stopApiAnim();
+      const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+      if (!img?.src && preview) {
+        this.scheduleGeneratePreview(true);
+      } else if (img?.complete && img.naturalWidth > 0) {
+        this.session?.animationRuntime.markSnapshotReady(this.renderDigest || "api-preview");
+      }
+      this.lastAnimTickMs = 0;
+      this.session?.animationRuntime.seekTime(0);
+      return;
+    }
+    if (hasComponent(this.animationSpec, "generative") && this.playing) {
+      this.startApiAnim();
+    }
+  }
+
+  private paintApiPreviewCamera(camera: CameraView): void {
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    if (!img) return;
+    applyPreviewCameraStyle(img, camera);
+  }
+
+  /** Test/export helper — GENERATE snapshot via the piece's authoritative backend. */
+  async captureGeneratePngBytes(): Promise<{
+    ok: boolean;
+    status?: number;
+    error?: string;
+    bytes?: Uint8Array;
+  }> {
+    const surface = studioSurface(this.pieceId, "generate");
+    if (surface === "api-preview") {
+      const { width, height } = previewSize();
+      try {
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            piece: this.pieceId,
+            seed: this.seed,
+            frame: this.frame,
+            width,
+            height,
+            format: "png",
+            quality: "preview",
+            parameters: paramsForApi(this.params, this.color),
+          }),
+        });
+        if (!res.ok) {
+          return { ok: false, status: res.status, error: await res.text() };
+        }
+        return { ok: true, status: res.status, bytes: new Uint8Array(await res.arrayBuffer()) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    if (surface === "live" && this.session) {
+      try {
+        this.kickLiveSurface();
+        if (rendererKindFor(this.pieceId, "generate") === "wasm") {
+          for (let i = 0; i < 12; i++) {
+            this.session.frame(performance.now());
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        } else {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        const blob = await canvasToPngBlob(this.canvas);
+        return { ok: true, bytes: new Uint8Array(await blob.arrayBuffer()) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    return { ok: false, error: `unsupported generate surface: ${surface}` };
   }
 
   private applyLiveColor(reloadScene = false): void {
@@ -397,7 +534,7 @@ export class StudioApp {
       previewEl?.classList.add("visible");
       this.animBackend = "buffered-api";
       if (this.mode === "animate" && this.playing) {
-        this.startApiAnim();
+        this.syncApiPreviewAnimate(true);
       } else {
         this.stopApiAnim({ abort: this.mode !== "animate" });
         this.scheduleGeneratePreview();
@@ -549,6 +686,10 @@ export class StudioApp {
       if (img) {
         img.src = result.objectUrl;
         img.classList.add("visible");
+        if (this.mode === "animate" && this.apiPreviewUsesCamera()) {
+          img.style.transform = "";
+          this.session?.animationRuntime.markSnapshotReady(result.renderDigest);
+        }
       }
       if (status) status.textContent = label;
       this.syncChrome();
@@ -589,7 +730,7 @@ export class StudioApp {
         (err) => {
           this.generating = false;
           status?.classList.remove("visible");
-          toast(err.message.slice(0, 120));
+          this.showGenerationFailed(err, "python-api");
         },
       );
     };
@@ -610,7 +751,7 @@ export class StudioApp {
         (err) => {
           this.generating = false;
           status?.classList.remove("visible");
-          toast(err.message.slice(0, 120));
+          this.showGenerationFailed(err, "python-api");
         },
       );
       return;
@@ -1031,6 +1172,71 @@ export class StudioApp {
     );
   }
 
+  private showGenerationFailed(err: unknown, backend: string): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    if (img) {
+      img.classList.remove("visible");
+      img.removeAttribute("src");
+    }
+    this.showFailureBanner(
+      "Generation failed",
+      `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${msg}`,
+    );
+  }
+
+  applyAnimationMethodId(methodId: string): void {
+    if (methodId === RANDOM_METHOD_ID) {
+      this.animationMethodId = RANDOM_METHOD_ID;
+      this.initRandomSequencer();
+      this.renderConfig();
+      return;
+    }
+    this.animationMethodId = methodId;
+    this.randomSequencer = null;
+    const spec = applyAnimationMethod(this.pieceId, methodId);
+    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.anim.durationSec = this.animationSpec.durationSec;
+    this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+    if (this.mode === "animate") {
+      this.syncAnimationSpecToSession(true);
+    }
+    this.renderConfig();
+  }
+
+  private initRandomSequencer(): void {
+    const methods = animationMethodsForPiece(this.pieceId);
+    const allowed =
+      this.randomAllowedMethodIds.length > 0
+        ? this.randomAllowedMethodIds
+        : methods.map((m) => m.id);
+    this.randomSequencer = RandomAnimationSequencer.create(
+      this.animationSequenceSeed,
+      this.randomIntervalSec,
+      allowed,
+      methods,
+    );
+    const first = this.randomSequencer.pickInitial();
+    this.animationMethodId = RANDOM_METHOD_ID;
+    const spec = applyAnimationMethod(this.pieceId, first);
+    spec.endBehavior = "continuous";
+    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.anim.durationSec = this.animationSpec.durationSec;
+    this.syncAnimationSpecToSession(true);
+    this.lastRandomTickMs = performance.now();
+  }
+
+  advanceRandomMethod(): void {
+    if (!this.randomSequencer) this.initRandomSequencer();
+    const next = this.randomSequencer!.forceNext();
+    const spec = applyAnimationMethod(this.pieceId, next);
+    spec.endBehavior = "continuous";
+    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.syncAnimationSpecToSession(true);
+    this.lastRandomTickMs = performance.now();
+    this.renderConfig();
+  }
+
   private wirePointerIdle(): void {
     const body = document.body;
     const bump = () => {
@@ -1090,6 +1296,8 @@ export class StudioApp {
     }
     this.params = next;
     this.animationSpec = defaultSpecForPiece(pieceId);
+    this.animationMethodId = defaultAnimationMethodId(pieceId);
+    this.randomSequencer = null;
     this.anim.durationSec = this.animationSpec.durationSec;
     this.compositionId = null;
     this.frame = 0;
@@ -1879,8 +2087,31 @@ export class StudioApp {
           "diag-up-left",
           "custom",
         ];
+        const methods = animationMethodsForPiece(this.pieceId);
+        const segElapsed = this.randomSequencer?.state.methodElapsedSec ?? 0;
+        const segRemain = Math.max(0, this.randomIntervalSec - segElapsed);
         return `
         <h2>Animation</h2>
+        <label>Method</label>
+        <select id="cfg-anim-method">${[
+          ...methods.map(
+            (m) =>
+              `<option value="${m.id}" ${this.animationMethodId === m.id ? "selected" : ""}>${m.label}</option>`,
+          ),
+          `<option value="${RANDOM_METHOD_ID}" ${this.animationMethodId === RANDOM_METHOD_ID ? "selected" : ""}>Random</option>`,
+        ].join("")}</select>
+        ${
+          this.animationMethodId === RANDOM_METHOD_ID
+            ? `
+        <label>Change every (sec)</label>
+        <input id="cfg-random-interval" type="number" min="1" max="300" step="1" value="${this.randomIntervalSec}" />
+        <label>Sequence seed</label>
+        <input id="cfg-seq-seed" type="number" value="${this.animationSequenceSeed}" />
+        <button type="button" id="cfg-random-next">Next Animation</button>
+        <p class="muted">Next change ~${segRemain.toFixed(1)}s · ${this.animationSpec.source}/${this.animationSpec.motion}</p>
+        `
+            : ""
+        }
         <label>Source</label>
         <select id="cfg-anim-source">${caps.sources
           .map(
@@ -2110,6 +2341,23 @@ export class StudioApp {
     el.querySelector("#cfg-anim-fmt")?.addEventListener("change", (e) => {
       this.animFormat = (e.target as HTMLSelectElement).value as typeof this.animFormat;
     });
+    el.querySelector("#cfg-anim-method")?.addEventListener("change", (e) => {
+      this.applyAnimationMethodId((e.target as HTMLSelectElement).value);
+    });
+    el.querySelector("#cfg-random-interval")?.addEventListener("change", (e) => {
+      this.randomIntervalSec = Math.min(
+        300,
+        Math.max(1, Number((e.target as HTMLInputElement).value) || 10),
+      );
+      if (this.randomSequencer) this.randomSequencer.state.methodIntervalSec = this.randomIntervalSec;
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-seq-seed")?.addEventListener("change", (e) => {
+      this.animationSequenceSeed = Number((e.target as HTMLInputElement).value) || 137;
+      if (this.animationMethodId === RANDOM_METHOD_ID) this.initRandomSequencer();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-random-next")?.addEventListener("click", () => this.advanceRandomMethod());
     el.querySelector("#cfg-anim-source")?.addEventListener("change", (e) => {
       this.animationSpec.source = (e.target as HTMLSelectElement).value as AnimationSource;
       const caps = animationCapabilitiesFor(this.pieceId);
@@ -2352,6 +2600,41 @@ export class StudioApp {
     this.frameTimes.push(now);
     while (this.frameTimes.length && now - this.frameTimes[0]! > 1000) this.frameTimes.shift();
     this.fps = this.frameTimes.length;
+    if (
+      this.mode === "animate" &&
+      studioSurface(this.pieceId, this.mode) === "api-preview" &&
+      this.session &&
+      this.playing
+    ) {
+      const nowPerf = performance.now();
+      if (this.lastAnimTickMs <= 0) this.lastAnimTickMs = nowPerf;
+      const dt = (nowPerf - this.lastAnimTickMs) / 1000;
+      this.lastAnimTickMs = nowPerf;
+      this.session.animationRuntime.tick(dt, true);
+      if (this.apiPreviewUsesCamera()) {
+        this.paintApiPreviewCamera(this.session.animationRuntime.evaluate().camera);
+      }
+    }
+
+    if (
+      this.mode === "animate" &&
+      this.animationMethodId === RANDOM_METHOD_ID &&
+      this.playing &&
+      this.randomSequencer &&
+      this.session
+    ) {
+      const dt = this.lastRandomTickMs > 0 ? (now - this.lastRandomTickMs) / 1000 : 0;
+      const next = this.randomSequencer.tick(dt);
+      if (next) {
+        const spec = applyAnimationMethod(this.pieceId, next);
+        spec.endBehavior = "continuous";
+        this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+        this.syncAnimationSpecToSession(false);
+        this.renderConfig();
+      }
+      this.lastRandomTickMs = now;
+    }
+
     if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
       const diag = this.session.getDiagnostics();
       const warmupMs = Date.now() - this.pieceLoadedAt;

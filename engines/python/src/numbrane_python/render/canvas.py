@@ -21,6 +21,20 @@ class Canvas:
         self.layers = {}
         self.composite = np.zeros((height, width, num_channels), dtype=np.uint8)
 
+    def fill_background(
+        self, color: tuple | list | np.ndarray, layer_name: str = "background"
+    ) -> np.ndarray:
+        """Solid background on a dedicated layer (also seeds composite buffer)."""
+        c = np.asarray(color, dtype=np.uint8).reshape(-1)
+        if c.size == 1:
+            rgb = np.full(self.num_channels, int(c[0]), dtype=np.uint8)
+        else:
+            rgb = c[: self.num_channels]
+        layer = self.create_layer(layer_name, clear=True)
+        layer[:] = rgb
+        self.composite = layer.copy()
+        return layer
+
     def create_layer(self, name: str, clear: bool = True) -> np.ndarray:
         """Create or get a layer.
 

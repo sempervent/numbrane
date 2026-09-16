@@ -7,5 +7,6 @@ const ok =
   report.missingRuntime.length === 0 &&
   report.orphanRuntime.length === 0 &&
   report.capabilityMismatches.length === 0 &&
-  report.nonAnimateCatalog.length === 0;
+  report.nonAnimateCatalog.length === 0 &&
+  report.nonGenerateCatalog.length === 0;
 process.exit(ok ? 0 : 1);

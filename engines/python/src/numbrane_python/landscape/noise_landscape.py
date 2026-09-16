@@ -66,18 +66,20 @@ def render_noise_landscape(recipe: dict[str, Any]) -> Image.Image:
     seed = int(recipe.get("seed", 0)) & 0xFFFFFFFF
     params = recipe.get("parameters") or {}
     size = int(params.get("field.size", params.get("size", 128)))
+    width = int(recipe.get("width") or params.get("width") or size)
+    height = int(recipe.get("height") or params.get("height") or size)
     scale = float(params.get("field.scale", params.get("scale", 24.0)))
     octaves = int(params.get("field.octaves", params.get("octaves", 4)))
     particles = int(params.get("sim.particles", 40))
 
-    heightmap = _value_noise2d(size, size, scale, octaves, seed)
+    heightmap = _value_noise2d(width, height, scale, octaves, seed)
     rng = Rng(seed ^ 0xA5A5A5A5)
     palette = _palette(rng, 8)
 
-    img = Image.new("RGB", (size, size))
+    img = Image.new("RGB", (width, height))
     px = img.load()
-    for y in range(size):
-        for x in range(size):
+    for y in range(height):
+        for x in range(width):
             t = heightmap[y, x]
             i0 = min(len(palette) - 2, int(t * (len(palette) - 1)))
             c0 = palette[i0]
@@ -87,8 +89,8 @@ def render_noise_landscape(recipe: dict[str, Any]) -> Image.Image:
 
     draw = ImageDraw.Draw(img)
     for _ in range(particles):
-        x = int(rng.random_f64() * (size - 1))
-        y = int(rng.random_f64() * (size - 1))
+        x = int(rng.random_f64() * max(1, width - 1))
+        y = int(rng.random_f64() * max(1, height - 1))
         r = 1 + int(rng.random_f64() * 4)
         color = palette[int(rng.random_f64() * len(palette))]
         draw.ellipse((x - r, y - r, x + r, y + r), fill=color)
@@ -104,11 +106,11 @@ def render_noise_landscape(recipe: dict[str, Any]) -> Image.Image:
 
         base = np.asarray(img, dtype=np.uint8)
         if overlay_kind == "bezier":
-            ov = bezier_overlay(size, size, seed ^ 0xBEEF)
+            ov = bezier_overlay(width, height, seed ^ 0xBEEF)
         elif overlay_kind == "concentric":
-            ov = concentric_overlay(size, size, seed ^ 0xC0DE)
+            ov = concentric_overlay(width, height, seed ^ 0xC0DE)
         else:
-            ov = nested_rectangles_overlay(size, size, seed ^ 0xFACE)
+            ov = nested_rectangles_overlay(width, height, seed ^ 0xFACE)
         composed = compose_landscape_with_overlay(base, ov)
         img = Image.fromarray(composed)
     return img

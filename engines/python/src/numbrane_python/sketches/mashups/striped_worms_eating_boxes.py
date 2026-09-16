@@ -134,6 +134,9 @@ def render(config: StripedWormsEatingBoxesConfig, ctx: RenderContext) -> "Render
         p = Particle(
             pos=np.array([x, y], dtype=float),
             vel=np.array([0.0, 0.0], dtype=float),
+            age=0.0,
+            width=config.worm_girth,
+            color_idx=i % 2,
             branch_id=i,
         )
         particle_system.add(p)
@@ -143,19 +146,10 @@ def render(config: StripedWormsEatingBoxesConfig, ctx: RenderContext) -> "Render
 
     # Simulation
     for step in range(config.max_steps):
+        integrator.step(particle_system.particles, field, config.dt, step * config.dt)
         for p in particle_system.particles:
-            # Get field force
-            force = field.sample(p.pos[0], p.pos[1])
-            p.vel = p.vel + force * config.dt
-            p.vel *= 0.98  # Damping
-
-            # Update position
-            integrator.step(p, field, config.dt)
-
-            # Record trail
+            p.vel *= 0.98
             trails[p.branch_id].append(p.pos.copy())
-
-            # Check collision with boxes
             grid_x = int(p.pos[0] / box_w)
             grid_y = int(p.pos[1] / box_h)
             if 0 <= grid_x < config.grid_resolution and 0 <= grid_y < config.grid_resolution:
@@ -179,6 +173,8 @@ def render(config: StripedWormsEatingBoxesConfig, ctx: RenderContext) -> "Render
                     if box_x + i < ctx.width and box_y + i < ctx.height:
                         box_layer[int(box_y + i), int(box_x + i)] = box_color
 
+    worm_layer = canvas.create_layer("worms")
+
     # Draw worms with stripes
     for worm_id, trail in trails.items():
         if len(trail) < 2:
@@ -193,15 +189,20 @@ def render(config: StripedWormsEatingBoxesConfig, ctx: RenderContext) -> "Render
 
             # Draw segment
             draw_polyline(
-                canvas,
-                [trail[i], trail[i+1]],
+                worm_layer,
+                np.array([trail[i], trail[i + 1]]),
                 config.worm_girth,
                 color,
             )
 
     # Apply post-processing
-    image = canvas.composite()
+    image = canvas.get_image()
     if config.bloom_intensity > 0:
         image = apply_bloom(image, config.bloom_intensity)
 
-    return RenderResult(image=image, metadata={"steps": config.max_steps})
+    return RenderResult(
+        image=image,
+        seed=config.seed,
+        sketch_name="striped_worms_eating_boxes",
+        config=config,
+    )

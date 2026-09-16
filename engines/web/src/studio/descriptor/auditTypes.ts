@@ -6,4 +6,5 @@ export type CatalogAuditReport = {
   orphanRuntime: string[];
   capabilityMismatches: Array<{ pieceId: string; reason: string }>;
   nonAnimateCatalog: string[];
+  nonGenerateCatalog: string[];
 };

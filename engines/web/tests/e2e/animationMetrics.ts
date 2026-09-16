@@ -160,6 +160,17 @@ export async function waitForLiveFrame(page: Page, timeoutMs = 25_000): Promise<
   throw new Error("Timed out waiting for first live presented frame");
 }
 
+/** Wait until generate-preview or live canvas shows a visible presented frame. */
+export async function waitForStudioPresent(page: Page, timeoutMs = 60_000): Promise<StudioDiag> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const px = await sampleStagePixels(page).catch(() => null);
+    if (px && frameIsVisible(px)) return studioDiag(page);
+    await page.waitForTimeout(200);
+  }
+  throw new Error("Timed out waiting for studio presented frame");
+}
+
 export async function enterAnimate(page: Page, piece: string, seed = 42): Promise<void> {
   await page.goto(`/studio.html?mode=animate&piece=${encodeURIComponent(piece)}&seed=${seed}`, {
     waitUntil: "domcontentloaded",

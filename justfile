@@ -370,6 +370,22 @@ studio-catalog-audit:
     cd "{{root}}/engines/web" && npx tsx scripts/studio-catalog-audit.ts
 
 [group('studio')]
+studio-all-generate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.all-generate.config.ts
+
+[group('studio')]
+studio-piece-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.piece-contract.config.ts
+
+[group('studio')]
 studio-animation-semantics:
     #!/usr/bin/env bash
     set -euo pipefail

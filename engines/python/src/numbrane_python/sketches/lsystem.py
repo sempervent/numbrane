@@ -44,28 +44,28 @@ def render(config: LSystemConfig, ctx: RenderContext) -> RenderResult:
     layer = canvas.create_layer("main")
 
     stack = []
-    x, y = ctx.width / 2, ctx.height
+    x, y = ctx.width / 2, ctx.height * 0.92
     angle = -90.0  # Point upward
-    angle_rad = np.deg2rad(config.angle)
 
     palette_colors = get_palette(config.palette)
     color = np.array(palette_colors[0], dtype=np.uint8)
 
-    points = []
     rng = ctx.rng.generator
+    complexity = max(1, len(current))
+    step_size = min(config.step_size, min(ctx.width, ctx.height) * 0.75 / complexity)
 
     for char in current:
         if char == "F":
             # Move forward
-            new_x = x + np.cos(np.deg2rad(angle)) * config.step_size
-            new_y = y + np.sin(np.deg2rad(angle)) * config.step_size
+            new_x = x + np.cos(np.deg2rad(angle)) * step_size
+            new_y = y + np.sin(np.deg2rad(angle)) * step_size
 
             # Add jitter
             if config.jitter > 0:
-                new_x += rng.normal(0, config.jitter * config.step_size)
-                new_y += rng.normal(0, config.jitter * config.step_size)
+                new_x += rng.normal(0, config.jitter * step_size)
+                new_y += rng.normal(0, config.jitter * step_size)
 
-            draw_line(layer, (x, y), (new_x, new_y), config.line_width, color)
+            draw_line(layer, (x, y), (new_x, new_y), max(1.0, config.line_width), color)
             x, y = new_x, new_y
         elif char == "+":
             angle += config.angle

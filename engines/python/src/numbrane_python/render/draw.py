@@ -3,6 +3,22 @@
 import numpy as np
 
 
+def _as_color(color: np.ndarray | tuple | list) -> np.ndarray:
+    return np.asarray(color, dtype=np.uint8).reshape(-1)
+
+
+def draw_circle(
+    canvas: np.ndarray,
+    x: float,
+    y: float,
+    radius: float,
+    color: np.ndarray | tuple | list,
+    antialias: bool = True,
+) -> None:
+    """Filled circle — alias for draw_point with explicit center."""
+    draw_point(canvas, (x, y), radius, _as_color(color), antialias)
+
+
 def draw_line(
     canvas: np.ndarray,
     p1: tuple[float, float],
@@ -21,6 +37,7 @@ def draw_line(
         color: Color array (C,)
         antialias: Whether to antialias
     """
+    color = _as_color(color)
     x1, y1 = p1
     x2, y2 = p2
 
@@ -64,11 +81,13 @@ def draw_polyline(
         color: Color array (C,)
         antialias: Whether to antialias
     """
-    if len(points) < 2:
+    color = _as_color(color)
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim == 1 or len(pts) < 2:
         return
 
-    for i in range(len(points) - 1):
-        draw_line(canvas, tuple(points[i]), tuple(points[i + 1]), width, color, antialias)
+    for i in range(len(pts) - 1):
+        draw_line(canvas, tuple(pts[i]), tuple(pts[i + 1]), width, color, antialias)
 
 
 def draw_point(

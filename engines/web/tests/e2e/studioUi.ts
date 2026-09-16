@@ -68,6 +68,18 @@ export async function enterAnimateViaUi(page: Page, pieceId: string): Promise<vo
   await clickStudioMode(page, "animate");
 }
 
+export async function enterGenerateViaUi(page: Page, pieceId: string): Promise<void> {
+  await openStudioHome(page);
+  await selectPieceInBrowser(page, pieceId);
+  await clickStudioMode(page, "generate");
+}
+
+export async function failureBannerText(page: Page): Promise<string | null> {
+  const visible = await page.locator("#unsupported-banner.visible").count();
+  if (!visible) return null;
+  return page.locator("#unsupported-banner").textContent();
+}
+
 export async function unsupportedBannerText(page: Page): Promise<string | null> {
   const visible = await page.locator("#unsupported-banner.visible").count();
   if (!visible) return null;

@@ -209,7 +209,7 @@ def render(config: RitualDiagramsConfig, ctx: RenderContext) -> "RenderResult":
     bg_layer[stars] = palette[-1]
 
     # Composite
-    image = canvas.composite()
+    image = canvas.get_image()
 
     # Apply bloom
     if config.bloom_intensity > 0:
