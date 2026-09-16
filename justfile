@@ -350,6 +350,14 @@ studio-animation:
     npx playwright test -c playwright.animation.config.ts
 
 [group('studio')]
+studio-all-animation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.all-animation.config.ts
+
+[group('studio')]
 animation-export:
     #!/usr/bin/env bash
     set -euo pipefail

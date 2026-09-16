@@ -21,7 +21,12 @@ describe("animation export backend registry", () => {
     });
   }
 
-  it("python-api animate pieces use python-frames", () => {
-    expect(animationExportBackend("mashups/attractor-calligraphy")).toBe("unsupported");
+  it("composed mashups with live animate use runtime-frames export", () => {
+    expect(animationExportBackend("mashups/attractor-calligraphy")).toBe("runtime-frames");
+    expect(animationExportBackend("mashups/slime-on-sdf")).toBe("runtime-frames");
+  });
+
+  it("generate-only python pieces without animate stay unsupported for export", () => {
+    expect(animationExportBackendFor("geometry/metatron")).toBe("runtime-frames");
   });
 });
