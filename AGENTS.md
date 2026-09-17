@@ -14,7 +14,8 @@ Instructions for coding agents working in NUMBRANE.
 
 ## Hard constraints
 
-- **Never** add generative-AI / LLM / diffusion / inference / model-weight / prompt-to-image runtime dependencies.
+- **Never** add generative-AI / LLM / diffusion / prompt-to-image cloud runtime dependencies.
+- **Browser-local ML is allowed** when inference runs entirely in the user's browser (TensorFlow.js, ONNX Runtime Web, WebGPU/WASM), with no remote inference, no required cloud model API, graceful degradation, versioned/reproducible model artifacts, documented third-party license/provenance, and recorded derived feature streams when replay matters. ML must not substitute for implementing the actual mathematical art algorithms. Core generative rendering must work without ML.
 - Deterministic code **must not** use uncontrolled RNGs (`Math.random`, unseeded `random`, OS entropy).
 - Deterministic code **must not** depend directly on wall-clock time (`performance.now`, `Date.now`, `time.time`) except in explicit live adapters that convert to logical frames.
 - Keep **NAP language-neutral**.

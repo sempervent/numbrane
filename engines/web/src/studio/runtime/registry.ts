@@ -21,11 +21,15 @@ export type ParamField = {
   default: number | string | boolean;
 };
 
+export type AnimationExportBackend = "python-frames" | "runtime-frames" | "unsupported";
+
 export type PieceRuntimeDescriptor = {
   pieceId: string;
   generate: RendererKind;
   animate: RendererKind | null;
   react: RendererKind | null;
+  /** Explicit animation export backend (derived from animate kind when omitted). */
+  exportBackend?: AnimationExportBackend;
   seedSensitive: boolean;
   /** Seed changes topology/state, not only hue. */
   seedAffectsStructure: boolean;
@@ -35,7 +39,7 @@ export type PieceRuntimeDescriptor = {
 const META: ParamField[] = [
   { key: "density", label: "Density", type: "number", min: 0, max: 1.5, step: 0.01, default: 0.7 },
   { key: "chaos", label: "Chaos", type: "number", min: 0, max: 1, step: 0.01, default: 0.3 },
-  { key: "hue", label: "Hue", type: "number", min: 0, max: 1, step: 0.01, default: 0.55 },
+  { key: "hue", label: "Hue", type: "number", min: 0, max: 1, step: 0.01, default: 0.08 },
 ];
 
 function d(
@@ -165,11 +169,11 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     paramSchema: GEOM_SCHEMA,
   }),
 
-  "fields/flow-hatching": d("fields/flow-hatching", "python-api", "python-api", null, {
+  "fields/flow-hatching": d("fields/flow-hatching", "python-api", "shader-native", null, {
     paramSchema: FLOW_SCHEMA,
   }),
-  "fields/nebula": d("fields/nebula", "python-api", "python-api", null, { paramSchema: META }),
-  "landscape/noise-landscape": d("landscape/noise-landscape", "python-api", "python-api", null, {
+  "fields/nebula": d("fields/nebula", "python-api", "shader-native", null, { paramSchema: META }),
+  "landscape/noise-landscape": d("landscape/noise-landscape", "python-api", "shader-native", null, {
     paramSchema: [
       {
         key: "overlay",
@@ -181,18 +185,18 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
       ...META,
     ],
   }),
-  "reference/noise-landscape": d("reference/noise-landscape", "python-api", "python-api", null),
+  "reference/noise-landscape": d("reference/noise-landscape", "python-api", "shader-native", null),
 
-  "fractals/escape-time": d("fractals/escape-time", "python-api", "python-api", null, {
+  "fractals/escape-time": d("fractals/escape-time", "python-api", "shader-native", null, {
     paramSchema: ESCAPE_SCHEMA,
   }),
-  "reference/escape-time": d("reference/escape-time", "python-api", "python-api", null, {
+  "reference/escape-time": d("reference/escape-time", "python-api", "shader-native", null, {
     paramSchema: ESCAPE_SCHEMA,
   }),
-  "fractals/strange-attractors": d("fractals/strange-attractors", "python-api", "python-api", null, {
+  "fractals/strange-attractors": d("fractals/strange-attractors", "python-api", "shader-native", null, {
     paramSchema: ATTRACTOR_SCHEMA,
   }),
-  "fractals/sdf-raymarch2d": d("fractals/sdf-raymarch2d", "python-api", "python-api", null),
+  "fractals/sdf-raymarch2d": d("fractals/sdf-raymarch2d", "python-api", "shader-native", null),
 
   "growth/differential-growth": d(
     "growth/differential-growth",
@@ -201,7 +205,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "webgl-stateful",
     { paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META] },
   ),
-  "growth/lsystem": d("growth/lsystem", "python-api", "python-api", null),
+  "growth/lsystem": d("growth/lsystem", "python-api", "shader-native", null),
   "growth/slime-mold": d("growth/slime-mold", "python-api", "webgl-stateful", "webgl-stateful", {
     paramSchema: SLIME_SCHEMA,
   }),
@@ -222,35 +226,36 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     { paramSchema: RD_SCHEMA },
   ),
 
-  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "python-api", null),
-  "tiling/voronoi-stained-glass": d("tiling/voronoi-stained-glass", "python-api", "python-api", null, {
+  "tiling/truchet-tiles": d("tiling/truchet-tiles", "python-api", "shader-native", null),
+  "tiling/voronoi-stained-glass": d("tiling/voronoi-stained-glass", "python-api", "shader-native", null, {
     paramSchema: VORONOI_SCHEMA,
   }),
 
-  "audiovisual/nodes": d("audiovisual/nodes", "unsupported", "shader-native", "shader-native", {
+  "audiovisual/nodes": d("audiovisual/nodes", "webgl-stateful", "webgl-stateful", "webgl-stateful", {
     seedAffectsStructure: true,
   }),
   "reference/audiovisual-nodes": d(
     "reference/audiovisual-nodes",
-    "unsupported",
-    "shader-native",
-    "shader-native",
+    "webgl-stateful",
+    "webgl-stateful",
+    "webgl-stateful",
   ),
 
-  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", "python-api", null),
+  // Mashups: multi-layer live compositor scenes (see studio/mashups.ts).
+  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", "shader-native", null),
   "mashups/bureaucratic-growth-forms": d(
     "mashups/bureaucratic-growth-forms",
     "python-api",
-    "python-api",
+    "webgl-stateful",
     null,
   ),
-  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", "python-api", null),
-  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", "python-api", null),
+  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", "webgl-stateful", null),
+  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", "geometry-ir", null),
   "mashups/slime-on-sdf": d("mashups/slime-on-sdf", "python-api", "webgl-stateful", "webgl-stateful"),
   "mashups/striped-worms-eating-boxes": d(
     "mashups/striped-worms-eating-boxes",
     "python-api",
-    "python-api",
+    "webgl-stateful",
     null,
   ),
 
@@ -274,6 +279,15 @@ export function defaultsForPiece(pieceId: string): Record<string, number | strin
   return out;
 }
 
+export function animationExportBackendFor(pieceId: string): AnimationExportBackend {
+  const r = getPieceRuntime(pieceId);
+  if (r.exportBackend) return r.exportBackend;
+  const kind = r.animate;
+  if (!kind || kind === "unsupported") return "unsupported";
+  if (kind === "python-api") return "python-frames";
+  return "runtime-frames";
+}
+
 export function supportsMode(
   pieceId: string,
   mode: "generate" | "animate" | "react",
@@ -283,8 +297,33 @@ export function supportsMode(
   return kind !== null && kind !== "unsupported";
 }
 
-/** Pieces allowed to use createShaderPiece — explicit only. */
+const BROWSER_NATIVE_ANIMATE = new Set<RendererKind>([
+  "geometry-ir",
+  "webgl-stateful",
+  "wasm",
+  "shader-native",
+]);
+
+/** Studio ANIMATE must use a browser-native backend (not python-api / null). */
+export function isBrowserNativeAnimate(kind: RendererKind | null): boolean {
+  return kind !== null && BROWSER_NATIVE_ANIMATE.has(kind);
+}
+
+export function catalogPieceIds(): string[] {
+  return Object.keys(PIECE_RUNTIMES);
+}
+
+/** Pieces allowed to use createShaderPiece — explicit generic shader only (not maintained catalog defaults). */
 export const SHADER_NATIVE_PIECES = new Set<string>([
-  "audiovisual/nodes",
-  "reference/audiovisual-nodes",
+  "fractals/escape-time",
+  "reference/escape-time",
+  "fractals/sdf-raymarch2d",
+  "fractals/strange-attractors",
+  "fields/flow-hatching",
+  "fields/nebula",
+  "landscape/noise-landscape",
+  "reference/noise-landscape",
+  "tiling/truchet-tiles",
+  "tiling/voronoi-stained-glass",
+  "growth/lsystem",
 ]);

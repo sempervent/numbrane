@@ -83,6 +83,9 @@ export async function createGeometryIrPiece(
     resize() {},
     update(frame) {
       last = frame;
+      const endBehavior = Math.floor(params["anim.endBehavior"] ?? 5);
+      const constructionT = params["anim.constructionT"] ?? 1;
+      if (endBehavior === 0 && constructionT >= 0.999) return;
       if (audio.onset > 0.55) params.rotation += 0.03;
       params.rotation += audio.low * 0.008;
     },
@@ -122,8 +125,18 @@ export async function createGeometryIrPiece(
       c2.fillRect(0, 0, ctx.width, ctx.height);
       const cx = ctx.width * 0.5;
       const cy = ctx.height * 0.5;
-      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom * (1 + audio.energy * 0.12);
-      const rot = params.rotation + last.t * 0.04 * params.chaos;
+      const constructionT = Math.min(1, Math.max(0, params["anim.constructionT"] ?? 1));
+      const endBehavior = params["anim.endBehavior"] ?? 5;
+      const buildProgress = constructionT;
+      const holdComplete = constructionT >= 0.999 && endBehavior === 0;
+      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom *
+        (holdComplete ? 1 : 1 + audio.energy * 0.12);
+      const breathe =
+        holdComplete ? 1 : 1 + 0.04 * Math.sin(last.t * 1.15) * (endBehavior === 5 ? 1 : 0);
+      const drawScale = scale * breathe;
+      const rot = holdComplete
+        ? params.rotation
+        : params.rotation + last.t * 0.04 * params.chaos;
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
       const rgb = `hsl(${params.hue * 360} 70% ${48 + audio.energy * 18}%)`;
@@ -133,40 +146,61 @@ export async function createGeometryIrPiece(
       const xf = (x: number, y: number) => {
         const xr = x * cos - y * sin;
         const yr = x * sin + y * cos;
-        return [cx + xr * scale, cy + yr * scale] as const;
+        return [cx + xr * drawScale, cy + yr * drawScale] as const;
       };
+      const primitiveCount = ir.primitives?.length ?? 0;
+      const edgeCount = ir.edges.length;
+      const centerCount = ir.centers.length;
+      const totalSteps = Math.max(24, primitiveCount || edgeCount + centerCount);
+      const reveal = 0.15 + buildProgress * 0.85;
+      const maxPrimitives =
+        primitiveCount > 0 ? Math.max(1, Math.floor(primitiveCount * buildProgress)) : 0;
+      const maxEdges = edgeCount > 0 ? Math.max(1, Math.floor(edgeCount * buildProgress)) : 0;
+      const maxCenters = centerCount > 0 ? Math.max(1, Math.floor(centerCount * buildProgress)) : 0;
       if (ir.primitives?.length) {
-        for (const p of ir.primitives) {
+        for (let i = 0; i < maxPrimitives; i++) {
+          const p = ir.primitives[i]!;
+          const local = Math.min(1, buildProgress * totalSteps - i);
           if (p.kind === "line") {
             const [x0, y0] = xf(Number(p.x1), Number(p.y1));
             const [x1, y1] = xf(Number(p.x2), Number(p.y2));
+            const mx = x0 + (x1 - x0) * local;
+            const my = y0 + (y1 - y0) * local;
             c2.beginPath();
             c2.moveTo(x0, y0);
-            c2.lineTo(x1, y1);
+            c2.lineTo(mx, my);
             c2.stroke();
           } else if (p.kind === "circle") {
             const [x, y] = xf(Number(p.cx), Number(p.cy));
+            const r = Math.max(2, Number(p.r) * drawScale * reveal * local);
             c2.beginPath();
-            c2.arc(x, y, Math.max(2, Number(p.r) * scale), 0, Math.PI * 2);
+            c2.arc(x, y, r, 0, Math.PI * 2);
             c2.stroke();
           }
         }
       } else {
-        for (const e of ir.edges) {
+        for (let i = 0; i < maxEdges; i++) {
+          const e = ir.edges[i]!;
           const a = ir.centers[e.a];
           const b = ir.centers[e.b];
           if (!a || !b) continue;
+          const local = Math.min(1, buildProgress * totalSteps - i);
           const [x0, y0] = xf(a.x, a.y);
           const [x1, y1] = xf(b.x, b.y);
+          const mx = x0 + (x1 - x0) * local;
+          const my = y0 + (y1 - y0) * local;
           c2.beginPath();
           c2.moveTo(x0, y0);
-          c2.lineTo(x1, y1);
+          c2.lineTo(mx, my);
           c2.stroke();
         }
-        for (const p of ir.centers) {
+        for (let i = 0; i < maxCenters; i++) {
+          const p = ir.centers[i]!;
+          const local = Math.min(1, buildProgress * totalSteps - (edgeCount + i));
           const [x, y] = xf(p.x, p.y);
+          const r = Math.max(2, p.r * drawScale * reveal * Math.max(0.2, local));
           c2.beginPath();
-          c2.arc(x, y, Math.max(2, p.r * scale), 0, Math.PI * 2);
+          c2.arc(x, y, r, 0, Math.PI * 2);
           c2.stroke();
         }
       }

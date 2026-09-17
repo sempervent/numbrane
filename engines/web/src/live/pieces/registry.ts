@@ -8,12 +8,19 @@ import {
   SHADER_NATIVE_PIECES,
 } from "../../studio/runtime/registry";
 import { createDifferentialGrowthPiece } from "./differentialGrowthLive";
+import { createEscapeTimeLivePiece } from "./escapeTimeLive";
 import { createGeometryIrPiece } from "./geometryIrLive";
 import { createLatticefallLivePiece } from "./latticefallLive";
 import { createNoodlesLivePiece } from "./noodlesLive";
 import { createReactionDiffusionPiece } from "./reactionDiffusion";
+import { createSdfRaymarchLivePiece } from "./sdfRaymarchLive";
 import { createShaderPiece } from "./shaderPiece";
 import { createSlimeMoldPiece } from "./slimeMold";
+import { createStrangeAttractorLivePiece } from "./strangeAttractorLive";
+import { createFieldFlowLivePiece } from "./fieldFlowLive";
+import { createTilingLivePiece } from "./tilingLive";
+import { createLSystemLivePiece } from "./lsystemLive";
+import { createNodesLivePiece } from "./nodesLive";
 
 export { createShaderPiece } from "./shaderPiece";
 
@@ -52,9 +59,8 @@ export async function createLivePiece(
     if (pieceId === "growth/differential-growth") {
       return createDifferentialGrowthPiece(gl, pieceId);
     }
-    if (pieceId === "mashups/slime-on-sdf") {
-      // Compositor uses multi-layer; primary layer is slime
-      return createSlimeMoldPiece(gl, "growth/slime-mold");
+    if (pieceId === "audiovisual/nodes" || pieceId === "reference/audiovisual-nodes") {
+      return createNodesLivePiece(gl, pieceId);
     }
   }
 
@@ -69,6 +75,29 @@ export async function createLivePiece(
   }
 
   if (kind === "shader-native") {
+    if (pieceId === "fractals/escape-time" || pieceId === "reference/escape-time") {
+      return createEscapeTimeLivePiece(gl, pieceId);
+    }
+    if (pieceId === "fractals/sdf-raymarch2d") {
+      return createSdfRaymarchLivePiece(gl, pieceId);
+    }
+    if (pieceId === "fractals/strange-attractors") {
+      return createStrangeAttractorLivePiece(gl, pieceId);
+    }
+    if (
+      pieceId === "fields/flow-hatching" ||
+      pieceId === "fields/nebula" ||
+      pieceId === "landscape/noise-landscape" ||
+      pieceId === "reference/noise-landscape"
+    ) {
+      return createFieldFlowLivePiece(gl, pieceId);
+    }
+    if (pieceId === "tiling/truchet-tiles" || pieceId === "tiling/voronoi-stained-glass") {
+      return createTilingLivePiece(gl, pieceId);
+    }
+    if (pieceId === "growth/lsystem") {
+      return createLSystemLivePiece(gl, pieceId);
+    }
     if (!SHADER_NATIVE_PIECES.has(pieceId)) {
       throw new UnsupportedLivePieceError(pieceId, `${mode} (not shader-native)`);
     }

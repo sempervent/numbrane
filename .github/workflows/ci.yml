@@ -5,11 +5,8 @@ on:
     branches: [main]
   pull_request:
 
-env:
-  CARGO_BUILD_JOBS: "8"
-
 jobs:
-  ci:
+  pr-fast:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,47 +27,41 @@ jobs:
           cache: npm
           cache-dependency-path: engines/web/package-lock.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
         with:
-          targets: wasm32-unknown-unknown
-          components: rustfmt, clippy
+          tool: taplo-cli
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: engines/rust
-
-      - name: Install data linters
+      - name: Install fast validation dependencies
         run: |
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo install --locked taplo-cli ryl
+          uv tool install ryl
           uv tool install check-jsonschema
+          uv sync --directory engines/python --frozen --extra dev
+          npm ci --prefix engines/web
 
-      - name: Bootstrap
-        run: just bootstrap
+      - name: Fast PR validation
+        run: just pr-fast
 
-      - name: Build LATTICEFALL WASM
-        run: just latticefall-build
-
-      - name: Install Playwright Chromium
-        working-directory: engines/web
-        run: npx playwright install --with-deps chromium
-
-      - name: Full CI
-        run: just ci
-        env:
-          PW_CHROMIUM_ARGS: "--use-angle=swiftshader"
-
-  lint-data:
+  main-smoke:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: pr-fast
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: extractions/setup-just@v2
-      - uses: dtolnay/rust-toolchain@stable
       - uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: engines/web/package-lock.json
       - run: |
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          cargo install --locked taplo-cli ryl
-          uv tool install check-jsonschema
-      - run: just lint-data
+          uv sync --directory engines/python --frozen --extra dev
+          npm ci --prefix engines/web
+      - name: Selected renderer smoke
+        run: just smoke

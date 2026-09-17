@@ -80,6 +80,10 @@ RUN --mount=type=cache,target=/root/.npm \
     if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
 FROM web-deps AS web-builder
+ARG NUMBRANE_BUILD_SHA=unknown
+ARG NUMBRANE_BUILD_TIME=
+ENV NUMBRANE_BUILD_SHA=${NUMBRANE_BUILD_SHA}
+ENV NUMBRANE_BUILD_TIME=${NUMBRANE_BUILD_TIME}
 COPY engines/web ./
 COPY pieces /src/pieces
 # Self-contained: Studio bake never requires host `just latticefall-build`

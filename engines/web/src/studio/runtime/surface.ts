@@ -2,6 +2,8 @@
  * Decide which Studio surface renders the current piece/mode.
  */
 
+import type { ColorConfig } from "../color/model";
+import { mergeParamsWithColor } from "../color/serialize";
 import {
   getPieceRuntime,
   supportsMode,
@@ -53,6 +55,8 @@ export function cryptoSeed(): number {
 
 export function paramsForApi(
   params: Record<string, number | string | boolean>,
+  color?: ColorConfig,
 ): Record<string, number | string | boolean> {
-  return { ...params };
+  if (!color) return { ...params };
+  return mergeParamsWithColor(params, color);
 }

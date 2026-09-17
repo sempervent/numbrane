@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import type { Plugin } from "vite";
 import { defineConfig } from "vitest/config";
+import { collectPieceManifests } from "./src/studio/catalog/manifestCollection";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const shadersDir = resolve(root, "shaders");
@@ -88,23 +89,19 @@ function liveSetsPlugin(): Plugin {
 }
 
 function collectPieces(): unknown[] {
-  const pieces: unknown[] = [];
-  function walk(dir: string): void {
-    if (!existsSync(dir)) return;
-    for (const name of readdirSync(dir, { withFileTypes: true })) {
-      const p = join(dir, name.name);
-      if (name.isDirectory()) walk(p);
-      else if (name.name === "manifest.json") {
-        try {
-          pieces.push(JSON.parse(readFileSync(p, "utf8")));
-        } catch {
-          /* skip */
-        }
-      }
-    }
+  return collectPieceManifests(piecesDir);
+}
+
+function gitSha(): string {
+  try {
+    const sha = spawnSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+    }).stdout.trim();
+    return sha || process.env.NUMBRANE_BUILD_SHA || "unknown";
+  } catch {
+    return process.env.NUMBRANE_BUILD_SHA ?? "unknown";
   }
-  walk(piecesDir);
-  return pieces;
 }
 
 function catalogPlugin(): Plugin {
@@ -322,6 +319,13 @@ function renderApiPlugin(): Plugin {
 }
 
 export default defineConfig({
+  define: {
+    __NUMBRANE_BUILD_SHA__: JSON.stringify(process.env.NUMBRANE_BUILD_SHA ?? gitSha()),
+    __NUMBRANE_BUILD_VERSION__: JSON.stringify(process.env.npm_package_version ?? "0.1.0"),
+    __NUMBRANE_BUILD_TIME__: JSON.stringify(
+      process.env.NUMBRANE_BUILD_TIME ?? new Date().toISOString(),
+    ),
+  },
   plugins: [shadersStaticPlugin(), liveSetsPlugin(), catalogPlugin(), renderApiPlugin()],
   server: {
     host: "0.0.0.0",

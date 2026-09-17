@@ -139,8 +139,29 @@ test-python:
     cd "{{root}}/engines/python" && uv run pytest -q
 
 [group('test')]
+test-python-fast:
+    cd "{{root}}/engines/python" && uv run pytest -q \
+      tests/test_rng.py \
+      tests/test_schemas.py \
+      tests/test_seeds.py \
+      tests/test_composition_grammar.py
+
+[group('test')]
+test-python-renderer-smoke:
+    cd "{{root}}/engines/python" && uv run pytest -q \
+      tests/test_render_service.py::test_render_body_validates_piece \
+      tests/test_render_service.py::test_export_frame_count
+
+[group('test')]
 test-web:
     cd "{{root}}/engines/web" && npm test
+
+# The cross-language LATTICEFALL contract imports the generated wasm-bindgen
+# package. Keep that contract in full/local checks; PR-fast deliberately avoids
+# rebuilding WASM from a clean checkout.
+[group('test')]
+test-web-fast:
+    cd "{{root}}/engines/web" && npm test -- --exclude tests/latticefall_contract.test.ts
 
 [group('test')]
 test-rust:
@@ -296,6 +317,11 @@ dev-web piece="":
 ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
+# Stabilization-phase PR gate: no Rust/WASM build, Docker, browser, exports, or art corpus.
+[group('ci')]
+pr-fast: fmt-check-python lint-python lint-data lint-web test-web-fast test-python-fast test-python-renderer-smoke studio-catalog-audit
+    @echo "pr-fast ok"
+
 [group('ci')]
 ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke studio-test studio-fidelity studio-smoke bake-print
     @echo "ci ok"
@@ -341,6 +367,129 @@ studio-e2e:
     export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
     npx playwright test tests/e2e/studio.spec.ts
 
+[group('studio')]
+studio-animation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.animation.config.ts
+
+[group('studio')]
+studio-all-animation:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.all-animation.config.ts
+
+[group('studio')]
+studio-animation-soak:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.soak.config.ts
+
+[group('studio')]
+studio-catalog-audit:
+    cd "{{root}}/engines/web" && npx tsx scripts/studio-catalog-audit.ts
+
+[group('studio')]
+studio-all-generate:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.all-generate.config.ts
+
+[group('studio')]
+studio-performance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance.config.ts
+
+[group('studio')]
+studio-performance-soak:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts
+
+[group('studio')]
+studio-performance-quick-switch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-quick-switch.config.ts
+
+[group('studio')]
+studio-docker-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export BUILD_SHA="$(git -C "{{root}}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    docker buildx bake -f "{{root}}/docker-bake.hcl" studio render
+    docker compose -f "{{root}}/compose.yaml" up -d studio renderer
+
+[group('studio')]
+studio-visual-audit: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist}"
+    npx playwright test -c playwright.visual-audit.config.ts
+    echo "Visual audit → {{root}}/artifacts/visual-audit/index.html"
+
+[group('studio')]
+studio-performance-audit: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist}"
+    npx playwright test -c playwright.performance-quick-switch.config.ts
+
+[group('studio')]
+studio-full-check: pr-fast studio-visual-audit studio-performance-audit
+    @echo "studio-full-check ok"
+
+[group('studio')]
+studio-audiovisual-nodes:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts --grep studio-audiovisual-nodes
+
+[group('studio')]
+studio-piece-contract:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.piece-contract.config.ts
+
+[group('studio')]
+studio-animation-semantics:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.semantics.config.ts
+
+[group('studio')]
+animation-export:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    npm run test -- --run tests/export_backend.test.ts tests/animation_export_variation.test.ts tests/color.test.ts
+    cd "{{root}}/engines/python"
+    uv run pytest tests/test_render_service.py -q
+
 # ── Docker Bake ──────────────────────────────────────────────────────
 
 [group('docker')]
@@ -363,6 +512,8 @@ bake-print:
 docker-studio:
     #!/usr/bin/env bash
     set -euo pipefail
+    export BUILD_SHA="$(git -C "{{root}}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     docker buildx bake -f docker-bake.hcl studio render
     mkdir -p "{{root}}/artifacts"
     echo "Studio → http://127.0.0.1:8080/studio.html"

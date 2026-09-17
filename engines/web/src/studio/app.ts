@@ -4,7 +4,6 @@
 
 import { LiveSession } from "../live/session";
 import type { SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
-import { LIVE_PIECE_IDS } from "../live/pieces/pieceModes";
 import { createLivePiece } from "../live/pieces/registry";
 import {
   createStudioRegistry,
@@ -13,6 +12,11 @@ import {
 } from "./keyboard/registry";
 import { ExploreHistory, loadPrefs, savePrefs, type StudioPrefs } from "./prefs";
 import { fetchPieceCatalog, matchesFilter, type PieceInfo } from "./catalog";
+import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
+import {
+  resolveStudioDescriptor,
+  type StudioPieceDescriptor,
+} from "./descriptor/resolve";
 import {
   moreLikeThis,
   generateSeries,
@@ -20,13 +24,57 @@ import {
   type MetaAxis,
 } from "./explore/variants";
 import { COMPOSITIONS, compositionById } from "./compositions";
-import { presetsForPiece, ANIM_ARCS } from "./presets";
+import { presetsForPiece } from "./presets";
+import {
+  animationCapabilitiesFor,
+  defaultSpecForPiece,
+  normalizeSpecForPiece,
+} from "./animation/capabilities";
+import { panPresetViews } from "./animation/camera";
+import {
+  RANDOM_METHOD_ID,
+  animationMethodsForPiece,
+  applyAnimationMethod,
+  defaultAnimationMethodId,
+} from "./animation/methods";
+import { RandomAnimationSequencer } from "./animation/randomSequencer";
+import {
+  normalizeSpecForLivePerformance,
+  resolveLivePerformanceMethodSpec,
+  VisualSwitchSequencer,
+  type PerformanceTransition,
+} from "./animation/performance";
+import {
+  exportLoopFlag,
+  hasComponent,
+  type AnimationEasing,
+  type AnimationEndBehavior,
+  type AnimationSource,
+  type AnimationSpec,
+  type CameraView,
+  type PanPreset,
+} from "./animation/spec";
+import {
+  applyPreviewCameraStyle,
+  samplePreviewImageGrid,
+} from "./animate/apiPreviewPresent";
 import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
 import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
+import { encodeAnimationJob } from "./export/animationJobs";
+import { animationExportBackend } from "./export/exportBackend";
+import { captureRuntimeFrames, type RuntimeExportState } from "./export/runtimeExport";
+import {
+  defaultColorConfig,
+  normalizeColorConfig,
+  type ColorConfig,
+  hexToHueTurn,
+} from "./color/model";
+import { RAMP_PRESETS, RAMP_PRESET_LIST, SOLID_PRESETS, rampMappingsForPiece } from "./color/presets";
 import type { GenerateRequest } from "./generate/preview";
 import {
   RESOLUTION_PRESETS,
+  canvasToPngBlob,
   exportStillPng,
   exportAnimation,
   exportSvgText,
@@ -44,11 +92,14 @@ import {
 } from "./seed/library";
 import { defaultMappingsForPiece } from "./audio/mappings";
 import { GeneratePreviewController } from "./generate/preview";
+import { BufferedFrameAnimationController } from "./animate/controller";
 import {
   defaultsForPiece,
   getPieceRuntime,
+  isBrowserNativeAnimate,
   supportsMode,
 } from "./runtime/registry";
+import { buildMashupSet } from "./mashups";
 import {
   cryptoSeed,
   paramsForApi,
@@ -104,10 +155,11 @@ export class StudioApp {
     chaos: 0.3,
     density: 0.7,
     zoom: 1,
-    hue: 0.55,
+    hue: 0.08,
     exposure: 1,
     rotation: 0,
   };
+  color: ColorConfig = defaultColorConfig();
   meta: Record<MetaAxis, number> = {
     density: 0.7,
     chaos: 0.3,
@@ -135,7 +187,26 @@ export class StudioApp {
     label: string;
     thumbUrl: string | null;
   }> = [];
-  animArc = "emergence";
+  animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
+  animationMethodId = "pan-left-right";
+  /** Resolved method id when animationMethodId is random or composite. */
+  activeAnimationMethodId = "pan-left-right";
+  animationSequenceSeed = 137;
+  randomIntervalSec = 10;
+  randomAllowedMethodIds: string[] = [];
+  visualSwitchMode: "off" | "random" = "off";
+  visualSwitchIntervalSec = 30;
+  visualSequenceSeed = 137;
+  pieceTransition: PerformanceTransition = "crossfade";
+  performanceFavorites: string[] = [];
+  performanceCycleFavoritesOnly = false;
+  private randomSequencer: RandomAnimationSequencer | null = null;
+  private visualSequencer: VisualSwitchSequencer | null = null;
+  private lastRandomTickMs = 0;
+  private lastVisualSwitchMs = 0;
+  private lastAnimTickMs = 0;
+  private apiPreviewPresentGrid: Uint8Array | null = null;
+  private apiPreviewPresentStats: import("../live/pixelMetrics").PixelFrame | null = null;
   compositionId: string | null = null;
   audioEnabled = false;
   audioLevel = 0;
@@ -151,8 +222,18 @@ export class StudioApp {
   private fps = 60;
   private frameTimes: number[] = [];
   private preview = new GeneratePreviewController();
-  private apiAnimTimer: number | null = null;
-  private lastApiAnimMs = 0;
+  private apiAnim: BufferedFrameAnimationController | null = null;
+  private animUpdateFps = 0;
+  private animBackend = "";
+  private displayedFrame = 0;
+  private webglStatus = "—";
+  private stallError = "";
+  private lastVisualChangeMs = Date.now();
+  private pieceLoadedAt = Date.now();
+  private lastVisualDigest = "";
+  private descriptors = new Map<string, StudioPieceDescriptor>();
+  private browserThumbUrls = new Map<string, string>();
+  private browserThumbAbort: AbortController | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -160,6 +241,8 @@ export class StudioApp {
     this.mode = this.prefs.mode;
     this.pieceId = this.prefs.pieceId;
     this.seed = this.prefs.seed;
+    if (this.prefs.color) this.color = normalizeColorConfig(this.prefs.color);
+    this.params.hue = hexToHueTurn(this.color.primary.value);
     this.controlsVisible = this.prefs.controlsVisible;
     this.history = new ExploreHistory(this.prefs.recent);
   }
@@ -167,12 +250,18 @@ export class StudioApp {
   async boot(): Promise<void> {
     try {
       this.pieces = await fetchPieceCatalog();
-    } catch {
-      this.pieces = LIVE_PIECE_IDS.map((piece_id) => ({
-        piece_id,
-        capabilities: { still: true, animated: true, realtime: true, audio_reactive: true },
-        family: piece_id.split("/")[0],
-      }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast(`Catalog load failed: ${msg}`);
+      this.pieces = [];
+    }
+    this.descriptors.clear();
+    for (const p of this.pieces) {
+      try {
+        this.descriptors.set(p.piece_id, resolveStudioDescriptor(p));
+      } catch (err) {
+        console.error(`descriptor resolve failed for ${p.piece_id}`, err);
+      }
     }
 
     this.session = new LiveSession({
@@ -182,22 +271,291 @@ export class StudioApp {
       transparent: false,
     });
     await this.session.init();
+    window.__NUMBRANE_STUDIO__ = this;
     this.params = { ...defaultsForPiece(this.pieceId), ...this.params };
     await this.applyPieceScene();
 
     this.wireKeyboard();
     this.wireModebar();
+    this.wirePerformanceStrip();
     this.wirePointerIdle();
     this.renderConfig();
     this.renderHelp();
     this.renderBrowser();
+    this.syncModebarCapabilities();
     this.syncChrome();
     this.syncUrl(false);
     this.pushHistory();
 
-    window.__NUMBRANE_STUDIO__ = this;
     this.loop();
     toast("NUMBRANE Studio — press ? for keys");
+  }
+
+  getAnimationDiagnostics(): Record<string, unknown> {
+    const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+    const diag = this.session?.getDiagnostics();
+    return {
+      piece: this.pieceId,
+      backend: kind,
+      animBackend: this.animBackend || kind,
+      mode: this.mode,
+      surface: studioSurface(this.pieceId, this.mode),
+      playing: this.playing,
+      visualFps: this.fps,
+      rafCount: diag?.rafCount ?? 0,
+      rafHz: diag?.rafHz ?? 0,
+      rafStalled: diag?.rafStalled ?? false,
+      tickCount: diag?.tickCount ?? 0,
+      logicalFrame: diag?.logicalFrame ?? this.frame,
+      updateCount: diag?.updateCount ?? 0,
+      renderCount: diag?.renderCount ?? 0,
+      presentCount: diag?.presentCount ?? 0,
+      pixelDigest: diag?.pixelDigest ?? "",
+      presentedFrame: diag?.presentedFrame ?? null,
+      lastSuccessfulDrawMs: diag?.lastSuccessfulDrawMs ?? 0,
+      simulationPaused: diag?.simulationPaused ?? false,
+      transportPlaying: diag?.transportPlaying ?? false,
+      webglError: diag?.webglError ?? this.webglStatus,
+      canvasWidth: diag?.canvasWidth ?? this.canvas.width,
+      canvasHeight: diag?.canvasHeight ?? this.canvas.height,
+      visibleCssWidth: diag?.visibleCssWidth ?? 0,
+      visibleCssHeight: diag?.visibleCssHeight ?? 0,
+      stallError: this.stallError,
+      animationTimeSec: this.session?.animationRuntime.animationTimeSec ?? 0,
+      animationPhase:
+        this.session?.animationRuntime.evaluate().phase ?? 0,
+      animationDurationSec: this.session?.animationRuntime.spec.durationSec ?? 0,
+      animationEndBehavior: this.session?.animationRuntime.spec.endBehavior ?? "continuous",
+      animationSource: this.session?.animationRuntime.spec.source ?? "generative",
+      animationMethodId: this.animationMethodId,
+      activeAnimationMethodId: this.activeAnimationMethodId,
+      useSourceSnapshot:
+        this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
+      buildSha: BUILD_SHA,
+      buildTime: BUILD_TIME,
+    };
+  }
+
+  /** Live solid color update without scene reload (tests + picker). */
+  setSolidColor(hex: string): void {
+    if (this.locked.has("color")) return;
+    this.color.primary.value = hex;
+    this.color.mode = "solid";
+    this.applyLiveColor();
+    this.renderConfig();
+  }
+
+  /** Sample visible presented art (live canvas or api-preview img) for tests/diagnostics. */
+  samplePresentedPixels(gridW = 64, gridH = 36): import("../live/pixelMetrics").PixelFrame | null {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (hold?.classList.contains("visible") && hold.complete && hold.naturalWidth > 0) {
+      const prior =
+        this.apiPreviewPresentGrid && this.apiPreviewPresentStats
+          ? { pixels: this.apiPreviewPresentGrid, stats: this.apiPreviewPresentStats }
+          : undefined;
+      const sampled = samplePreviewImageGrid(
+        hold,
+        gridW,
+        gridH,
+        { centerX: 0, centerY: 0, scale: 1, rotation: 0 },
+        prior,
+      );
+      if (sampled) {
+        this.apiPreviewPresentGrid = sampled.grid;
+        this.apiPreviewPresentStats = sampled.stats;
+        return sampled.stats;
+      }
+    }
+    return this.sampleIncomingPresentedPixels(gridW, gridH);
+  }
+
+  private sampleIncomingPresentedPixels(
+    gridW = 64,
+    gridH = 36,
+  ): import("../live/pixelMetrics").PixelFrame | null {
+    const surface = studioSurface(this.pieceId, this.mode);
+    if (surface === "live" && this.session) {
+      try {
+        return this.session.readPresentedPixels(gridW, gridH);
+      } catch {
+        return null;
+      }
+    }
+    if (surface === "api-preview") {
+      return this.samplePreviewImagePixels(gridW, gridH);
+    }
+    return null;
+  }
+
+  private samplePreviewImagePixels(
+    gridW: number,
+    gridH: number,
+  ): import("../live/pixelMetrics").PixelFrame | null {
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    if (!img?.complete || img.naturalWidth < 1 || img.naturalHeight < 1) return null;
+    let camera: CameraView = { centerX: 0, centerY: 0, scale: 1, rotation: 0 };
+    if (this.mode === "animate" && this.apiPreviewUsesCamera() && this.session) {
+      camera = this.session.animationRuntime.evaluate().camera;
+    }
+    const prior =
+      this.apiPreviewPresentGrid && this.apiPreviewPresentStats
+        ? { pixels: this.apiPreviewPresentGrid, stats: this.apiPreviewPresentStats }
+        : undefined;
+    const sampled = samplePreviewImageGrid(img, gridW, gridH, camera, prior);
+    if (!sampled) return null;
+    this.apiPreviewPresentGrid = sampled.grid;
+    this.apiPreviewPresentStats = sampled.stats;
+    return sampled.stats;
+  }
+
+  pinPixelBaseline(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    this.session.readPresentedPixels(64, 36, true);
+    this.session.pinPresentedBaseline();
+  }
+
+  comparePixelBaseline(): number | null {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
+    return this.session.comparePresentedToBaseline(64, 36);
+  }
+
+  private ensureAnimateTransport(): void {
+    if (this.mode !== "animate" && this.mode !== "react") return;
+    this.playing = true;
+    this.session?.runtime.setSimulationPaused(false);
+    this.session?.runtime.transport.start();
+  }
+
+  private kickLiveSurface(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    this.session.ensureLoopRunning();
+    // One immediate present — ongoing motion must come from RAF, not repeated paintFrames().
+    this.session.frame(performance.now());
+    const stats = this.session.getDiagnostics().presentedFrame;
+    if (stats?.digest) {
+      this.lastVisualDigest = stats.digest;
+      this.lastVisualChangeMs = Date.now();
+    }
+  }
+
+  syncAnimationSpecToSession(preview = true): void {
+    if (!this.session || this.mode !== "animate") return;
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      { ...this.animationSpec, durationSec: this.anim.durationSec },
+      this.mode,
+    );
+    this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+    this.session.setAnimationSpec(this.animationSpec);
+    if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+      this.syncApiPreviewAnimate(preview);
+      return;
+    }
+    if (preview) this.kickLiveSurface();
+  }
+
+  private apiPreviewUsesCamera(): boolean {
+    return (
+      hasComponent(this.animationSpec, "camera") && !hasComponent(this.animationSpec, "generative")
+    );
+  }
+
+  private syncApiPreviewAnimate(preview: boolean): void {
+    if (this.apiPreviewUsesCamera()) {
+      this.stopApiAnim();
+      const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+      if (!img?.src && preview) {
+        this.scheduleGeneratePreview(true);
+      } else if (img?.complete && img.naturalWidth > 0) {
+        this.session?.animationRuntime.markSnapshotReady(this.renderDigest || "api-preview");
+      }
+      this.lastAnimTickMs = 0;
+      this.session?.animationRuntime.seekTime(0);
+      return;
+    }
+    if (hasComponent(this.animationSpec, "generative") && this.playing) {
+      this.startApiAnim();
+    }
+  }
+
+  private paintApiPreviewCamera(camera: CameraView): void {
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    if (!img) return;
+    applyPreviewCameraStyle(img, camera);
+  }
+
+  /** Test/export helper — GENERATE snapshot via the piece's authoritative backend. */
+  async captureGeneratePngBytes(): Promise<{
+    ok: boolean;
+    status?: number;
+    error?: string;
+    bytes?: Uint8Array;
+  }> {
+    const surface = studioSurface(this.pieceId, "generate");
+    if (surface === "api-preview") {
+      const { width, height } = previewSize();
+      try {
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            piece: this.pieceId,
+            seed: this.seed,
+            frame: this.frame,
+            width,
+            height,
+            format: "png",
+            quality: "preview",
+            parameters: paramsForApi(this.params, this.color),
+          }),
+        });
+        if (!res.ok) {
+          return { ok: false, status: res.status, error: await res.text() };
+        }
+        return { ok: true, status: res.status, bytes: new Uint8Array(await res.arrayBuffer()) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    if (surface === "live" && this.session) {
+      try {
+        this.kickLiveSurface();
+        if (rendererKindFor(this.pieceId, "generate") === "wasm") {
+          for (let i = 0; i < 12; i++) {
+            this.session.frame(performance.now());
+            await new Promise((r) => setTimeout(r, 40));
+          }
+        } else {
+          await new Promise((r) => setTimeout(r, 500));
+        }
+        const blob = await canvasToPngBlob(this.canvas);
+        return { ok: true, bytes: new Uint8Array(await blob.arrayBuffer()) };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    return { ok: false, error: `unsupported generate surface: ${surface}` };
+  }
+
+  private applyLiveColor(reloadScene = false): void {
+    this.syncColorToParams();
+    if (reloadScene || studioSurface(this.pieceId, this.mode) !== "live" || !this.session) {
+      void this.applyPieceScene();
+      return;
+    }
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void; setParameter?: (n: string, v: number) => void }
+        | undefined;
+      piece?.setColorConfig?.(this.color);
+      if (typeof this.params.hue === "number") {
+        piece?.setParameter?.("hue", Number(this.params.hue));
+      }
+    }
+    this.kickLiveSurface();
+    this.persist();
   }
 
   private async applyPieceScene(): Promise<void> {
@@ -205,62 +563,61 @@ export class StudioApp {
     const surface = studioSurface(this.pieceId, this.mode);
     const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
     const statusEl = document.getElementById("gen-status");
-    const banner = document.getElementById("unsupported-banner");
-    this.unsupportedMessage = "";
-
     if (surface === "unsupported") {
       this.session?.runtime.transport.stop();
       this.canvas.classList.add("hidden-live");
       previewEl?.classList.remove("visible");
       statusEl?.classList.remove("visible");
-      if (banner) {
-        const modeLabel = this.mode.toUpperCase();
-        this.unsupportedMessage = `This piece does not yet support ${modeLabel}`;
-        banner.textContent = this.unsupportedMessage;
-        banner.classList.add("visible");
-      }
+      this.showModeUnsupported(this.mode);
       this.syncChrome();
+      this.syncModebarCapabilities();
       return;
     }
-    banner?.classList.remove("visible");
+    this.clearFailureBanner();
 
     if (surface === "api-preview") {
       this.session?.runtime.transport.stop();
+      this.session?.runtime.setSimulationPaused(true);
       this.canvas.classList.add("hidden-live");
       previewEl?.classList.add("visible");
-      this.scheduleGeneratePreview();
+      this.animBackend = "buffered-api";
       if (this.mode === "animate" && this.playing) {
-        this.startApiAnim();
+        this.syncApiPreviewAnimate(true);
+      } else {
+        this.stopApiAnim({ abort: this.mode !== "animate" });
+        this.scheduleGeneratePreview();
       }
       this.syncChrome();
       return;
     }
 
     // Live surface (ANIMATE/REACT stateful, wasm, geometry-ir, shader-native)
+    this.stopApiAnim({ abort: true });
     this.preview.cancel();
     this.canvas.classList.remove("hidden-live");
     previewEl?.classList.remove("visible");
     statusEl?.classList.remove("visible");
+    this.animBackend = String(rendererKindFor(this.pieceId, this.mode) ?? "live");
     if (!this.session) return;
 
-    const mappings = defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map(
-      (m, i) => ({
-        id: `studio-${i}`,
-        source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
-        destination: `layer.L0.${m.target}`,
-        amount: m.amount,
-        min: 0,
-        max: 2,
-      }),
-    );
+    const mappings =
+      this.mode === "react"
+        ? defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map((m, i) => ({
+            id: `studio-${i}`,
+            source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
+            destination: `layer.L0.${m.target}`,
+            amount: m.amount,
+            min: 0,
+            max: 2,
+          }))
+        : [];
     const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
     const liveMode = this.mode === "react" ? "react" : "animate";
-    // Mashup slime-on-sdf: live = slime only (authentic RD trail), not fake SDF shader
-    const livePieceId =
-      this.pieceId === "mashups/slime-on-sdf" ? "growth/slime-mold" : this.pieceId;
+    const apiParams = paramsForApi(this.params, this.color);
+    const mashupSet = buildMashupSet(this.pieceId, this.seed, apiParams);
     const set: SetDef = composition
       ? composition.build(this.seed, this.params)
-      : {
+      : mashupSet ?? {
           protocol_version: "0.1.0",
           set_id: "studio-session",
           name: "Studio",
@@ -271,11 +628,11 @@ export class StudioApp {
               layers: [
                 {
                   id: "L0",
-                  piece: livePieceId,
+                  piece: this.pieceId,
                   opacity: 1,
                   blend: "normal",
                   seed: this.seed,
-                  parameters: { ...this.params } as Record<string, number>,
+                  parameters: apiParams,
                 },
               ],
               modulation: mappings,
@@ -290,13 +647,15 @@ export class StudioApp {
     try {
       await this.session.loadSet(set, liveMode);
     } catch (err) {
-      this.unsupportedMessage =
-        err instanceof Error ? err.message : `Failed to load ${this.pieceId}`;
-      if (banner) {
-        banner.textContent = this.unsupportedMessage;
-        banner.classList.add("visible");
+      const backend = String(rendererKindFor(this.pieceId, this.mode) ?? "unknown");
+      if (this.mode === "animate" || this.mode === "react") {
+        this.showAnimationFailed(err, backend);
+      } else {
+        this.showFailureBanner(
+          "Scene load failed",
+          `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
-      toast(this.unsupportedMessage);
       return;
     }
     this.session.setSeed(this.seed);
@@ -306,6 +665,10 @@ export class StudioApp {
           this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
         }
       }
+      const lp = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void }
+        | undefined;
+      lp?.setColorConfig?.(this.color);
     }
     if (this.pendingImportState) {
       const piece = this.session.runtime.getPiece("L0") as
@@ -324,20 +687,45 @@ export class StudioApp {
       }
       this.pendingImportState = null;
     }
-    this.session.startLoop();
+    this.syncColorToParams();
+    this.session.ensureLoopRunning();
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
+      this.session.runtime.setSimulationPaused(true);
+    } else if (this.mode === "animate" || this.mode === "react") {
+      this.ensureAnimateTransport();
     } else if (this.playing) {
+      this.session.runtime.setSimulationPaused(false);
       this.session.runtime.transport.start();
+    } else {
+      this.session.runtime.setSimulationPaused(true);
+      this.session.runtime.transport.stop();
     }
+    if (this.mode === "animate") {
+      this.animationSpec = resolveLivePerformanceMethodSpec(
+        this.pieceId,
+        this.animationMethodId,
+        this.mode,
+      );
+      this.anim.durationSec = this.animationSpec.durationSec;
+      this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+      this.session.setAnimationSpec(this.animationSpec);
+      this.session.paintFrames(4, performance.now());
+    }
+    this.kickLiveSurface();
+    this.stallError = "";
+    this.pieceLoadedAt = Date.now();
+    this.lastVisualChangeMs = Date.now();
+    this.frame = this.session.runtime.getFrame();
+    this.webglStatus = "ok";
     this.syncChrome();
   }
 
   private scheduleGeneratePreview(immediate = false): void {
     if (studioSurface(this.pieceId, this.mode) !== "api-preview") return;
     const { width, height } = previewSize();
-    const baseParams = paramsForApi(this.params);
+    const baseParams = paramsForApi(this.params, this.color);
     const img = document.getElementById("generate-preview") as HTMLImageElement | null;
     const status = document.getElementById("gen-status");
 
@@ -348,6 +736,10 @@ export class StudioApp {
       if (img) {
         img.src = result.objectUrl;
         img.classList.add("visible");
+        if (this.mode === "animate" && this.apiPreviewUsesCamera()) {
+          img.style.transform = "";
+          this.session?.animationRuntime.markSnapshotReady(result.renderDigest);
+        }
       }
       if (status) status.textContent = label;
       this.syncChrome();
@@ -388,7 +780,7 @@ export class StudioApp {
         (err) => {
           this.generating = false;
           status?.classList.remove("visible");
-          toast(err.message.slice(0, 120));
+          this.showGenerationFailed(err, "python-api");
         },
       );
     };
@@ -409,7 +801,7 @@ export class StudioApp {
         (err) => {
           this.generating = false;
           status?.classList.remove("visible");
-          toast(err.message.slice(0, 120));
+          this.showGenerationFailed(err, "python-api");
         },
       );
       return;
@@ -436,29 +828,90 @@ export class StudioApp {
   }
 
   private startApiAnim(): void {
-    this.stopApiAnim();
-    this.lastApiAnimMs = performance.now();
-    const tick = () => {
-      if (!this.playing || studioSurface(this.pieceId, this.mode) !== "api-preview") {
-        this.stopApiAnim();
-        return;
-      }
-      const now = performance.now();
-      const interval = 1000 / Math.max(1, this.anim.fps);
-      if (now - this.lastApiAnimMs >= interval) {
-        this.lastApiAnimMs = now;
-        this.frame += 1;
-        this.scheduleGeneratePreview(true);
-      }
-      this.apiAnimTimer = window.setTimeout(tick, 16);
+    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
+    const status = document.getElementById("gen-status");
+    const { width, height } = previewSize();
+    const base = {
+      piece: this.pieceId,
+      seed: this.seed,
+      width: Math.max(320, Math.floor(width * 0.5)),
+      height: Math.max(180, Math.floor(height * 0.5)),
+      quality: "draft" as const,
+      parameters: paramsForApi(this.params, this.color),
     };
-    this.apiAnimTimer = window.setTimeout(tick, 16);
+    // GENERATE preview controller must not drive ANIMATE.
+    this.preview.cancel();
+    this.apiAnim?.dispose();
+    this.apiAnim = new BufferedFrameAnimationController({
+      fetchFrame: async (req, signal) => {
+        const t0 = performance.now();
+        const res = await fetch("/api/render", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal,
+          body: JSON.stringify({
+            piece: req.piece,
+            seed: req.seed,
+            frame: req.frame,
+            width: req.width,
+            height: req.height,
+            format: "png",
+            quality: req.quality ?? "draft",
+            parameters: req.parameters,
+          }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        const blob = await res.blob();
+        return {
+          blob,
+          recipeDigest: res.headers.get("X-Numbrane-Recipe-Digest") ?? "",
+          renderDigest: res.headers.get("X-Numbrane-Render-Digest") ?? "",
+          renderMs: performance.now() - t0,
+        };
+      },
+      onPaint: (result) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        if (img) {
+          img.src = result.objectUrl;
+          img.classList.add("visible");
+        }
+        this.frame = result.logicalFrame;
+        this.displayedFrame = result.logicalFrame;
+        this.recipeDigest = result.recipeDigest;
+        this.renderDigest = result.renderDigest;
+        this.lastRenderMs = result.renderMs;
+        this.syncChrome();
+      },
+      onError: (err) => {
+        this.generating = false;
+        status?.classList.remove("visible");
+        const banner = document.getElementById("unsupported-banner");
+        this.unsupportedMessage = `ANIMATE failed (${this.pieceId}): ${err.message.slice(0, 120)}`;
+        if (banner) {
+          banner.textContent = this.unsupportedMessage;
+          banner.classList.add("visible");
+        }
+        toast(this.unsupportedMessage);
+      },
+      onStats: (s) => {
+        this.animUpdateFps = s.updateFps;
+        this.lastRenderMs = s.latencyMs;
+      },
+    });
+    this.generating = true;
+    status?.classList.add("visible");
+    if (status) status.textContent = "Animating…";
+    this.apiAnim.start(base, this.anim.startFrame || this.frame || 0);
   }
 
-  private stopApiAnim(): void {
-    if (this.apiAnimTimer !== null) {
-      window.clearTimeout(this.apiAnimTimer);
-      this.apiAnimTimer = null;
+  private stopApiAnim(opts: { abort?: boolean } = { abort: true }): void {
+    if (!this.apiAnim) return;
+    if (opts.abort !== false) {
+      this.apiAnim.dispose();
+      this.apiAnim = null;
+    } else {
+      this.apiAnim.pause();
     }
   }
 
@@ -691,10 +1144,158 @@ export class StudioApp {
   private wireModebar(): void {
     document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
       btn.addEventListener("click", () => {
+        if (btn.disabled) return;
         const m = btn.dataset.mode as StudioMode;
         void this.setMode(m);
       });
     });
+  }
+
+  private wirePerformanceStrip(): void {
+    document.getElementById("perf-prev")?.addEventListener("click", () => void this.cyclePiece(-1));
+    document.getElementById("perf-next")?.addEventListener("click", () => void this.cyclePiece(1));
+    document.getElementById("perf-random")?.addEventListener("click", () => void this.cycleRandomPiece());
+    document.getElementById("perf-pause")?.addEventListener("click", () => {
+      this.togglePlay();
+      this.syncChrome();
+    });
+  }
+
+  private descriptorFor(pieceId = this.pieceId): StudioPieceDescriptor | undefined {
+    return this.descriptors.get(pieceId);
+  }
+
+  private modeSupported(mode: StudioMode, pieceId = this.pieceId): boolean {
+    const d = this.descriptorFor(pieceId);
+    if (!d) return supportsMode(pieceId, mode);
+    if (mode === "generate") return d.generate.supported;
+    if (mode === "animate") return d.animate.supported;
+    return d.react.supported;
+  }
+
+  /** E2E helper — show chrome and optional piece browser without keyboard side effects. */
+  showChromeForTest(showBrowser = true): void {
+    this.controlsVisible = true;
+    if (showBrowser) this.browserVisible = true;
+    this.syncChrome();
+    if (showBrowser) this.renderBrowser();
+  }
+
+  syncModebarCapabilities(): void {
+    const d = this.descriptorFor();
+    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+      const mode = btn.dataset.mode as StudioMode;
+      const ok =
+        mode === "generate"
+          ? (d?.generate.supported ?? false)
+          : mode === "animate"
+            ? (d?.animate.supported ?? false)
+            : (d?.react.supported ?? false);
+      btn.disabled = !ok;
+      btn.title = ok ? "" : `${mode} unsupported for ${this.pieceId}`;
+      btn.style.opacity = ok ? "1" : "0.45";
+    });
+  }
+
+  private clearFailureBanner(): void {
+    const banner = document.getElementById("unsupported-banner");
+    if (banner) {
+      banner.textContent = "";
+      banner.classList.remove("visible");
+    }
+    this.unsupportedMessage = "";
+  }
+
+  private showFailureBanner(title: string, detail: string): void {
+    const banner = document.getElementById("unsupported-banner");
+    this.unsupportedMessage = `${title}\n\n${detail}`;
+    if (banner) {
+      banner.textContent = this.unsupportedMessage;
+      banner.style.whiteSpace = "pre-wrap";
+      banner.classList.add("visible");
+    }
+    toast(title);
+  }
+
+  private showModeUnsupported(mode: StudioMode): void {
+    this.showFailureBanner(
+      `${mode.toUpperCase()} unsupported`,
+      `Piece: ${this.pieceId}\nThis piece does not expose ${mode.toUpperCase()} in Studio.`,
+    );
+  }
+
+  private showAnimationFailed(err: unknown, backend: string): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    this.showFailureBanner(
+      "Animation failed",
+      `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${msg}`,
+    );
+  }
+
+  private showGenerationFailed(err: unknown, backend: string): void {
+    const msg = err instanceof Error ? err.message : String(err);
+    this.showFailureBanner(
+      "Generation failed",
+      `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${msg}`,
+    );
+  }
+
+  applyAnimationMethodId(methodId: string): void {
+    if (methodId === RANDOM_METHOD_ID) {
+      this.animationMethodId = RANDOM_METHOD_ID;
+      this.initRandomSequencer();
+      this.renderConfig();
+      return;
+    }
+    this.animationMethodId = methodId;
+    this.activeAnimationMethodId = methodId;
+    this.randomSequencer = null;
+    this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, methodId, this.mode);
+    this.anim.durationSec = this.animationSpec.durationSec;
+    this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+    if (this.mode === "animate") {
+      this.syncAnimationSpecToSession(true);
+    }
+    this.renderConfig();
+  }
+
+  private initRandomSequencer(): void {
+    const methods = animationMethodsForPiece(this.pieceId);
+    const allowed =
+      this.randomAllowedMethodIds.length > 0
+        ? this.randomAllowedMethodIds
+        : methods.map((m) => m.id);
+    this.randomSequencer = RandomAnimationSequencer.create(
+      this.animationSequenceSeed,
+      this.randomIntervalSec,
+      allowed,
+      methods,
+    );
+    const first = this.randomSequencer.pickInitial();
+    this.animationMethodId = RANDOM_METHOD_ID;
+    this.activeAnimationMethodId = first;
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      applyAnimationMethod(this.pieceId, first),
+      this.mode,
+    );
+    this.anim.durationSec = this.animationSpec.durationSec;
+    this.syncAnimationSpecToSession(true);
+    this.lastRandomTickMs = performance.now();
+  }
+
+  advanceRandomMethod(): void {
+    if (!this.randomSequencer) this.initRandomSequencer();
+    const next = this.randomSequencer!.forceNext();
+    this.activeAnimationMethodId = next;
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      applyAnimationMethod(this.pieceId, next),
+      this.mode,
+    );
+    this.syncAnimationSpecToSession(true);
+    this.lastRandomTickMs = performance.now();
+    this.renderConfig();
   }
 
   private wirePointerIdle(): void {
@@ -713,6 +1314,10 @@ export class StudioApp {
   }
 
   async setMode(mode: StudioMode): Promise<void> {
+    if (!this.modeSupported(mode)) {
+      this.showModeUnsupported(mode);
+      return;
+    }
     this.mode = mode;
     this.prefs.mode = mode;
     this.persist();
@@ -729,17 +1334,23 @@ export class StudioApp {
     await this.applyPieceScene();
     this.renderConfig();
     this.renderHelp();
+    this.syncModebarCapabilities();
     this.syncUrl(true);
-    if (!supportsMode(this.pieceId, mode)) {
-      toast(`This piece does not yet support ${mode.toUpperCase()}`);
-    } else {
-      toast(`${mode.toUpperCase()} mode`);
-    }
+    toast(`${mode.toUpperCase()} mode`);
   }
 
   async setPiece(pieceId: string): Promise<void> {
+    this.browserThumbAbort?.abort();
+    this.browserThumbAbort = null;
+    const preserveCurrentVisual = this.mode === "animate" || this.mode === "react";
+    if (preserveCurrentVisual) this.beginVisualTransition();
     this.pieceId = pieceId;
     this.prefs.pieceId = pieceId;
+    this.recipeDigest = "";
+    this.renderDigest = "";
+    if (this.mode === "animate" || this.mode === "react") {
+      this.playing = true;
+    }
     // Reset to piece defaults; keep shared meta axes that map meaningfully
     const defaults = defaultsForPiece(pieceId);
     const next: Record<string, number | string | boolean> = { ...defaults };
@@ -749,13 +1360,26 @@ export class StudioApp {
       }
     }
     this.params = next;
+    this.animationMethodId = defaultAnimationMethodId(pieceId);
+    this.activeAnimationMethodId = this.animationMethodId;
+    this.animationSpec = resolveLivePerformanceMethodSpec(pieceId, this.animationMethodId, this.mode);
+    this.randomSequencer = null;
+    this.anim.durationSec = this.animationSpec.durationSec;
     this.compositionId = null;
     this.frame = 0;
     this.persist();
     await this.applyPieceScene();
+    if (preserveCurrentVisual) {
+      if (this.unsupportedMessage) this.keepTransitionAsFallback();
+      else if (await this.waitForIncomingVisual()) this.finishVisualTransition();
+      else this.keepTransitionAsFallback();
+    }
     this.pushHistory();
     this.renderConfig();
-    this.renderBrowser();
+    document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
+      card.classList.toggle("selected", card.dataset.pieceId === this.pieceId);
+    });
+    this.syncModebarCapabilities();
     this.syncUrl(true);
   }
 
@@ -766,6 +1390,9 @@ export class StudioApp {
     }
     this.seed = cryptoSeed();
     this.prefs.seed = this.seed;
+    if (this.mode === "animate" || this.mode === "react") {
+      this.playing = true;
+    }
     this.persist();
     await this.applyPieceScene();
     this.pushHistory();
@@ -783,11 +1410,18 @@ export class StudioApp {
     this.playing = !this.playing;
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       if (this.playing) this.startApiAnim();
-      else this.stopApiAnim();
+      else this.stopApiAnim({ abort: false });
+      this.syncChrome();
       return;
     }
-    if (this.playing) this.session?.runtime.transport.start();
-    else this.session?.runtime.transport.stop();
+    if (this.playing) {
+      this.session?.runtime.setSimulationPaused(false);
+      this.session?.runtime.transport.start();
+    } else {
+      this.session?.runtime.setSimulationPaused(true);
+      this.session?.runtime.transport.stop();
+    }
+    this.syncChrome();
   }
 
   async toggleFullscreen(): Promise<void> {
@@ -800,11 +1434,36 @@ export class StudioApp {
     }
   }
 
+  private performancePiecePool(): string[] {
+    const all = this.pieces.map((p) => p.piece_id);
+    if (this.performanceCycleFavoritesOnly && this.performanceFavorites.length > 0) {
+      return this.performanceFavorites.filter((id) => all.includes(id));
+    }
+    return all;
+  }
+
+  private initVisualSequencer(): void {
+    const pool = this.performancePiecePool();
+    this.visualSequencer = new VisualSwitchSequencer(
+      pool,
+      this.visualSequenceSeed,
+      this.visualSwitchIntervalSec,
+    );
+    this.lastVisualSwitchMs = Date.now();
+  }
+
   async cyclePiece(dir: number): Promise<void> {
-    const ids = this.pieces.map((p) => p.piece_id);
+    const ids = this.performancePiecePool();
     const i = Math.max(0, ids.indexOf(this.pieceId));
     const next = ids[(i + dir + ids.length) % ids.length];
     if (next) await this.setPiece(next);
+  }
+
+  async cycleRandomPiece(): Promise<void> {
+    const ids = this.performancePiecePool().filter((id) => id !== this.pieceId);
+    if (ids.length === 0) return;
+    const idx = Math.abs(this.visualSequenceSeed ^ this.seed) % ids.length;
+    await this.setPiece(ids[idx]!);
   }
 
   private pushHistory(): void {
@@ -1139,9 +1798,66 @@ export class StudioApp {
   async exportAnim(): Promise<void> {
     const cfg = this.anim;
     const fmt = this.exportKind === "video" ? "webm" : this.animFormat;
-    toast(`exporting ${fmt}…`);
+    const backend = animationExportBackend(this.pieceId);
+    if (backend === "unsupported") {
+      toast("This piece does not support animation export");
+      return;
+    }
+    toast(`exporting ${fmt} (${backend})…`);
+    const frameCount = Math.max(1, Math.floor(cfg.fps * cfg.durationSec));
+    const apiParams = paramsForApi(this.params, this.color);
+    cfg.loop = exportLoopFlag(this.animationSpec.endBehavior);
+
     try {
-      // Prefer server-side deterministic frame render + FFmpeg encode
+      if (backend === "runtime-frames") {
+        const livePiece = this.session?.runtime.getPiece("L0") as
+          | { exportState?: () => RuntimeExportState }
+          | undefined;
+        const importState = livePiece?.exportState?.() ?? null;
+        const frames = await captureRuntimeFrames({
+          pieceId: this.pieceId,
+          seed: this.seed,
+          params: apiParams,
+          color: this.color,
+          width: cfg.width,
+          height: cfg.height,
+          fps: cfg.fps,
+          frameCount,
+          startFrame: cfg.startFrame,
+          importState: importState
+            ? { ...importState, logicalFrame: this.session?.runtime.getFrame() ?? cfg.startFrame }
+            : null,
+          onProgress: (n, total) => toast(`export frame ${n}/${total}`),
+        });
+        const encoded = await encodeAnimationJob(
+          frames,
+          {
+            fps: cfg.fps,
+            format: fmt,
+            quality: cfg.quality,
+            loop: cfg.loop,
+            piece: this.pieceId,
+            seed: this.seed,
+            frameCount: frames.length,
+          },
+          (msg) => toast(msg),
+        );
+        if (fmt === "webp") {
+          const animated = await webpIsAnimated(encoded.blob);
+          if (!animated) throw new Error("encoded WebP is not animated");
+        }
+        downloadBlob(
+          encoded.blob,
+          `${this.pieceId.replace(/\//g, "_")}-s${this.seed}.${fmt}`,
+        );
+        toast(
+          encoded.artifact
+            ? `exported .${fmt} → artifacts/${encoded.artifact}`
+            : `exported .${fmt} (runtime frames)`,
+        );
+        return;
+      }
+
       const server = await apiExportAnimation(
         {
           piece: this.pieceId,
@@ -1154,7 +1870,7 @@ export class StudioApp {
           format: fmt,
           quality: cfg.quality,
           loop: cfg.loop,
-          parameters: this.params,
+          parameters: apiParams,
         },
         (msg) => toast(msg),
       );
@@ -1175,24 +1891,27 @@ export class StudioApp {
     } catch (serverErr) {
       // Fallback: browser logical-frame WebM path
       try {
-        const arc = ANIM_ARCS.find((a) => a.id === this.animArc);
-        const result = await exportAnimation(cfg, async (frame, t) => {
-          const t01 = cfg.durationSec > 0 ? t / cfg.durationSec : 0;
-          if (arc) {
-            const numeric: Record<string, number> = {};
-            for (const [k, v] of Object.entries(this.params)) {
-              if (typeof v === "number") numeric[k] = v;
-            }
-            const next = arc.apply(numeric, Math.min(1, Math.max(0, t01)));
-            for (const [k, v] of Object.entries(next)) {
-              if (typeof v === "number") {
-                this.session?.runtime.getPiece("L0")?.setParameter(k, v);
+        const exportSpec = normalizeSpecForPiece(this.pieceId, this.animationSpec);
+        this.session?.setAnimationSpec(exportSpec);
+        let exportPrimed = false;
+        const result = await exportAnimation(
+          { ...cfg, loop: exportLoopFlag(exportSpec.endBehavior) },
+          async (_frame, t) => {
+            if (this.session) {
+              if (!exportPrimed) {
+                this.session.animationRuntime.reset();
+                exportPrimed = true;
               }
+              this.session.animationRuntime.seekTime(t);
+              this.session.animationRuntime.applyToPieces(
+                this.session.runtime.getPieces(),
+                new Map(),
+              );
+              this.session.frame(t * 1000);
             }
-          }
-          this.session?.frame((frame / cfg.fps) * 1000);
-          return this.canvas;
-        });
+            return this.canvas;
+          },
+        );
         const ext = result.format === "webm" ? "webm" : "webp";
         downloadBlob(
           result.blob,
@@ -1224,7 +1943,25 @@ export class StudioApp {
   }
 
   private persist(): void {
+    this.prefs.color = this.color;
     savePrefs(this.prefs);
+  }
+
+  private syncColorToParams(): void {
+    if (!this.locked.has("color") && !this.locked.has("hue")) {
+      this.params.hue = hexToHueTurn(this.color.primary.value);
+    }
+    this.session?.runtime.getPiece("L0")?.setParameter("hue", Number(this.params.hue));
+  }
+
+  private applyColorPreset(presetId: string): void {
+    const ramp = RAMP_PRESETS[presetId];
+    if (ramp) {
+      this.color.mode = "ramp";
+      this.color.rampPreset = presetId;
+      this.color.ramp = JSON.parse(JSON.stringify(ramp.ramp));
+    }
+    this.applyLiveColor(true);
   }
 
   private syncUrl(push: boolean): void {
@@ -1236,6 +1973,71 @@ export class StudioApp {
     if (push) history.replaceState(null, "", u);
   }
 
+  private beginVisualTransition(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold) return;
+    const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
+    let src = "";
+    if (preview?.classList.contains("visible") && preview.src) {
+      src = preview.src;
+    } else if (this.canvas.width > 0 && this.canvas.height > 0) {
+      try {
+        src = this.canvas.toDataURL("image/png");
+      } catch {
+        src = "";
+      }
+    }
+    if (!src) return;
+    hold.src = src;
+    hold.classList.remove("releasing", "fallback-drift");
+    hold.classList.add("visible");
+  }
+
+  private async waitForIncomingVisual(timeoutMs = 20_000): Promise<boolean> {
+    const started = performance.now();
+    while (performance.now() - started < timeoutMs) {
+      const px = this.sampleIncomingPresentedPixels(64, 36);
+      if (
+        px &&
+        (px.meanLuminance > 2 || px.luminanceVariance > 1 || px.occupiedFraction > 0.00025)
+      ) {
+        return true;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    return false;
+  }
+
+  private finishVisualTransition(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold?.classList.contains("visible")) return;
+    if (this.pieceTransition === "cut") {
+      hold.classList.remove("visible", "releasing", "fallback-drift");
+      hold.removeAttribute("src");
+      return;
+    }
+    hold.classList.add("releasing");
+    window.setTimeout(() => {
+      hold.classList.remove("visible", "releasing", "fallback-drift");
+      hold.removeAttribute("src");
+    }, 320);
+  }
+
+  private keepTransitionAsFallback(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold?.src) return;
+    hold.classList.remove("releasing");
+    hold.classList.add("visible", "fallback-drift");
+  }
+
+  private setControlTreeState(id: string, hidden: boolean): void {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.inert = hidden;
+    node.setAttribute("aria-hidden", hidden ? "true" : "false");
+    node.style.pointerEvents = hidden ? "none" : "";
+  }
+
   syncChrome(): void {
     document.body.classList.toggle("controls-visible", this.controlsVisible);
     document.body.classList.toggle("controls-hidden", !this.controlsVisible);
@@ -1243,6 +2045,17 @@ export class StudioApp {
     document.getElementById("help")?.classList.toggle("visible", this.helpVisible);
     document.getElementById("hud")?.classList.toggle("visible", this.hudVisible);
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
+    const perf = document.getElementById("performance-strip");
+    if (perf) {
+      perf.classList.toggle("visible", this.mode === "animate" && this.controlsVisible);
+      const label = document.getElementById("perf-piece");
+      if (label) label.textContent = this.pieceId.split("/").pop() ?? this.pieceId;
+      const pauseBtn = document.getElementById("perf-pause");
+      if (pauseBtn) pauseBtn.textContent = this.playing ? "Pause" : "Play";
+    }
+    for (const id of ["modebar", "config", "browser", "performance-strip"]) {
+      this.setControlTreeState(id, !this.controlsVisible);
+    }
     const strip = document.getElementById("meta-strip");
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     if (strip) {
@@ -1313,22 +2126,31 @@ export class StudioApp {
     for (const p of list) {
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
-      const caps = p.capabilities || {};
-      const rt = getPieceRuntime(p.piece_id);
-      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" />
+      div.dataset.pieceId = p.piece_id;
+      const desc = this.descriptors.get(p.piece_id);
+      const capLabel = (label: string, ok: boolean) =>
+        `<span class="${ok ? "cap-ok" : "cap-na"}">${label}${ok ? "" : " · unsupported"}</span>`;
+      const thumb = this.browserThumbUrls.get(p.piece_id);
+      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
         <div class="name">${p.title || p.name || p.piece_id}</div>
-        <div class="meta">${p.family || p.piece_id.split("/")[0]} · gen:${rt.generate}
-        ${caps.still ? "still " : ""}${caps.animated ? "anim " : ""}${caps.realtime ? "rt " : ""}${caps.audio_reactive ? "audio" : ""}</div>
+        <div class="meta caps">${capLabel("Generate", desc?.generate.supported ?? false)} · ${capLabel("Animate", desc?.animate.supported ?? false)} · ${capLabel("React", desc?.react.supported ?? false)}</div>
+        <div class="meta">${p.family || p.piece_id.split("/")[0]} · ${desc?.animate.backend ?? "—"}</div>
         <div class="meta">${p.description || ""}</div>`;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       host.appendChild(div);
     }
-    // Lazy real thumbnails (actual /api/render) for visible catalog entries
-    void this.loadBrowserThumbs(list.slice(0, 16).map((p) => p.piece_id));
+    // Do not queue renderer work while the browser is closed. Cache URLs across re-renders.
+    if (this.browserVisible) {
+      void this.loadBrowserThumbs(list.slice(0, 8).map((p) => p.piece_id));
+    }
   }
 
   private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
+    this.browserThumbAbort?.abort();
+    const controller = new AbortController();
+    this.browserThumbAbort = controller;
     for (const pieceId of pieceIds) {
+      if (controller.signal.aborted) return;
       if (!supportsMode(pieceId, "generate")) continue;
       const img = document.querySelector<HTMLImageElement>(`#browser img.thumb[data-piece="${pieceId}"]`);
       if (!img || img.dataset.loaded) continue;
@@ -1336,6 +2158,7 @@ export class StudioApp {
         const res = await fetch("/api/render", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             piece: pieceId,
             seed: 42,
@@ -1349,12 +2172,16 @@ export class StudioApp {
         });
         if (!res.ok) continue;
         const blob = await res.blob();
-        img.src = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        this.browserThumbUrls.set(pieceId, url);
+        img.src = url;
         img.dataset.loaded = "1";
       } catch {
-        /* optional */
+        if (controller.signal.aborted) return;
+        /* optional thumbnail */
       }
     }
+    if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }
 
   renderConfig(): void {
@@ -1426,27 +2253,136 @@ export class StudioApp {
         <button type="button" class="primary" id="cfg-animate-this">Animate This</button>
         <div id="variants"></div>
       ` : ""}
-      ${this.mode === "animate" ? `
-        <label>FPS / duration (s)</label>
+      ${this.mode === "animate" ? (() => {
+        const caps = animationCapabilitiesFor(this.pieceId);
+        const src = this.animationSpec.source;
+        const motions =
+          src === "camera"
+            ? ["pan", "zoom", "pan-zoom"]
+            : src === "construction"
+              ? ["construction", "emergence", "reveal"]
+              : src === "parameters"
+                ? ["emergence", "growth", "drift", "settle", "collapse"]
+                : caps.motions;
+        const panPresets: PanPreset[] = [
+          "left-right",
+          "right-left",
+          "top-bottom",
+          "bottom-top",
+          "diag-down-right",
+          "diag-up-left",
+          "custom",
+        ];
+        const methods = animationMethodsForPiece(this.pieceId);
+        const segElapsed = this.randomSequencer?.state.methodElapsedSec ?? 0;
+        const segRemain = Math.max(0, this.randomIntervalSec - segElapsed);
+        return `
+        <h2>Performance</h2>
         <div class="row">
-          <input id="cfg-fps" type="number" value="${this.anim.fps}" />
-          <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
+          <button type="button" id="cfg-prev-piece" title="Previous piece [">◀</button>
+          <span class="muted" style="flex:1;text-align:center">${this.pieceId.split("/").pop()}</span>
+          <button type="button" id="cfg-next-piece" title="Next piece ]">▶</button>
+          <button type="button" id="cfg-random-piece">Random</button>
         </div>
-        <label>Format</label>
-        <select id="cfg-anim-fmt">
-          <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>animated WebP</option>
-          <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
-          <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
-          <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+        <label for="cfg-anim-method">Animation method</label>
+        <select id="cfg-anim-method">${[
+          ...methods.map(
+            (m) =>
+              `<option value="${m.id}" ${this.animationMethodId === m.id ? "selected" : ""}>${m.label}</option>`,
+          ),
+          `<option value="${RANDOM_METHOD_ID}" ${this.animationMethodId === RANDOM_METHOD_ID ? "selected" : ""}>Random</option>`,
+        ].join("")}</select>
+        ${
+          this.animationMethodId === RANDOM_METHOD_ID
+            ? `
+        <label>Change every (sec)</label>
+        <input id="cfg-random-interval" type="number" min="1" max="300" step="1" value="${this.randomIntervalSec}" />
+        <label>Sequence seed</label>
+        <input id="cfg-seq-seed" type="number" value="${this.animationSequenceSeed}" />
+        <button type="button" id="cfg-random-next">Next Animation</button>
+        <p class="muted">Next change ~${segRemain.toFixed(1)}s · ${this.animationSpec.source}/${this.animationSpec.motion}</p>
+        `
+            : ""
+        }
+        <label>Visual switch</label>
+        <div class="row">
+          <select id="cfg-visual-switch">
+            <option value="off" ${this.visualSwitchMode === "off" ? "selected" : ""}>Off</option>
+            <option value="random" ${this.visualSwitchMode === "random" ? "selected" : ""}>Random</option>
+          </select>
+          <input id="cfg-visual-interval" type="number" min="5" max="600" step="1" value="${this.visualSwitchIntervalSec}" title="Visual switch interval (sec)" />
+        </div>
+        <label>Transition</label>
+        <select id="cfg-piece-transition">
+          <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
+          <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
         </select>
-        <label>Animation arc</label>
-        <select id="cfg-arc">${ANIM_ARCS.map((a) => `<option value="${a.id}" ${this.animArc === a.id ? "selected" : ""}>${a.label}</option>`).join("")}</select>
-        <p class="muted">start frame ${this.anim.startFrame} (Animate This continuity)</p>
+        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · performance clock</p>
         <div class="row">
-          <button type="button" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
-          <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
+          <button type="button" class="primary" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
         </div>
-      ` : ""}
+        <details class="advanced">
+          <summary>Export / Record</summary>
+          <label>Export duration (s)</label>
+          <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
+          <label>Source</label>
+          <select id="cfg-anim-source">${caps.sources
+            .map(
+              (s) =>
+                `<option value="${s}" ${src === s ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`,
+            )
+            .join("")}</select>
+          <label>Motion</label>
+          <select id="cfg-anim-motion">${motions
+            .map(
+              (m) =>
+                `<option value="${m}" ${this.animationSpec.motion === m ? "selected" : ""}>${m}</option>`,
+            )
+            .join("")}</select>
+          <label>End (export)</label>
+          <select id="cfg-anim-end">
+            ${(["continuous", "hold", "loop", "ping-pong", "restart", "stop"] as AnimationEndBehavior[])
+              .map(
+                (e) =>
+                  `<option value="${e}" ${this.animationSpec.endBehavior === e ? "selected" : ""}>${e}</option>`,
+              )
+              .join("")}
+          </select>
+          <label>Easing</label>
+          <select id="cfg-anim-easing">
+            ${(["linear", "ease-in-out", "ease-in", "ease-out"] as AnimationEasing[])
+              .map(
+                (e) =>
+                  `<option value="${e}" ${this.animationSpec.easing === e ? "selected" : ""}>${e}</option>`,
+              )
+              .join("")}
+          </select>
+          ${
+            src === "camera" || this.animationSpec.components.includes("camera")
+              ? `
+          <label>Pan preset</label>
+          <select id="cfg-pan-preset">${panPresets
+            .map(
+              (p) =>
+                `<option value="${p}" ${this.animationSpec.camera.panPreset === p ? "selected" : ""}>${p}</option>`,
+            )
+            .join("")}</select>
+          `
+              : ""
+          }
+          <label>Target FPS / format</label>
+          <div class="row">
+            <input id="cfg-fps" type="number" value="${this.anim.fps}" />
+            <select id="cfg-anim-fmt">
+              <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>WebP</option>
+              <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
+              <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
+              <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+            </select>
+          </div>
+          <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
+        </details>`;
+      })() : ""}
       ${this.mode === "react" ? `
         <h2>Audio</h2>
         <button type="button" class="primary" id="cfg-mic">${this.audioEnabled ? "Mic active" : "Enable microphone"}</button>
@@ -1457,8 +2393,45 @@ export class StudioApp {
         <div class="level"><span id="cfg-level"></span></div>
         <p class="muted">Browser owns getUserMedia — silence still evolves the system.</p>
       ` : ""}
+      <h2>Color</h2>
+      <label>Color mode</label>
+      <select id="cfg-color-mode">
+        <option value="solid" ${this.color.mode === "solid" ? "selected" : ""}>Solid</option>
+        <option value="ramp" ${this.color.mode === "ramp" ? "selected" : ""}>Ramp</option>
+        <option value="gradient" ${this.color.mode === "gradient" ? "selected" : ""}>Gradient</option>
+      </select>
+      <label>Primary</label>
+      <div class="row">
+        <input id="cfg-color-primary" type="color" value="${this.color.primary.value}" />
+        <span class="muted">${this.color.primary.value}</span>
+      </div>
+      <label>Background</label>
+      <div class="row">
+        <input id="cfg-color-bg" type="color" value="${this.color.background.value}" ${this.color.transparentBackground ? "disabled" : ""} />
+        <label><input id="cfg-color-transparent" type="checkbox" ${this.color.transparentBackground ? "checked" : ""} /> transparent</label>
+      </div>
+      <label>Ramp preset</label>
+      <select id="cfg-ramp-preset">
+        ${RAMP_PRESET_LIST.map((r) => `<option value="${r.id}" ${this.color.rampPreset === r.id ? "selected" : ""}>${r.label}</option>`).join("")}
+      </select>
+      <label>Solid presets</label>
+      <select id="cfg-solid-preset">
+        <option value="">(custom)</option>
+        ${SOLID_PRESETS.map((s) => `<option value="${s.id}">${s.label}</option>`).join("")}
+      </select>
+      <label>Mapping</label>
+      <select id="cfg-ramp-mapping">
+        ${rampMappingsForPiece(this.pieceId)
+          .map(
+            (m) =>
+              `<option value="${m}" ${this.color.rampMapping === m ? "selected" : ""}>${m}</option>`,
+          )
+          .join("")}
+      </select>
+      <div id="cfg-ramp-preview" style="height:12px;border-radius:4px;margin:0.35rem 0;background:linear-gradient(90deg,${this.color.ramp.stops.map((s) => `${s.color.value} ${s.t * 100}%`).join(",")})"></div>
       <h2>Parameters</h2>
       ${getPieceRuntime(this.pieceId).paramSchema
+        .filter((f) => f.key !== "hue")
         .map((f) => {
           const val = this.params[f.key] ?? f.default;
           if (f.type === "choice") {
@@ -1477,6 +2450,8 @@ export class StudioApp {
         .join("")}
       <details class="advanced">
         <summary>Advanced / meta / seeds</summary>
+        <label>Hue (advanced)</label>
+        <input id="cfg-hue-adv" type="range" min="0" max="1" step="0.01" value="${Number(this.params.hue ?? 0.08)}" />
         <label>Meta: organic ↔ geometric</label>
         <input id="cfg-meta-organic" type="range" min="0" max="1" step="0.01" value="${this.meta.organic}" />
         <label>Meta: still ↔ kinetic</label>
@@ -1486,6 +2461,8 @@ export class StudioApp {
           <label><input id="cfg-lock-density" type="checkbox" ${this.locked.has("density") ? "checked" : ""} /> density</label>
           <label><input id="cfg-lock-chaos" type="checkbox" ${this.locked.has("chaos") ? "checked" : ""} /> chaos</label>
           <label><input id="cfg-lock-hue" type="checkbox" ${this.locked.has("hue") ? "checked" : ""} /> hue</label>
+          <label><input id="cfg-lock-color" type="checkbox" ${this.locked.has("color") ? "checked" : ""} /> color</label>
+          <label><input id="cfg-lock-ramp" type="checkbox" ${this.locked.has("ramp") ? "checked" : ""} /> ramp</label>
           <label><input id="cfg-lock-seed" type="checkbox" ${this.locked.has("seed") ? "checked" : ""} /> seed</label>
         </div>
         <div class="row">
@@ -1568,12 +2545,92 @@ export class StudioApp {
       this.togglePlay();
       this.renderConfig();
     });
+    el.querySelector("#cfg-prev-piece")?.addEventListener("click", () => void this.cyclePiece(-1));
+    el.querySelector("#cfg-next-piece")?.addEventListener("click", () => void this.cyclePiece(1));
+    el.querySelector("#cfg-random-piece")?.addEventListener("click", () => void this.cycleRandomPiece());
+    el.querySelector("#cfg-visual-switch")?.addEventListener("change", (e) => {
+      this.visualSwitchMode = (e.target as HTMLSelectElement).value as "off" | "random";
+      if (this.visualSwitchMode === "random") this.initVisualSequencer();
+      else this.visualSequencer = null;
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-visual-interval")?.addEventListener("change", (e) => {
+      this.visualSwitchIntervalSec = Math.min(
+        600,
+        Math.max(5, Number((e.target as HTMLInputElement).value) || 30),
+      );
+      if (this.visualSequencer) this.visualSequencer.intervalSec = this.visualSwitchIntervalSec;
+    });
+    el.querySelector("#cfg-piece-transition")?.addEventListener("change", (e) => {
+      this.pieceTransition = (e.target as HTMLSelectElement).value as PerformanceTransition;
+    });
     el.querySelector("#cfg-anim-export")?.addEventListener("click", () => void this.exportAnim());
     el.querySelector("#cfg-anim-fmt")?.addEventListener("change", (e) => {
       this.animFormat = (e.target as HTMLSelectElement).value as typeof this.animFormat;
     });
-    el.querySelector("#cfg-arc")?.addEventListener("change", (e) => {
-      this.animArc = (e.target as HTMLSelectElement).value;
+    el.querySelector("#cfg-anim-method")?.addEventListener("change", (e) => {
+      this.applyAnimationMethodId((e.target as HTMLSelectElement).value);
+    });
+    el.querySelector("#cfg-random-interval")?.addEventListener("change", (e) => {
+      this.randomIntervalSec = Math.min(
+        300,
+        Math.max(1, Number((e.target as HTMLInputElement).value) || 10),
+      );
+      if (this.randomSequencer) this.randomSequencer.state.methodIntervalSec = this.randomIntervalSec;
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-seq-seed")?.addEventListener("change", (e) => {
+      this.animationSequenceSeed = Number((e.target as HTMLInputElement).value) || 137;
+      if (this.animationMethodId === RANDOM_METHOD_ID) this.initRandomSequencer();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-random-next")?.addEventListener("click", () => this.advanceRandomMethod());
+    el.querySelector("#cfg-anim-source")?.addEventListener("change", (e) => {
+      this.animationSpec.source = (e.target as HTMLSelectElement).value as AnimationSource;
+      const caps = animationCapabilitiesFor(this.pieceId);
+      if (!caps.motions.includes(this.animationSpec.motion)) {
+        this.animationSpec.motion =
+          this.animationSpec.source === "camera" ? "pan" : caps.defaultMotion;
+      }
+      if (this.animationSpec.source === "camera") {
+        this.animationSpec.camera.motion = "pan";
+        const views = panPresetViews(this.animationSpec.camera.panPreset);
+        this.animationSpec.camera.start = views.start;
+        this.animationSpec.camera.end = views.end;
+      }
+      this.syncAnimationSpecToSession();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-anim-motion")?.addEventListener("change", (e) => {
+      this.animationSpec.motion = (e.target as HTMLSelectElement).value;
+      if (this.animationSpec.source === "camera") {
+        this.animationSpec.camera.motion =
+          this.animationSpec.motion === "pan-zoom"
+            ? "pan-zoom"
+            : this.animationSpec.motion === "zoom"
+              ? "zoom"
+              : "pan";
+        if (this.animationSpec.motion === "zoom") {
+          this.animationSpec.camera.zoomMode = "in";
+        }
+      }
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-anim-end")?.addEventListener("change", (e) => {
+      this.animationSpec.endBehavior = (e.target as HTMLSelectElement)
+        .value as AnimationEndBehavior;
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-anim-easing")?.addEventListener("change", (e) => {
+      this.animationSpec.easing = (e.target as HTMLSelectElement).value as AnimationEasing;
+      this.syncAnimationSpecToSession();
+    });
+    el.querySelector("#cfg-pan-preset")?.addEventListener("change", (e) => {
+      this.animationSpec.camera.panPreset = (e.target as HTMLSelectElement).value as PanPreset;
+      const views = panPresetViews(this.animationSpec.camera.panPreset);
+      this.animationSpec.camera.start = views.start;
+      this.animationSpec.camera.end = views.end;
+      this.syncAnimationSpecToSession();
     });
     el.querySelector("#cfg-mic")?.addEventListener("click", () => void this.enableMic());
     el.querySelector("#cfg-save")?.addEventListener("click", () => void this.saveSeedState());
@@ -1599,6 +2656,8 @@ export class StudioApp {
     });
     el.querySelector("#cfg-dur")?.addEventListener("change", (e) => {
       this.anim.durationSec = Number((e.target as HTMLInputElement).value) || 4;
+      this.animationSpec.durationSec = this.anim.durationSec;
+      this.syncAnimationSpecToSession();
     });
     el.querySelectorAll<HTMLElement>("[data-param]").forEach((node) => {
       const key = node.getAttribute("data-param")!;
@@ -1653,6 +2712,52 @@ export class StudioApp {
       this.session?.runtime.getPiece("L0")?.setParameter("zoom", Number(this.params.zoom ?? 1));
       if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
     });
+    el.querySelector("#cfg-color-mode")?.addEventListener("change", (e) => {
+      this.color.mode = (e.target as HTMLSelectElement).value as ColorConfig["mode"];
+      this.persist();
+      this.applyLiveColor(true);
+    });
+    el.querySelector("#cfg-color-primary")?.addEventListener("input", (e) => {
+      if (this.locked.has("color")) return;
+      this.color.primary.value = (e.target as HTMLInputElement).value;
+      this.color.mode = "solid";
+      this.applyLiveColor();
+    });
+    el.querySelector("#cfg-color-bg")?.addEventListener("input", (e) => {
+      if (this.locked.has("color")) return;
+      this.color.background.value = (e.target as HTMLInputElement).value;
+      this.applyLiveColor(true);
+    });
+    el.querySelector("#cfg-color-transparent")?.addEventListener("change", (e) => {
+      this.color.transparentBackground = (e.target as HTMLInputElement).checked;
+      this.applyLiveColor(true);
+    });
+    el.querySelector("#cfg-ramp-preset")?.addEventListener("change", (e) => {
+      if (this.locked.has("ramp")) return;
+      this.applyColorPreset((e.target as HTMLSelectElement).value);
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-solid-preset")?.addEventListener("change", (e) => {
+      if (this.locked.has("color")) return;
+      const id = (e.target as HTMLSelectElement).value;
+      const preset = SOLID_PRESETS.find((s) => s.id === id);
+      if (!preset) return;
+      this.color.mode = "solid";
+      this.color.primary = { ...preset.color };
+      this.applyLiveColor();
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-ramp-mapping")?.addEventListener("change", (e) => {
+      this.color.rampMapping = (e.target as HTMLSelectElement).value as ColorConfig["rampMapping"];
+      this.applyLiveColor(true);
+    });
+    el.querySelector("#cfg-hue-adv")?.addEventListener("input", (e) => {
+      if (this.locked.has("hue")) return;
+      const v = Number((e.target as HTMLInputElement).value);
+      this.params.hue = v;
+      this.session?.runtime.getPiece("L0")?.setParameter("hue", v);
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") this.scheduleGeneratePreview();
+    });
     const bindLock = (id: string, key: string) => {
       el.querySelector(id)?.addEventListener("change", (e) => {
         if ((e.target as HTMLInputElement).checked) this.locked.add(key);
@@ -1662,6 +2767,8 @@ export class StudioApp {
     bindLock("#cfg-lock-density", "density");
     bindLock("#cfg-lock-chaos", "chaos");
     bindLock("#cfg-lock-hue", "hue");
+    bindLock("#cfg-lock-color", "color");
+    bindLock("#cfg-lock-ramp", "ramp");
     bindLock("#cfg-lock-seed", "seed");
     bindLock("#cfg-lock-palette", "palette");
     bindLock("#cfg-lock-style", "style");
@@ -1720,25 +2827,140 @@ export class StudioApp {
     this.frameTimes.push(now);
     while (this.frameTimes.length && now - this.frameTimes[0]! > 1000) this.frameTimes.shift();
     this.fps = this.frameTimes.length;
+    if (
+      this.mode === "animate" &&
+      studioSurface(this.pieceId, this.mode) === "api-preview" &&
+      this.session &&
+      this.playing
+    ) {
+      const nowPerf = performance.now();
+      if (this.lastAnimTickMs <= 0) this.lastAnimTickMs = nowPerf;
+      const dt = (nowPerf - this.lastAnimTickMs) / 1000;
+      this.lastAnimTickMs = nowPerf;
+      this.session.animationRuntime.tick(dt, true);
+      if (this.apiPreviewUsesCamera()) {
+        this.paintApiPreviewCamera(this.session.animationRuntime.evaluate().camera);
+      }
+    }
+
+    if (
+      this.mode === "animate" &&
+      this.animationMethodId === RANDOM_METHOD_ID &&
+      this.playing &&
+      this.randomSequencer &&
+      this.session
+    ) {
+      const nowPerf = performance.now();
+      const dt = this.lastRandomTickMs > 0 ? (nowPerf - this.lastRandomTickMs) / 1000 : 0;
+      const next = this.randomSequencer.tick(dt);
+      if (next) {
+        this.activeAnimationMethodId = next;
+        this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, next, this.mode);
+        this.syncAnimationSpecToSession(false);
+        this.renderConfig();
+      }
+      this.lastRandomTickMs = nowPerf;
+    }
+
+    if (
+      this.mode === "animate" &&
+      this.visualSwitchMode === "random" &&
+      this.playing &&
+      this.visualSequencer
+    ) {
+      const dt = this.lastVisualSwitchMs > 0 ? (now - this.lastVisualSwitchMs) / 1000 : 0;
+      const nextPiece = this.visualSequencer.tick(dt, this.pieceId);
+      if (nextPiece && nextPiece !== this.pieceId) void this.setPiece(nextPiece);
+      this.lastVisualSwitchMs = now;
+    }
+
+    if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
+      const diag = this.session.getDiagnostics();
+      const warmupMs = Date.now() - this.pieceLoadedAt;
+      if (diag.pixelDigest && diag.pixelDigest !== this.lastVisualDigest) {
+        this.lastVisualDigest = diag.pixelDigest;
+        this.lastVisualChangeMs = now;
+        this.stallError = "";
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner?.textContent?.startsWith("Animation stalled")) {
+          stallBanner.classList.remove("visible");
+        }
+      }
+      if (warmupMs > 2500 && diag.rafStalled && !document.hidden) {
+        this.stallError = [
+          "RAF STALLED",
+          `piece: ${this.pieceId}`,
+          `rafCount: ${diag.rafCount}`,
+          `rafHz: ${diag.rafHz.toFixed(1)}`,
+        ].join("\n");
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner) {
+          stallBanner.textContent = this.stallError;
+          stallBanner.classList.add("visible");
+        }
+      } else if (
+        warmupMs > 2500 &&
+        diag.renderCount > 0 &&
+        now - this.lastVisualChangeMs > 2000 &&
+        !this.session.runtime.isSimulationPaused()
+      ) {
+        const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+        this.stallError = [
+          "Animation stalled",
+          `piece: ${this.pieceId}`,
+          `backend: ${kind}`,
+          `update count: ${diag.updateCount}`,
+          `render count: ${diag.renderCount}`,
+          `present count: ${diag.presentCount}`,
+        ].join("\n");
+        const stallBanner = document.getElementById("unsupported-banner");
+        if (stallBanner) {
+          stallBanner.textContent = this.stallError;
+          stallBanner.classList.add("visible");
+        }
+      }
+      this.frame = diag.logicalFrame;
+    }
     if (this.hudVisible && now - this.lastHud > 200) {
       this.lastHud = now;
       const hud = document.getElementById("hud");
       const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+      const diag = this.session?.getDiagnostics();
       if (hud) {
         hud.textContent = [
           `FPS ${this.fps}`,
+          `visualFps ${diag?.visualFps?.toFixed(1) ?? "—"}`,
           `mode ${this.mode}`,
           `piece ${this.pieceId}`,
-          `renderer ${kind}`,
+          `backend ${kind}`,
+          `animBackend ${this.animBackend || kind}`,
           `seed ${this.seed}`,
-          `frame ${this.frame}`,
+          `logicalFrame ${diag?.logicalFrame ?? this.frame}`,
+          `raf ${diag?.rafCount ?? 0} @ ${diag?.rafHz?.toFixed(1) ?? "—"}Hz`,
+          `tick ${diag?.tickCount ?? 0}`,
+          `updateCount ${diag?.updateCount ?? 0}`,
+          `renderCount ${diag?.renderCount ?? 0}`,
+          `presentCount ${diag?.presentCount ?? 0}`,
+          `pixelDigest ${diag?.pixelDigest ?? "—"}`,
+          `changedPx ${diag?.presentedFrame?.changedPixelFraction?.toFixed(4) ?? "—"}`,
+          `lastDraw ${diag?.lastSuccessfulDrawMs ? new Date(diag.lastSuccessfulDrawMs).toISOString().slice(11, 23) : "—"}`,
+          `displayedFrame ${this.displayedFrame || this.frame}`,
+          `updateFps ${this.animUpdateFps.toFixed(1)}`,
+          `latencyMs ${this.lastRenderMs.toFixed(0)}`,
+          `playing ${this.playing ? "yes" : "pause"}`,
+          `simPaused ${diag?.simulationPaused ? "yes" : "no"}`,
+          `transport ${diag?.transportPlaying ? "run" : "stop"}`,
+          `webgl ${diag?.webglError ?? this.webglStatus}`,
           `recipe ${this.recipeDigest || "—"}`,
           `state ${this.renderDigest || "—"}`,
-          `renderMs ${this.lastRenderMs.toFixed(0)}`,
           `surface ${studioSurface(this.pieceId, this.mode)}`,
-          `res ${this.canvas.width}x${this.canvas.height}`,
+          `canvas ${diag?.canvasWidth ?? this.canvas.width}x${diag?.canvasHeight ?? this.canvas.height}`,
+          `css ${diag?.visibleCssWidth?.toFixed(0) ?? "?"}x${diag?.visibleCssHeight?.toFixed(0) ?? "?"}`,
           `audio ${this.audioEnabled ? "on" : "off"}`,
           `controls ${this.controlsVisible ? "shown" : "hidden"}`,
+          `build ${buildInfoLine()}`,
+          `BUILD_SHA ${BUILD_SHA}`,
+          `BUILD_TIME ${BUILD_TIME}`,
         ].join("\n");
       }
     }

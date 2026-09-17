@@ -34,6 +34,14 @@ import type {
 } from "./types";
 import { parseResolution } from "./types";
 import type { FrameState } from "./piece";
+import {
+  analyzeRgbaGrid,
+  downsampleRgba,
+  type PixelFrame,
+} from "./pixelMetrics";
+import { AnimationRuntime } from "./animationRuntime";
+import type { AnimationSpec } from "../studio/animation/spec";
+import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
 
 export type HudStats = {
   fps: number;
@@ -42,6 +50,29 @@ export type HudStats = {
   audioMs: number;
   layers: number;
   quality: QualityProfile;
+};
+
+export type LiveDiagnostics = {
+  rafCount: number;
+  rafHz: number;
+  rafLastTimestamp: number;
+  tickCount: number;
+  updateCount: number;
+  renderCount: number;
+  presentCount: number;
+  logicalFrame: number;
+  canvasWidth: number;
+  canvasHeight: number;
+  visibleCssWidth: number;
+  visibleCssHeight: number;
+  lastSuccessfulDrawMs: number;
+  pixelDigest: string;
+  presentedFrame: PixelFrame | null;
+  webglError: string | null;
+  simulationPaused: boolean;
+  transportPlaying: boolean;
+  visualFps: number;
+  rafStalled: boolean;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -87,6 +118,27 @@ export class LiveSession {
   private fpsAccum = 0;
   private fpsFrames = 0;
   private fpsLast = 0;
+  private renderCount = 0;
+  private presentCount = 0;
+  private tickCount = 0;
+  private rafCount = 0;
+  private rafLastTimestamp = 0;
+  private rafProgressMs = 0;
+  private rafHz = 0;
+  private rafHzFrames = 0;
+  private rafHzLast = 0;
+  private lastSuccessfulDrawMs = 0;
+  private pixelDigest = "";
+  private lastPresentedGrid: Uint8Array | null = null;
+  private lastPresentedStats: PixelFrame | null = null;
+  private baselinePresentedGrid: Uint8Array | null = null;
+  private baselinePresentedStats: PixelFrame | null = null;
+  private webglError: string | null = null;
+  private lastDigestSampleMs = 0;
+  private frozenPresentT = 0;
+  /** Wall-clock delta source for animation envelope (preview/export seek uses explicit time). */
+  private lastAnimWallMs = 0;
+  readonly animationRuntime = new AnimationRuntime(defaultAnimationSpec());
   private baseParams = new Map<string, Record<string, number>>();
   private basePost: PostDef = {};
   private layerOpacity = new Map<string, number>();
@@ -162,19 +214,20 @@ export class LiveSession {
     this.canvas.width = w;
     this.canvas.height = h;
 
+    let loaded = 0;
     for (const layer of scene.layers) {
       let piece;
       try {
         piece = await createLivePiece(gl, layer.piece, liveMode);
       } catch (err) {
         if (err instanceof UnsupportedLivePieceError) {
-          console.warn(err.message);
-          continue;
+          throw new Error(`${layer.piece}: ${err.message}`);
         }
         throw err;
       }
+      loaded += 1;
       const seed = layer.seed ?? this.runtime.getSeed();
-      piece.initialize({ piece: layer.piece }, seed);
+      await piece.initialize({ piece: layer.piece }, seed);
       piece.resize(w, h);
       if (layer.parameters) {
         for (const [k, v] of Object.entries(layer.parameters)) {
@@ -190,6 +243,59 @@ export class LiveSession {
     this.postFrame = { ...this.basePost };
     this.modulation.setMappings(this.sceneMappings(scene));
     this.compositor.resetFeedback();
+    if (loaded === 0) {
+      throw new Error("No live runtimes loaded for scene");
+    }
+  }
+
+  /** Paint one or more logical frames immediately (Studio first-frame guarantee). */
+  paintFrames(count = 2, wallNowMs = performance.now()): void {
+    for (let i = 0; i < count; i++) {
+      this.frame(wallNowMs + i * (1000 / 60));
+    }
+  }
+
+  setAnimationSpec(spec: AnimationSpec): void {
+    this.animationRuntime.setSpec(spec);
+    this.animationRuntime.performanceMode =
+      spec.endBehavior === "continuous" && spec.durationSec <= 0;
+    this.animationRuntime.reset();
+    this.lastAnimWallMs = 0;
+  }
+
+  getAnimationSpec(): AnimationSpec {
+    return this.animationRuntime.spec;
+  }
+
+  getDiagnostics(): LiveDiagnostics {
+    const rect = this.canvas.getBoundingClientRect();
+    const snap = this.runtime.transport.getSnapshot();
+    const now = performance.now();
+    return {
+      rafCount: this.rafCount,
+      rafHz: this.rafHz,
+      rafLastTimestamp: this.rafLastTimestamp,
+      tickCount: this.tickCount,
+      updateCount: this.runtime.getUpdateCount(),
+      renderCount: this.renderCount,
+      presentCount: this.presentCount,
+      logicalFrame: this.runtime.getFrame(),
+      canvasWidth: this.canvas.width,
+      canvasHeight: this.canvas.height,
+      visibleCssWidth: rect.width,
+      visibleCssHeight: rect.height,
+      lastSuccessfulDrawMs: this.lastSuccessfulDrawMs,
+      pixelDigest: this.pixelDigest,
+      presentedFrame: this.lastPresentedStats,
+      webglError: this.webglError,
+      simulationPaused: this.runtime.isSimulationPaused(),
+      transportPlaying: snap.playing,
+      visualFps: this.hud.fps,
+      rafStalled:
+        this.running &&
+        this.rafCount > 20 &&
+        now - this.rafProgressMs > 1500,
+    };
   }
 
   private sceneMappings(scene: SceneDef): ModMapping[] {
@@ -395,15 +501,27 @@ export class LiveSession {
     this.features = f;
   }
 
-  startLoop(): void {
-    if (this.running) return;
+  /** Start or recover the RAF driver (re-schedule if heartbeat stalled). */
+  startLoop(force = false): void {
+    const now = performance.now();
+    const stalled = this.running && now - this.rafLastTimestamp > 500;
+    if (this.running && !force && !stalled) return;
+    if (this.running) {
+      cancelAnimationFrame(this.raf);
+    }
     this.running = true;
     this.fpsLast = performance.now();
-    const loop = (now: number) => {
+    this.rafHzLast = this.fpsLast;
+    const loop = (t: number) => {
+      if (!this.running) return;
       this.raf = requestAnimationFrame(loop);
-      this.frame(now);
+      this.frame(t);
     };
     this.raf = requestAnimationFrame(loop);
+  }
+
+  ensureLoopRunning(): void {
+    this.startLoop(this.running && performance.now() - this.rafLastTimestamp > 500);
   }
 
   stopLoop(): void {
@@ -411,8 +529,65 @@ export class LiveSession {
     cancelAnimationFrame(this.raf);
   }
 
+  /** Pin last presented grid as baseline for cross-cycle comparison. */
+  pinPresentedBaseline(): void {
+    if (!this.lastPresentedGrid || !this.lastPresentedStats) return;
+    this.baselinePresentedGrid = this.lastPresentedGrid.slice();
+    this.baselinePresentedStats = this.lastPresentedStats;
+  }
+
+  /** Fraction of pixels changed vs stored baseline grid. */
+  comparePresentedToBaseline(gridW = 64, gridH = 36): number | null {
+    if (!this.baselinePresentedGrid) return null;
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const stats = analyzeRgbaGrid(grid, gridW, gridH, {
+      pixels: this.baselinePresentedGrid,
+      stats: this.baselinePresentedStats!,
+    });
+    return stats.changedPixelFraction;
+  }
+
+  /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */
+  readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const prior =
+      trackForComparison && this.lastPresentedGrid
+        ? { pixels: this.lastPresentedGrid, stats: this.lastPresentedStats! }
+        : undefined;
+    const stats = analyzeRgbaGrid(grid, gridW, gridH, prior);
+    if (trackForComparison) {
+      this.lastPresentedGrid = grid;
+      this.lastPresentedStats = stats;
+    }
+    this.pixelDigest = stats.digest;
+    return stats;
+  }
+
   /** Single deterministic tick (tests / smoke). */
   frame(wallNowMs: number): FrameState {
+    this.rafCount += 1;
+    this.rafLastTimestamp = performance.now();
+    this.rafProgressMs = this.rafLastTimestamp;
+    this.rafHzFrames += 1;
+    if (this.rafLastTimestamp - this.rafHzLast >= 500) {
+      this.rafHz =
+        (this.rafHzFrames * 1000) / Math.max(1, this.rafLastTimestamp - this.rafHzLast);
+      this.rafHzFrames = 0;
+      this.rafHzLast = this.rafLastTimestamp;
+    }
+    this.tickCount += 1;
     const t0 = performance.now();
     // Audio
     const a0 = performance.now();
@@ -438,8 +613,19 @@ export class LiveSession {
     }
     this.lastOnset = this.features.onset;
 
-    const frame = this.runtime.tick(wallNowMs);
     const snap = this.runtime.transport.getSnapshot();
+    const simPaused = this.runtime.isSimulationPaused();
+    const animWallDt =
+      this.lastAnimWallMs > 0
+        ? Math.min(0.25, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
+        : 0;
+    this.lastAnimWallMs = wallNowMs;
+    this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    const animSt = this.animationRuntime.evaluate();
+    this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
+    this.runtime.setFreezePieceUpdates(animSt.useSourceSnapshot);
+
+    const frame = this.runtime.tick(wallNowMs);
 
     // On beat edges trigger subtle envelope
     if (frame.beatPhase < 0.05 && snap.playing) {
@@ -495,6 +681,21 @@ export class LiveSession {
     const g0 = performance.now();
     this.renderFrame(frame);
     this.hud.glMs = performance.now() - g0;
+    this.renderCount += 1;
+    this.lastSuccessfulDrawMs = performance.now();
+    if (wallNowMs - this.lastDigestSampleMs > 250) {
+      this.lastDigestSampleMs = wallNowMs;
+      try {
+        // Digest-only — do not advance the comparison chain used by tests/diagnostics.
+        this.readPresentedPixels(64, 36, false);
+      } catch {
+        /* readPixels may fail during resize; keep last digest */
+      }
+    }
+    const err = this.compositor.gl.getError();
+    if (err !== this.compositor.gl.NO_ERROR) {
+      this.webglError = `GL ${err}`;
+    }
     this.hud.frameMs = performance.now() - t0;
     this.hud.layers = scene?.layers.length ?? 0;
 
@@ -517,12 +718,19 @@ export class LiveSession {
     if (ev.type === "param") this.midiCcSources.set(ev.path, ev.value);
   }
 
+  /** Blend mod matrix output with stored base — silence must not zero simulation params. */
+  private modulatedValue(base: number, modValue: number): number {
+    if (modValue <= 1e-6) return base;
+    return base * (1 + modValue);
+  }
+
   private applyMods(mods: Record<string, number>): void {
     const post: PostDef = { ...this.basePost };
     for (const [dest, value] of Object.entries(mods)) {
       if (dest.startsWith("post.")) {
         const key = dest.slice(5) as keyof PostDef;
-        (post as Record<string, number>)[key] = value;
+        const baseVal = (this.basePost as Record<string, number>)[key] ?? 0;
+        (post as Record<string, number>)[key] = this.modulatedValue(baseVal, value);
         continue;
       }
       if (dest.startsWith("layer.")) {
@@ -536,7 +744,14 @@ export class LiveSession {
           continue;
         }
         const piece = this.runtime.getPiece(layerId);
-        if (piece) piece.setParameter(param, value);
+        if (!piece) continue;
+        const baseMap = this.baseParams.get(layerId);
+        const baseVal = baseMap?.[param];
+        if (typeof baseVal === "number") {
+          piece.setParameter(param, this.modulatedValue(baseVal, value));
+        } else {
+          piece.setParameter(param, value);
+        }
       }
     }
     this.postFrame = post;
@@ -550,26 +765,32 @@ export class LiveSession {
       ? this.postFrame
       : this.basePost;
     const tr = this.runtime.getTransition();
+    const animSt = this.animationRuntime.evaluate();
+    const spec = this.animationRuntime.spec;
+    const cameraActive = hasComponent(spec, "camera");
+    const camera = cameraActive ? animSt.camera : null;
 
-    this.compositor.beginFrame();
-    for (const layer of scene.layers) {
-      const piece = this.runtime.getPiece(layer.id);
-      if (!piece) continue;
-      const target = this.compositor.getLayerTarget();
-      piece.render({
-        framebuffer: target.framebuffer,
-        width: target.width,
-        height: target.height,
-        transparent: this.compositor.transparent,
-      });
-      let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
-      if (tr.active && tr.type === "crossfade") {
-        opacity *= tr.progress;
+    if (!animSt.useSourceSnapshot) {
+      this.compositor.beginFrame();
+      for (const layer of scene.layers) {
+        const piece = this.runtime.getPiece(layer.id);
+        if (!piece) continue;
+        const target = this.compositor.getLayerTarget();
+        piece.render({
+          framebuffer: target.framebuffer,
+          width: target.width,
+          height: target.height,
+          transparent: this.compositor.transparent,
+        });
+        let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
+        if (tr.active && tr.type === "crossfade") {
+          opacity *= tr.progress;
+        }
+        this.compositor.compositeLayer(
+          this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
+          opacity,
+        );
       }
-      this.compositor.compositeLayer(
-        this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
-        opacity,
-      );
     }
     // Transition overlays via post exposure for fade-through-black
     const postOut = { ...post };
@@ -583,12 +804,33 @@ export class LiveSession {
         postOut.chromatic = (postOut.chromatic ?? 0) + tr.progress * 0.5;
       }
     }
+    const paused = this.runtime.isSimulationPaused();
+    const envelopeComplete =
+      (spec.endBehavior === "hold" || spec.endBehavior === "stop") &&
+      animSt.phase >= 0.999 &&
+      !hasComponent(spec, "generative");
+    const freezePost = paused || envelopeComplete;
+    if (!freezePost) this.frozenPresentT = frame.t;
+    const presentT = freezePost ? this.frozenPresentT : frame.t;
+    const postPresent = freezePost
+      ? { ...postOut, grain: 0, feedback: 0, chromatic: 0 }
+      : postOut;
     this.compositor.endFrame(
-      postOut,
+      postPresent,
       this.runtime.isBlackout(),
-      frame.t,
+      presentT,
       true,
+      camera,
+      animSt.useSourceSnapshot,
     );
+    if (animSt.freezeGenerative && !animSt.useSourceSnapshot) {
+      this.compositor.capturePresentationSnapshot();
+      this.animationRuntime.markSnapshotReady(this.pixelDigest);
+    }
+    if (animSt.sourceDigest) {
+      this.animationRuntime.noteSourceDigest(animSt.sourceDigest);
+    }
+    this.presentCount += 1;
   }
 
   getFeatures(): AudioFeatures {

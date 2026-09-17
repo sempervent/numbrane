@@ -42,8 +42,8 @@ def render(config: NebulaConfig, ctx: RenderContext) -> RenderResult:
 
     # Create coordinate grids
     y, x = np.ogrid[: ctx.height, : ctx.width]
-    x_norm = x / ctx.width
-    y_norm = y / ctx.height
+    x_norm = np.broadcast_to(x / ctx.width, (ctx.height, ctx.width))
+    y_norm = np.broadcast_to(y / ctx.height, (ctx.height, ctx.width))
 
     # Base noise field
     noise_field = NoiseField(

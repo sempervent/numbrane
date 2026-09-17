@@ -18,7 +18,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field, field_validator
 
@@ -174,7 +174,7 @@ def api_render(body: RenderBody) -> Response:
         merged = dict(body.recipe["parameters"])
         merged.update(params)
         params = merged
-    params = _apply_preview_budgets(body.piece, params, body.quality)
+    params = _inject_color_params(_apply_preview_budgets(body.piece, params, body.quality))
 
     recipe_digest = _digest(
         {
@@ -317,10 +317,12 @@ def api_export_anim(body: ExportAnimBody) -> Response:
     frames_dir = job / "frames"
     frames_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    params = _apply_preview_budgets(
-        body.piece,
-        dict(body.parameters or {}),
-        "preview" if body.width <= 960 else "final",
+    params = _inject_color_params(
+        _apply_preview_budgets(
+            body.piece,
+            dict(body.parameters or {}),
+            "preview" if body.width <= 960 else "final",
+        )
     )
     if params:
         env["NUMBRANE_RENDER_PARAMS"] = json.dumps(params)
@@ -469,6 +471,200 @@ def api_export_anim(body: ExportAnimBody) -> Response:
         )
     finally:
         shutil.rmtree(frames_dir, ignore_errors=True)
+
+
+_ANIM_JOBS: dict[str, Path] = {}
+
+
+def _ffmpeg_encode_pattern(
+    pattern: str,
+    encoded: Path,
+    fmt: str,
+    fps: int,
+    quality: float,
+    loop: bool,
+) -> tuple[str, list[str]]:
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise HTTPException(500, "ffmpeg not installed in render image")
+    if fmt == "webm":
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            pattern,
+            "-c:v",
+            "libvpx-vp9",
+            "-b:v",
+            "0",
+            "-crf",
+            str(int(35 - quality * 20)),
+            "-pix_fmt",
+            "yuv420p",
+            str(encoded),
+        ]
+        media = "video/webm"
+    elif fmt == "webp":
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            pattern,
+            "-c:v",
+            "libwebp",
+            "-lossless",
+            "0",
+            "-quality",
+            str(int(quality * 100)),
+            "-loop",
+            "0" if loop else "1",
+            "-an",
+            str(encoded),
+        ]
+        media = "image/webp"
+    elif fmt == "apng":
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            pattern,
+            "-plays",
+            "0" if loop else "1",
+            "-f",
+            "apng",
+            str(encoded),
+        ]
+        media = "image/apng"
+    else:
+        cmd = [
+            ffmpeg,
+            "-y",
+            "-framerate",
+            str(fps),
+            "-i",
+            pattern,
+            "-gifflags",
+            "+transdiff",
+            "-loop",
+            "0" if loop else "-1",
+            str(encoded),
+        ]
+        media = "image/gif"
+    return media, cmd
+
+
+class EncodeJobBody(BaseModel):
+    fps: int = Field(default=30, ge=1, le=60)
+    format: Literal["webp", "apng", "webm", "gif"] = "webp"
+    quality: float = Field(default=0.8, ge=0.1, le=1.0)
+    loop: bool = True
+    piece: str = "unknown"
+    seed: int = 42
+    frame_count: int = Field(default=1, ge=1, le=600)
+
+    @field_validator("piece")
+    @classmethod
+    def piece_ok(cls, v: str) -> str:
+        return _validate_piece(v) if v != "unknown" else v
+
+
+@app.post("/api/animation-jobs")
+def create_animation_job() -> JSONResponse:
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = _ensure_artifacts() / "anim-jobs" / job_id
+    frames_dir = job_dir / "frames"
+    frames_dir.mkdir(parents=True, exist_ok=True)
+    _ANIM_JOBS[job_id] = job_dir
+    return JSONResponse({"job_id": job_id})
+
+
+@app.put("/api/animation-jobs/{job_id}/frames/{frame_index}")
+async def upload_animation_frame(job_id: str, frame_index: int, request: Request) -> JSONResponse:
+    if job_id not in _ANIM_JOBS:
+        raise HTTPException(404, "unknown job")
+    if frame_index < 0 or frame_index >= 600:
+        raise HTTPException(400, "frame index out of range")
+    job_dir = _ANIM_JOBS[job_id]
+    frames_dir = job_dir / "frames"
+    out = frames_dir / f"frame_{frame_index:05d}.png"
+    data = await request.body()
+    if len(data) < 32 or len(data) > 20_000_000:
+        raise HTTPException(400, "invalid png payload size")
+    out.write_bytes(data)
+    return JSONResponse({"ok": True, "frame": frame_index})
+
+
+@app.post("/api/animation-jobs/{job_id}/encode")
+def encode_animation_job(job_id: str, body: EncodeJobBody) -> Response:
+    if job_id not in _ANIM_JOBS:
+        raise HTTPException(404, "unknown job")
+    job_dir = _ANIM_JOBS[job_id]
+    frames_dir = job_dir / "frames"
+    present = sorted(frames_dir.glob("frame_*.png"))
+    if len(present) < body.frame_count:
+        raise HTTPException(400, f"missing frames: have {len(present)}, need {body.frame_count}")
+    ext = body.format
+    encoded = job_dir / f"out.{ext}"
+    pattern = str(frames_dir / "frame_%05d.png")
+    media, cmd = _ffmpeg_encode_pattern(pattern, encoded, ext, body.fps, body.quality, body.loop)
+    enc = subprocess.run(cmd, capture_output=True, text=True, timeout=180, check=False)
+    if enc.returncode != 0 or not encoded.exists():
+        raise HTTPException(500, enc.stderr or "ffmpeg encode failed")
+    published = (
+        _ensure_artifacts()
+        / "anim-export"
+        / f"{body.piece.replace('/', '_')}-s{body.seed}.{ext}"
+    )
+    published.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(encoded, published)
+    data = encoded.read_bytes()
+    return Response(
+        content=data,
+        media_type=media,
+        headers={
+            "X-Numbrane-Artifact": str(published.relative_to(_ensure_artifacts())),
+            "X-Numbrane-Frames": str(body.frame_count),
+        },
+    )
+
+
+@app.delete("/api/animation-jobs/{job_id}")
+def delete_animation_job(job_id: str) -> JSONResponse:
+    job_dir = _ANIM_JOBS.pop(job_id, None)
+    if job_dir and job_dir.exists():
+        shutil.rmtree(job_dir, ignore_errors=True)
+    return JSONResponse({"ok": True})
+
+
+def _inject_color_params(params: dict[str, Any]) -> dict[str, Any]:
+    """Bridge Studio color_json / color_primary into Python renderer params."""
+    out = dict(params)
+    color_json = out.pop("color_json", None)
+    if isinstance(color_json, str):
+        try:
+            color = json.loads(color_json)
+            if isinstance(color, dict):
+                if color.get("mode") == "ramp" and isinstance(color.get("ramp"), dict):
+                    out["custom_palette_stops"] = color["ramp"].get("stops")
+                primary = color.get("primary", {})
+                if isinstance(primary, dict) and primary.get("value"):
+                    out["color_primary"] = primary["value"]
+                bg = color.get("background", {})
+                if isinstance(bg, dict) and bg.get("value"):
+                    out["color_background"] = bg["value"]
+                if color.get("transparentBackground"):
+                    out["background"] = "transparent"
+        except json.JSONDecodeError:
+            pass
+    if "color_primary" in out and "palette" not in out:
+        out.setdefault("palette", "fire")
+    return out
 
 
 @app.get("/api/artifact/{path:path}")

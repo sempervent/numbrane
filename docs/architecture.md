@@ -44,7 +44,7 @@ Executable art + manifests. Flagship: `pieces/flagship/latticefall` (polyglot Eu
 1. **RNG:** `xoshiro128**` with u32 seeds and splitmix32 expansion (JS-safe integers).
 2. **Circle-lattice probe:** semantic geometry IR parity (Python ↔ TypeScript), not pixel parity.
 3. **License:** AGPL-3.0-only.
-4. **No AI/ML runtime:** classical algorithms only; LLM use is external to development tooling, never the art pipeline.
+4. **Browser-local ML policy:** no cloud generative-AI / LLM / diffusion / remote inference in the art pipeline. Small client-side models (TensorFlow.js, ONNX Runtime Web, WebGPU/WASM) may run locally for assistive analysis/steering when documented, reproducible, optional, and not a substitute for the mathematical art algorithms.
 5. **Rust lint invocation:** Makefile/CI call `cargo-clippy` with `CARGO_BUILD_JOBS=8` because some developer Cargo configs define a recursive `clippy` alias and `build.jobs = 0`.
 6. **LATTICEFALL:** Rust/WASM owns live particles; Python owns offline world IR; GLSL owns GPU composition; TypeScript conducts; digests (not pixels) prove replay.
 

@@ -5,6 +5,7 @@
 import { FULLSCREEN_VERTEX_SHADER, loadShader } from "../../gl";
 import type { FrameState, LivePiece, LiveTelemetry, RenderContext } from "../piece";
 import { fetchNpyFloat32 } from "../npy";
+import { uploadScalarFieldTexture } from "../trailTexture";
 
 type Agent = { x: number; y: number; a: number };
 
@@ -99,16 +100,7 @@ export async function createSlimeMoldPiece(
   };
 
   const uploadTrail = () => {
-    const rgba = new Float32Array(simW * simH * 4);
-    let max = 1e-6;
-    for (let i = 0; i < trail.length; i++) max = Math.max(max, trail[i]!);
-    for (let i = 0; i < trail.length; i++) {
-      const v = trail[i]! / max;
-      rgba[i * 4] = v;
-      rgba[i * 4 + 3] = 1;
-    }
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, simW, simH, 0, gl.RGBA, gl.FLOAT, rgba);
+    uploadScalarFieldTexture(gl, tex, trail, simW, simH);
   };
 
   return {

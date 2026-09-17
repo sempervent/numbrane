@@ -31,7 +31,11 @@ export class LiveRuntime {
   private fps: number;
   private seed: number;
   private frame = 0;
+  private updateCount = 0;
   private blackout = false;
+  /** When true, pieces still render but update() is skipped (Studio Pause). */
+  private simulationPaused = false;
+  private freezePieceUpdates = false;
   private transition: TransitionState = {
     active: false,
     type: "cut",
@@ -76,9 +80,15 @@ export class LiveRuntime {
     return this.pieces.get(layerId);
   }
 
+  getPieces(): LivePiece[] {
+    return [...this.pieces.values()];
+  }
+
   clearPieces(): void {
     for (const p of this.pieces.values()) p.dispose();
     this.pieces.clear();
+    this.frame = 0;
+    this.updateCount = 0;
   }
 
   nextScene(): void {
@@ -177,6 +187,22 @@ export class LiveRuntime {
     return this.blackout;
   }
 
+  setSimulationPaused(paused: boolean): void {
+    this.simulationPaused = paused;
+  }
+
+  isSimulationPaused(): boolean {
+    return this.simulationPaused;
+  }
+
+  setFreezePieceUpdates(frozen: boolean): void {
+    this.freezePieceUpdates = frozen;
+  }
+
+  isPieceUpdatesFrozen(): boolean {
+    return this.freezePieceUpdates;
+  }
+
   /** Safe reset: clear blackout, stop transition, reset feedback-ish flags. */
   panic(): void {
     this.blackout = false;
@@ -200,7 +226,7 @@ export class LiveRuntime {
       if (this.transition.progress >= 1) this.transition.active = false;
     }
 
-    const dt = 1 / this.fps;
+    const dt = this.simulationPaused ? 0 : 1 / this.fps;
     const frame: FrameState = {
       frame: this.frame,
       t: this.frame / this.fps,
@@ -212,16 +238,26 @@ export class LiveRuntime {
       bpm: snap.bpm,
     };
 
-    for (const piece of this.pieces.values()) {
-      piece.update(frame);
+    if (!this.simulationPaused && !this.freezePieceUpdates) {
+      for (const piece of this.pieces.values()) {
+        piece.update(frame);
+      }
+      this.frame += 1;
+      this.updateCount += 1;
     }
-
-    this.frame += 1;
     return frame;
+  }
+
+  getUpdateCount(): number {
+    return this.updateCount;
   }
 
   getSeed(): number {
     return this.seed;
+  }
+
+  getFps(): number {
+    return this.fps;
   }
 
   setSeed(seed: number): void {

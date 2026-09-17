@@ -80,7 +80,7 @@ def render(config: AttractorCalligraphyConfig, ctx: RenderContext) -> "RenderRes
     """Render attractor calligraphy."""
     from numbrane_python.core.render_result import RenderResult
     from numbrane_python.render.canvas import Canvas
-    from numbrane_python.render.draw import draw_polyline
+    from numbrane_python.render.draw import draw_circle, draw_polyline
     from numbrane_python.render.palettes import get_palette
     from numbrane_python.render.postfx import apply_film_grain
     import numpy as np
@@ -97,9 +97,9 @@ def render(config: AttractorCalligraphyConfig, ctx: RenderContext) -> "RenderRes
     else:  # clifford
         x, y = 0.0, 0.0
 
-    # Store trajectory points
-    trajectory = []
-    speeds = []
+    # Store trajectory points (projected, pre-normalized)
+    raw_points: list[tuple[float, float]] = []
+    speeds: list[float] = []
 
     # Integration
     for i in range(config.steps + config.burn_in):
@@ -137,20 +137,28 @@ def render(config: AttractorCalligraphyConfig, ctx: RenderContext) -> "RenderRes
         else:  # yz
             px, py = y, z
 
-        # Normalize and map to canvas
-        # Scale to fit canvas
-        scale = min(ctx.width, ctx.height) / 4.0
-        screen_x = px * scale + ctx.width / 2
-        screen_y = py * scale + ctx.height / 2
-
-        trajectory.append((screen_x, screen_y))
-
-        # Compute speed (for stroke width)
-        if len(trajectory) > 1:
-            speed = np.linalg.norm(np.array(trajectory[-1]) - np.array(trajectory[-2]))
-            speeds.append(speed)
+        raw_points.append((float(px), float(py)))
+        if len(raw_points) > 1:
+            speeds.append(
+                float(np.linalg.norm(np.array(raw_points[-1]) - np.array(raw_points[-2])))
+            )
         else:
             speeds.append(1.0)
+
+    # Fit trajectory to canvas
+    trajectory: list[tuple[float, float]] = []
+    if raw_points:
+        pts = np.array(raw_points, dtype=np.float64)
+        min_xy = pts.min(axis=0)
+        max_xy = pts.max(axis=0)
+        span = np.maximum(max_xy - min_xy, 1e-6)
+        pad = 0.08
+        for px, py in raw_points:
+            nx = (px - min_xy[0]) / span[0]
+            ny = (py - min_xy[1]) / span[1]
+            screen_x = pad * ctx.width + nx * ctx.width * (1 - 2 * pad)
+            screen_y = pad * ctx.height + ny * ctx.height * (1 - 2 * pad)
+            trajectory.append((screen_x, screen_y))
 
     # Render as calligraphic strokes
     palette = get_palette(config.palette)
@@ -158,7 +166,7 @@ def render(config: AttractorCalligraphyConfig, ctx: RenderContext) -> "RenderRes
     # Group trajectory into strokes
     strokes = []
     current_stroke = []
-    for i, (px, py) in enumerate(trajectory):
+    for px, py in trajectory:
         if 0 <= px < ctx.width and 0 <= py < ctx.height:
             current_stroke.append((px, py))
         else:
@@ -191,16 +199,16 @@ def render(config: AttractorCalligraphyConfig, ctx: RenderContext) -> "RenderRes
                     # Draw pooling circle
                     from numbrane_python.render.draw import draw_circle
                     pool_color = palette[1 % len(palette)]
-                    draw_circle(canvas, stroke[i][0], stroke[i][1], config.pooling_radius, pool_color)
+                    draw_circle(layer, stroke[i][0], stroke[i][1], config.pooling_radius, pool_color)
 
         # Draw stroke
-        color = palette[0]
+        color = np.array(palette[0], dtype=np.uint8)
         for i in range(len(stroke) - 1):
             width = (widths[i] + widths[i+1]) / 2
-            draw_polyline(canvas, [stroke[i], stroke[i+1]], width, color)
+            draw_polyline(layer, np.array([stroke[i], stroke[i + 1]]), width, color)
 
     # Apply post-processing
-    image = canvas.composite()
+    image = canvas.get_image()
     if config.density_scale != 1.0:
         # Adjust density (simplified)
         image = (image * config.density_scale).clip(0, 255).astype(np.uint8)

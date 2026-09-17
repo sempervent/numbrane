@@ -77,7 +77,7 @@ class RecipeRunner:
 
                     palette = get_palette(self.recipe.output.bg)
                     bg_color = np.array(palette[0], dtype=np.uint8)
-                canvas.fill(bg_color)
+                canvas.fill_background(bg_color)
             else:
                 # List of colors (gradient)
                 from numbrane_python.render.draw import draw_gradient

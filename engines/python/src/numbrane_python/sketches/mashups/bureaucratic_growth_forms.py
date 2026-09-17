@@ -184,7 +184,7 @@ def render(config: BureaucraticGrowthFormsConfig, ctx: RenderContext) -> "Render
                             stamp_layer[y, x] = stamp_color
 
     # Apply post-processing
-    image = canvas.composite()
+    image = canvas.get_image()
     if config.vignette_strength > 0:
         from numbrane_python.render.postfx import apply_vignette
         image = apply_vignette(image, config.vignette_strength)

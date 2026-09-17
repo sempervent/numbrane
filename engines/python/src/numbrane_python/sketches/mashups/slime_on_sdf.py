@@ -95,10 +95,10 @@ def render(config: SlimeOnSDFConfig, ctx: RenderContext) -> "RenderResult":
     canvas = Canvas(ctx.width, ctx.height, 3)
 
     # Create SDF scene
-    y, x = np.ogrid[:ctx.height, :ctx.width]
-    x_norm = (x / ctx.width - 0.5) * 2
-    y_norm = (y / ctx.height - 0.5) * 2
-    coords = np.stack([x_norm, y_norm], axis=-1)
+    x_norm = (np.arange(ctx.width, dtype=np.float64) / ctx.width - 0.5) * 2
+    y_norm = (np.arange(ctx.height, dtype=np.float64) / ctx.height - 0.5) * 2
+    x_grid, y_grid = np.meshgrid(x_norm, y_norm, indexing="xy")
+    coords = np.stack([x_grid, y_grid], axis=-1)
 
     # Generate SDF shapes
     rng = ctx.rng.generator
@@ -228,7 +228,7 @@ def render(config: SlimeOnSDFConfig, ctx: RenderContext) -> "RenderResult":
     trail_layer[trail_mask] = trail_colors[trail_mask]
 
     # Composite
-    image = canvas.composite()
+    image = canvas.get_image()
 
     # Apply bloom
     if config.bloom_intensity > 0:
