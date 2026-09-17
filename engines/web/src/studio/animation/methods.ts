@@ -143,6 +143,9 @@ const NATIVE_METHODS: AnimationMethod[] = [
   nativeMethod("composite-evolution", "Composite Evolution", "generative", "continuous", "continuous", 12, (p) =>
     p.startsWith("mashups/"),
   ),
+  nativeMethod("plasma-evolution", "Plasma Evolution", "generative", "continuous", "continuous", 0, (p) =>
+    p === "audiovisual/nodes" || p === "reference/audiovisual-nodes",
+  ),
 ];
 
 export const RANDOM_METHOD_ID = "random";

@@ -257,6 +257,8 @@ export class LiveSession {
 
   setAnimationSpec(spec: AnimationSpec): void {
     this.animationRuntime.setSpec(spec);
+    this.animationRuntime.performanceMode =
+      spec.endBehavior === "continuous" && spec.durationSec <= 0;
     this.animationRuntime.reset();
     this.lastAnimWallMs = 0;
   }

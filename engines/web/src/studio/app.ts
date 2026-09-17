@@ -39,6 +39,12 @@ import {
 } from "./animation/methods";
 import { RandomAnimationSequencer } from "./animation/randomSequencer";
 import {
+  normalizeSpecForLivePerformance,
+  resolveLivePerformanceMethodSpec,
+  VisualSwitchSequencer,
+  type PerformanceTransition,
+} from "./animation/performance";
+import {
   exportLoopFlag,
   hasComponent,
   type AnimationEasing,
@@ -183,11 +189,21 @@ export class StudioApp {
   }> = [];
   animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
   animationMethodId = "pan-left-right";
+  /** Resolved method id when animationMethodId is random or composite. */
+  activeAnimationMethodId = "pan-left-right";
   animationSequenceSeed = 137;
   randomIntervalSec = 10;
   randomAllowedMethodIds: string[] = [];
+  visualSwitchMode: "off" | "random" = "off";
+  visualSwitchIntervalSec = 30;
+  visualSequenceSeed = 137;
+  pieceTransition: PerformanceTransition = "crossfade";
+  performanceFavorites: string[] = [];
+  performanceCycleFavoritesOnly = false;
   private randomSequencer: RandomAnimationSequencer | null = null;
+  private visualSequencer: VisualSwitchSequencer | null = null;
   private lastRandomTickMs = 0;
+  private lastVisualSwitchMs = 0;
   private lastAnimTickMs = 0;
   private apiPreviewPresentGrid: Uint8Array | null = null;
   private apiPreviewPresentStats: import("../live/pixelMetrics").PixelFrame | null = null;
@@ -259,6 +275,7 @@ export class StudioApp {
 
     this.wireKeyboard();
     this.wireModebar();
+    this.wirePerformanceStrip();
     this.wirePointerIdle();
     this.renderConfig();
     this.renderHelp();
@@ -308,6 +325,8 @@ export class StudioApp {
       animationDurationSec: this.session?.animationRuntime.spec.durationSec ?? 0,
       animationEndBehavior: this.session?.animationRuntime.spec.endBehavior ?? "continuous",
       animationSource: this.session?.animationRuntime.spec.source ?? "generative",
+      animationMethodId: this.animationMethodId,
+      activeAnimationMethodId: this.activeAnimationMethodId,
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
       buildSha: BUILD_SHA,
@@ -393,10 +412,11 @@ export class StudioApp {
 
   syncAnimationSpecToSession(preview = true): void {
     if (!this.session || this.mode !== "animate") return;
-    this.animationSpec = normalizeSpecForPiece(this.pieceId, {
-      ...this.animationSpec,
-      durationSec: this.anim.durationSec,
-    });
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      { ...this.animationSpec, durationSec: this.anim.durationSec },
+      this.mode,
+    );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     this.session.setAnimationSpec(this.animationSpec);
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
@@ -655,13 +675,15 @@ export class StudioApp {
       this.session.runtime.transport.stop();
     }
     if (this.mode === "animate") {
-      this.animationSpec = normalizeSpecForPiece(
+      this.animationSpec = resolveLivePerformanceMethodSpec(
         this.pieceId,
-        this.animationSpec.source ? this.animationSpec : defaultSpecForPiece(this.pieceId),
+        this.animationMethodId,
+        this.mode,
       );
       this.anim.durationSec = this.animationSpec.durationSec;
       this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
       this.session.setAnimationSpec(this.animationSpec);
+      this.session.paintFrames(4, performance.now());
     }
     this.kickLiveSurface();
     this.stallError = "";
@@ -1101,6 +1123,16 @@ export class StudioApp {
     });
   }
 
+  private wirePerformanceStrip(): void {
+    document.getElementById("perf-prev")?.addEventListener("click", () => void this.cyclePiece(-1));
+    document.getElementById("perf-next")?.addEventListener("click", () => void this.cyclePiece(1));
+    document.getElementById("perf-random")?.addEventListener("click", () => void this.cycleRandomPiece());
+    document.getElementById("perf-pause")?.addEventListener("click", () => {
+      this.togglePlay();
+      this.syncChrome();
+    });
+  }
+
   private descriptorFor(pieceId = this.pieceId): StudioPieceDescriptor | undefined {
     return this.descriptors.get(pieceId);
   }
@@ -1193,9 +1225,9 @@ export class StudioApp {
       return;
     }
     this.animationMethodId = methodId;
+    this.activeAnimationMethodId = methodId;
     this.randomSequencer = null;
-    const spec = applyAnimationMethod(this.pieceId, methodId);
-    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, methodId, this.mode);
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
@@ -1218,9 +1250,12 @@ export class StudioApp {
     );
     const first = this.randomSequencer.pickInitial();
     this.animationMethodId = RANDOM_METHOD_ID;
-    const spec = applyAnimationMethod(this.pieceId, first);
-    spec.endBehavior = "continuous";
-    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.activeAnimationMethodId = first;
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      applyAnimationMethod(this.pieceId, first),
+      this.mode,
+    );
     this.anim.durationSec = this.animationSpec.durationSec;
     this.syncAnimationSpecToSession(true);
     this.lastRandomTickMs = performance.now();
@@ -1229,9 +1264,12 @@ export class StudioApp {
   advanceRandomMethod(): void {
     if (!this.randomSequencer) this.initRandomSequencer();
     const next = this.randomSequencer!.forceNext();
-    const spec = applyAnimationMethod(this.pieceId, next);
-    spec.endBehavior = "continuous";
-    this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+    this.activeAnimationMethodId = next;
+    this.animationSpec = normalizeSpecForLivePerformance(
+      this.pieceId,
+      applyAnimationMethod(this.pieceId, next),
+      this.mode,
+    );
     this.syncAnimationSpecToSession(true);
     this.lastRandomTickMs = performance.now();
     this.renderConfig();
@@ -1295,8 +1333,9 @@ export class StudioApp {
       }
     }
     this.params = next;
-    this.animationSpec = defaultSpecForPiece(pieceId);
     this.animationMethodId = defaultAnimationMethodId(pieceId);
+    this.activeAnimationMethodId = this.animationMethodId;
+    this.animationSpec = resolveLivePerformanceMethodSpec(pieceId, this.animationMethodId, this.mode);
     this.randomSequencer = null;
     this.anim.durationSec = this.animationSpec.durationSec;
     this.compositionId = null;
@@ -1361,11 +1400,36 @@ export class StudioApp {
     }
   }
 
+  private performancePiecePool(): string[] {
+    const all = this.pieces.map((p) => p.piece_id);
+    if (this.performanceCycleFavoritesOnly && this.performanceFavorites.length > 0) {
+      return this.performanceFavorites.filter((id) => all.includes(id));
+    }
+    return all;
+  }
+
+  private initVisualSequencer(): void {
+    const pool = this.performancePiecePool();
+    this.visualSequencer = new VisualSwitchSequencer(
+      pool,
+      this.visualSequenceSeed,
+      this.visualSwitchIntervalSec,
+    );
+    this.lastVisualSwitchMs = Date.now();
+  }
+
   async cyclePiece(dir: number): Promise<void> {
-    const ids = this.pieces.map((p) => p.piece_id);
+    const ids = this.performancePiecePool();
     const i = Math.max(0, ids.indexOf(this.pieceId));
     const next = ids[(i + dir + ids.length) % ids.length];
     if (next) await this.setPiece(next);
+  }
+
+  async cycleRandomPiece(): Promise<void> {
+    const ids = this.performancePiecePool().filter((id) => id !== this.pieceId);
+    if (ids.length === 0) return;
+    const idx = Math.abs(this.visualSequenceSeed ^ this.seed) % ids.length;
+    await this.setPiece(ids[idx]!);
   }
 
   private pushHistory(): void {
@@ -1882,6 +1946,14 @@ export class StudioApp {
     document.getElementById("help")?.classList.toggle("visible", this.helpVisible);
     document.getElementById("hud")?.classList.toggle("visible", this.hudVisible);
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
+    const perf = document.getElementById("performance-strip");
+    if (perf) {
+      perf.classList.toggle("visible", this.mode === "animate");
+      const label = document.getElementById("perf-piece");
+      if (label) label.textContent = this.pieceId.split("/").pop() ?? this.pieceId;
+      const pauseBtn = document.getElementById("perf-pause");
+      if (pauseBtn) pauseBtn.textContent = this.playing ? "Pause" : "Play";
+    }
     const strip = document.getElementById("meta-strip");
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     if (strip) {
@@ -2091,8 +2163,14 @@ export class StudioApp {
         const segElapsed = this.randomSequencer?.state.methodElapsedSec ?? 0;
         const segRemain = Math.max(0, this.randomIntervalSec - segElapsed);
         return `
-        <h2>Animation</h2>
-        <label>Method</label>
+        <h2>Performance</h2>
+        <div class="row">
+          <button type="button" id="cfg-prev-piece" title="Previous piece [">◀</button>
+          <span class="muted" style="flex:1;text-align:center">${this.pieceId.split("/").pop()}</span>
+          <button type="button" id="cfg-next-piece" title="Next piece ]">▶</button>
+          <button type="button" id="cfg-random-piece">Random</button>
+        </div>
+        <label>Animation method</label>
         <select id="cfg-anim-method">${[
           ...methods.map(
             (m) =>
@@ -2112,68 +2190,84 @@ export class StudioApp {
         `
             : ""
         }
-        <label>Source</label>
-        <select id="cfg-anim-source">${caps.sources
-          .map(
-            (s) =>
-              `<option value="${s}" ${src === s ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`,
-          )
-          .join("")}</select>
-        <label>Motion</label>
-        <select id="cfg-anim-motion">${motions
-          .map(
-            (m) =>
-              `<option value="${m}" ${this.animationSpec.motion === m ? "selected" : ""}>${m}</option>`,
-          )
-          .join("")}</select>
-        <label>Duration (s)</label>
-        <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
-        <label>End</label>
-        <select id="cfg-anim-end">
-          ${(["continuous", "hold", "loop", "ping-pong", "restart", "stop"] as AnimationEndBehavior[])
-            .map(
-              (e) =>
-                `<option value="${e}" ${this.animationSpec.endBehavior === e ? "selected" : ""}>${e}</option>`,
-            )
-            .join("")}
-        </select>
-        <label>Easing</label>
-        <select id="cfg-anim-easing">
-          ${(["linear", "ease-in-out", "ease-in", "ease-out"] as AnimationEasing[])
-            .map(
-              (e) =>
-                `<option value="${e}" ${this.animationSpec.easing === e ? "selected" : ""}>${e}</option>`,
-            )
-            .join("")}
-        </select>
-        ${
-          src === "camera" || this.animationSpec.components.includes("camera")
-            ? `
-        <label>Pan preset</label>
-        <select id="cfg-pan-preset">${panPresets
-          .map(
-            (p) =>
-              `<option value="${p}" ${this.animationSpec.camera.panPreset === p ? "selected" : ""}>${p}</option>`,
-          )
-          .join("")}</select>
-        `
-            : ""
-        }
-        <label>FPS / format</label>
+        <label>Visual switch</label>
         <div class="row">
-          <input id="cfg-fps" type="number" value="${this.anim.fps}" />
-          <select id="cfg-anim-fmt">
-            <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>WebP</option>
-            <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
-            <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
-            <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+          <select id="cfg-visual-switch">
+            <option value="off" ${this.visualSwitchMode === "off" ? "selected" : ""}>Off</option>
+            <option value="random" ${this.visualSwitchMode === "random" ? "selected" : ""}>Random</option>
           </select>
+          <input id="cfg-visual-interval" type="number" min="5" max="600" step="1" value="${this.visualSwitchIntervalSec}" title="Visual switch interval (sec)" />
         </div>
-        <p class="muted">start frame ${this.anim.startFrame} · ${this.animationSpec.endBehavior} · ${this.animationSpec.source}</p>
+        <label>Transition</label>
+        <select id="cfg-piece-transition">
+          <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
+          <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
+        </select>
+        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · performance clock</p>
         <div class="row">
-          <button type="button" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
+          <button type="button" class="primary" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
+        </div>
+        <details class="advanced">
+          <summary>Export / Record</summary>
+          <label>Export duration (s)</label>
+          <input id="cfg-dur" type="number" value="${this.anim.durationSec}" step="0.5" />
+          <label>Source</label>
+          <select id="cfg-anim-source">${caps.sources
+            .map(
+              (s) =>
+                `<option value="${s}" ${src === s ? "selected" : ""}>${s.charAt(0).toUpperCase() + s.slice(1)}</option>`,
+            )
+            .join("")}</select>
+          <label>Motion</label>
+          <select id="cfg-anim-motion">${motions
+            .map(
+              (m) =>
+                `<option value="${m}" ${this.animationSpec.motion === m ? "selected" : ""}>${m}</option>`,
+            )
+            .join("")}</select>
+          <label>End (export)</label>
+          <select id="cfg-anim-end">
+            ${(["continuous", "hold", "loop", "ping-pong", "restart", "stop"] as AnimationEndBehavior[])
+              .map(
+                (e) =>
+                  `<option value="${e}" ${this.animationSpec.endBehavior === e ? "selected" : ""}>${e}</option>`,
+              )
+              .join("")}
+          </select>
+          <label>Easing</label>
+          <select id="cfg-anim-easing">
+            ${(["linear", "ease-in-out", "ease-in", "ease-out"] as AnimationEasing[])
+              .map(
+                (e) =>
+                  `<option value="${e}" ${this.animationSpec.easing === e ? "selected" : ""}>${e}</option>`,
+              )
+              .join("")}
+          </select>
+          ${
+            src === "camera" || this.animationSpec.components.includes("camera")
+              ? `
+          <label>Pan preset</label>
+          <select id="cfg-pan-preset">${panPresets
+            .map(
+              (p) =>
+                `<option value="${p}" ${this.animationSpec.camera.panPreset === p ? "selected" : ""}>${p}</option>`,
+            )
+            .join("")}</select>
+          `
+              : ""
+          }
+          <label>Target FPS / format</label>
+          <div class="row">
+            <input id="cfg-fps" type="number" value="${this.anim.fps}" />
+            <select id="cfg-anim-fmt">
+              <option value="webp" ${this.animFormat === "webp" ? "selected" : ""}>WebP</option>
+              <option value="apng" ${this.animFormat === "apng" ? "selected" : ""}>APNG</option>
+              <option value="webm" ${this.animFormat === "webm" ? "selected" : ""}>WebM</option>
+              <option value="gif" ${this.animFormat === "gif" ? "selected" : ""}>GIF</option>
+            </select>
+          </div>
           <button type="button" class="primary" id="cfg-anim-export">Export animation</button>
-        </div>`;
+        </details>`;
       })() : ""}
       ${this.mode === "react" ? `
         <h2>Audio</h2>
@@ -2336,6 +2430,25 @@ export class StudioApp {
     el.querySelector("#cfg-play")?.addEventListener("click", () => {
       this.togglePlay();
       this.renderConfig();
+    });
+    el.querySelector("#cfg-prev-piece")?.addEventListener("click", () => void this.cyclePiece(-1));
+    el.querySelector("#cfg-next-piece")?.addEventListener("click", () => void this.cyclePiece(1));
+    el.querySelector("#cfg-random-piece")?.addEventListener("click", () => void this.cycleRandomPiece());
+    el.querySelector("#cfg-visual-switch")?.addEventListener("change", (e) => {
+      this.visualSwitchMode = (e.target as HTMLSelectElement).value as "off" | "random";
+      if (this.visualSwitchMode === "random") this.initVisualSequencer();
+      else this.visualSequencer = null;
+      this.renderConfig();
+    });
+    el.querySelector("#cfg-visual-interval")?.addEventListener("change", (e) => {
+      this.visualSwitchIntervalSec = Math.min(
+        600,
+        Math.max(5, Number((e.target as HTMLInputElement).value) || 30),
+      );
+      if (this.visualSequencer) this.visualSequencer.intervalSec = this.visualSwitchIntervalSec;
+    });
+    el.querySelector("#cfg-piece-transition")?.addEventListener("change", (e) => {
+      this.pieceTransition = (e.target as HTMLSelectElement).value as PerformanceTransition;
     });
     el.querySelector("#cfg-anim-export")?.addEventListener("click", () => void this.exportAnim());
     el.querySelector("#cfg-anim-fmt")?.addEventListener("change", (e) => {
@@ -2623,16 +2736,28 @@ export class StudioApp {
       this.randomSequencer &&
       this.session
     ) {
-      const dt = this.lastRandomTickMs > 0 ? (now - this.lastRandomTickMs) / 1000 : 0;
+      const nowPerf = performance.now();
+      const dt = this.lastRandomTickMs > 0 ? (nowPerf - this.lastRandomTickMs) / 1000 : 0;
       const next = this.randomSequencer.tick(dt);
       if (next) {
-        const spec = applyAnimationMethod(this.pieceId, next);
-        spec.endBehavior = "continuous";
-        this.animationSpec = normalizeSpecForPiece(this.pieceId, spec);
+        this.activeAnimationMethodId = next;
+        this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, next, this.mode);
         this.syncAnimationSpecToSession(false);
         this.renderConfig();
       }
-      this.lastRandomTickMs = now;
+      this.lastRandomTickMs = nowPerf;
+    }
+
+    if (
+      this.mode === "animate" &&
+      this.visualSwitchMode === "random" &&
+      this.playing &&
+      this.visualSequencer
+    ) {
+      const dt = this.lastVisualSwitchMs > 0 ? (now - this.lastVisualSwitchMs) / 1000 : 0;
+      const nextPiece = this.visualSequencer.tick(dt, this.pieceId);
+      if (nextPiece && nextPiece !== this.pieceId) void this.setPiece(nextPiece);
+      this.lastVisualSwitchMs = now;
     }
 
     if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {

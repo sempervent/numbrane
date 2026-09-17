@@ -52,6 +52,9 @@ const SHADER_CAMERA = caps(
 );
 
 export function animationCapabilitiesFor(pieceId: string): PieceAnimationCapabilities {
+  if (pieceId.includes("audiovisual") || pieceId.includes("nodes")) {
+    return GENERATIVE_SIM;
+  }
   if (pieceId.includes("reaction-diffusion") || pieceId.includes("slime") || pieceId.includes("noodle")) {
     return GENERATIVE_SIM;
   }

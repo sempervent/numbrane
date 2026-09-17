@@ -25,6 +25,9 @@ export async function createNodesLivePiece(
   gl.attachShader(prog, vs);
   gl.attachShader(prog, fs);
   gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(`plasma link: ${gl.getProgramInfoLog(prog)}`);
+  }
   gl.deleteShader(vs);
   gl.deleteShader(fs);
 
@@ -129,6 +132,10 @@ export async function createNodesLivePiece(
     render(ctx: RenderContext) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, ctx.framebuffer);
       gl.viewport(0, 0, ctx.width, ctx.height);
+      if (ctx.transparent) gl.clearColor(0, 0, 0, 0);
+      else gl.clearColor(0.02, 0.02, 0.03, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindVertexArray(null);
       gl.useProgram(prog);
       const nodeMotion =
         world.nodes.reduce((s, n) => s + Math.abs(n.vx) + Math.abs(n.vy), 0) /

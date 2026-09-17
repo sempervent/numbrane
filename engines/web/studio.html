@@ -170,6 +170,18 @@
       .level > span { display: block; height: 100%; width: 0%; background: var(--accent); }
       details.advanced { margin-top: 0.5rem; color: var(--mute); }
       details.advanced summary { cursor: pointer; margin-bottom: 0.35rem; }
+      #performance-strip {
+        position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%);
+        display: none; align-items: center; gap: 0.5rem; z-index: 4;
+        background: rgba(0,0,0,0.55); border: 1px solid var(--line); border-radius: 999px;
+        padding: 0.35rem 0.75rem; font-size: 11px; pointer-events: auto;
+      }
+      #performance-strip.visible { display: flex; }
+      body.controls-hidden #performance-strip { display: flex; }
+      #performance-strip button {
+        background: transparent; border: 1px solid var(--line); color: var(--ink);
+        border-radius: 6px; padding: 0.2rem 0.45rem; cursor: pointer;
+      }
     </style>
   </head>
   <body class="controls-visible">
@@ -178,6 +190,13 @@
       <img id="generate-preview" alt="Generated preview" />
       <div id="gen-status">Generating…</div>
       <div id="unsupported-banner"></div>
+      <div id="performance-strip" aria-label="Performance controls">
+        <button type="button" id="perf-prev" title="Previous piece [">◀</button>
+        <span id="perf-piece"></span>
+        <button type="button" id="perf-next" title="Next piece ]">▶</button>
+        <button type="button" id="perf-random">Random</button>
+        <button type="button" id="perf-pause">Pause</button>
+      </div>
     </div>
     <div id="chrome">
       <div id="modebar">

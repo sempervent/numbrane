@@ -26,6 +26,8 @@ export type AnimationRuntimeState = {
 
 export class AnimationRuntime {
   spec: AnimationSpec;
+  /** Unbounded live performance — ignore export duration/stop semantics. */
+  performanceMode = false;
   private timeSec = 0;
   private sourceDigest = "";
   private snapshotReady = false;
@@ -60,6 +62,7 @@ export class AnimationRuntime {
   tick(dt: number, playing: boolean): void {
     if (!playing || this.stopped) return;
     this.timeSec += dt;
+    if (this.performanceMode) return;
     const { durationSec, endBehavior } = this.spec;
     if (endBehavior === "stop" && durationSec > 0 && this.timeSec >= durationSec) {
       this.stopped = true;
@@ -81,7 +84,7 @@ export class AnimationRuntime {
       cameraActive && this.spec.camera.motion !== "none"
         ? interpolateCamera(this.spec.camera, phase, this.spec.easing)
         : { centerX: 0, centerY: 0, scale: 1, rotation: 0 };
-    const freezeGenerative = cameraActive && !generativeActive;
+    const freezeGenerative = cameraActive && !generativeActive && !this.performanceMode;
     const useSourceSnapshot = freezeGenerative && this.snapshotReady;
     return {
       animationTimeSec: this.timeSec,
