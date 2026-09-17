@@ -154,6 +154,13 @@ test-python-renderer-smoke:
 test-web:
     cd "{{root}}/engines/web" && npm test
 
+# The cross-language LATTICEFALL contract imports the generated wasm-bindgen
+# package. Keep that contract in full/local checks; PR-fast deliberately avoids
+# rebuilding WASM from a clean checkout.
+[group('test')]
+test-web-fast:
+    cd "{{root}}/engines/web" && npm test -- --exclude tests/latticefall_contract.test.ts
+
 [group('test')]
 test-rust:
     cd "{{root}}/engines/rust" && CARGO_BUILD_JOBS=8 cargo test --workspace
@@ -310,7 +317,7 @@ ci-lite: fmt-check lint test
 
 # Stabilization-phase PR gate: no Rust/WASM build, Docker, browser, exports, or art corpus.
 [group('ci')]
-pr-fast: fmt-check-python lint-python lint-data lint-web test-web test-python-fast test-python-renderer-smoke studio-catalog-audit
+pr-fast: fmt-check-python lint-python lint-data lint-web test-web-fast test-python-fast test-python-renderer-smoke studio-catalog-audit
     @echo "pr-fast ok"
 
 [group('ci')]
