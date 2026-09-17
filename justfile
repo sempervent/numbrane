@@ -378,6 +378,38 @@ studio-all-generate:
     npx playwright test -c playwright.all-generate.config.ts
 
 [group('studio')]
+studio-performance:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance.config.ts
+
+[group('studio')]
+studio-performance-soak:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts
+
+[group('studio')]
+studio-performance-quick-switch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-quick-switch.config.ts
+
+[group('studio')]
+studio-audiovisual-nodes:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts --grep studio-audiovisual-nodes
+
+[group('studio')]
 studio-piece-contract:
     #!/usr/bin/env bash
     set -euo pipefail
