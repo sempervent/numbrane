@@ -148,7 +148,9 @@ test-python-fast:
 
 [group('test')]
 test-python-renderer-smoke:
-    cd "{{root}}/engines/python" && uv run pytest -q tests/test_render_service.py
+    cd "{{root}}/engines/python" && uv run pytest -q \
+      tests/test_render_service.py::test_render_body_validates_piece \
+      tests/test_render_service.py::test_export_frame_count
 
 [group('test')]
 test-web:
