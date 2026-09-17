@@ -139,6 +139,18 @@ test-python:
     cd "{{root}}/engines/python" && uv run pytest -q
 
 [group('test')]
+test-python-fast:
+    cd "{{root}}/engines/python" && uv run pytest -q \
+      tests/test_rng.py \
+      tests/test_schemas.py \
+      tests/test_seeds.py \
+      tests/test_composition_grammar.py
+
+[group('test')]
+test-python-renderer-smoke:
+    cd "{{root}}/engines/python" && uv run pytest -q tests/test_render_service.py
+
+[group('test')]
 test-web:
     cd "{{root}}/engines/web" && npm test
 
@@ -296,6 +308,11 @@ dev-web piece="":
 ci-lite: fmt-check lint test
     @echo "ci-lite ok"
 
+# Stabilization-phase PR gate: no Rust/WASM build, Docker, browser, exports, or art corpus.
+[group('ci')]
+pr-fast: fmt-check-python lint-python lint-data lint-web test-web test-python-fast test-python-renderer-smoke studio-catalog-audit
+    @echo "pr-fast ok"
+
 [group('ci')]
 ci: ci-lite test-golden docs build latticefall-build latticefall-smoke live-test live-smoke live-e2e render-test gallery-smoke studio-test studio-fidelity studio-smoke bake-print
     @echo "ci ok"
@@ -400,6 +417,36 @@ studio-performance-quick-switch:
     cd "{{root}}/engines/web"
     export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader}"
     npx playwright test -c playwright.performance-quick-switch.config.ts
+
+[group('studio')]
+studio-docker-up:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    export BUILD_SHA="$(git -C "{{root}}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    export BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    docker buildx bake -f "{{root}}/docker-bake.hcl" studio render
+    docker compose -f "{{root}}/compose.yaml" up -d studio renderer
+
+[group('studio')]
+studio-visual-audit: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist}"
+    npx playwright test -c playwright.visual-audit.config.ts
+    echo "Visual audit → {{root}}/artifacts/visual-audit/index.html"
+
+[group('studio')]
+studio-performance-audit: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist}"
+    npx playwright test -c playwright.performance-quick-switch.config.ts
+
+[group('studio')]
+studio-full-check: pr-fast studio-visual-audit studio-performance-audit
+    @echo "studio-full-check ok"
 
 [group('studio')]
 studio-audiovisual-nodes:

@@ -1,8 +1,10 @@
 /**
- * Quick-switch stress — cycle catalog every 3s for 2 minutes without black stage.
+ * Quick-switch audit — cycle every 2s for 60s, retaining every transition frame.
  */
 
 import { test, expect } from "@playwright/test";
+import fs from "node:fs";
+import path from "node:path";
 import { openStudioHome, clickStudioMode } from "./studioUi";
 import { frameIsVisible, sampleStagePixels } from "./animationMetrics";
 import {
@@ -14,38 +16,51 @@ const catalogPieces = studioVisibleManifests(collectPieceManifests())
   .map((m) => m.piece_id)
   .sort();
 
-test("quick-switch catalog 3s for 2 minutes", async ({ page }) => {
-  test.setTimeout(240_000);
+test("quick-switch catalog every 2s for 60 seconds", async ({ page }) => {
+  test.setTimeout(180_000);
   await openStudioHome(page);
   await clickStudioMode(page, "animate");
 
-  const switchMs = 3000;
-  const endAt = Date.now() + 120_000;
+  const outputDir = path.resolve(process.cwd(), "../../artifacts/visual-audit/quick-switch");
+  fs.rmSync(outputDir, { recursive: true, force: true });
+  fs.mkdirSync(outputDir, { recursive: true });
+  const switchMs = 2000;
+  const startedAt = Date.now();
+  const endAt = startedAt + 60_000;
   let idx = 0;
-  let blackStreakMs = 0;
-  let lastVisibleMs = Date.now();
+  let blackFrameCount = 0;
+  const transitions: Array<{ index: number; piece: string; black: boolean; metrics: unknown }> = [];
 
   while (Date.now() < endAt) {
     const piece = catalogPieces[idx % catalogPieces.length]!;
-    idx += 1;
+    const transitionIndex = idx++;
     await page.evaluate((id) => {
       const app = (window as unknown as { __NUMBRANE_STUDIO__?: { setPiece?: (p: string) => Promise<void> } })
         .__NUMBRANE_STUDIO__;
-      return app?.setPiece?.(id);
+      void app?.setPiece?.(id);
     }, piece);
-    await page.waitForTimeout(switchMs);
+    await page.waitForTimeout(50);
+    const transitionFrame = await sampleStagePixels(page);
+    const black = !frameIsVisible(transitionFrame);
+    if (black) blackFrameCount += 1;
+    await page.locator("#stage-wrap").screenshot({
+      path: path.join(outputDir, `transition-${String(transitionIndex).padStart(3, "0")}.png`),
+      type: "png",
+    });
+    transitions.push({ index: transitionIndex, piece, black, metrics: transitionFrame });
+    const untilNextSwitch = startedAt + idx * switchMs - Date.now();
+    if (untilNextSwitch > 0) await page.waitForTimeout(untilNextSwitch);
 
     const px = await sampleStagePixels(page);
-    if (frameIsVisible(px)) {
-      lastVisibleMs = Date.now();
-      blackStreakMs = 0;
-    } else {
-      blackStreakMs += switchMs;
-      expect(blackStreakMs, `black streak after ${piece}`).toBeLessThanOrEqual(750);
-    }
+    if (!frameIsVisible(px)) blackFrameCount += 1;
   }
 
-  expect(Date.now() - lastVisibleMs, "stage visible within last switch window").toBeLessThanOrEqual(
-    switchMs * 2,
-  );
+  fs.writeFileSync(path.join(outputDir, "summary.json"), JSON.stringify({
+    durationSec: 60,
+    intervalSec: 2,
+    transitionCount: transitions.length,
+    blackFrameCount,
+    transitions,
+  }, null, 2));
+  expect(blackFrameCount, "substantially black visible frames").toBe(0);
 });

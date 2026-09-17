@@ -15,6 +15,35 @@ test.describe("NUMBRANE Studio", () => {
 
     await page.keyboard.press("Tab");
     await expect(page.locator("body")).toHaveClass(/controls-hidden/);
+    const hiddenControls = await page.evaluate(() => {
+      const roots = ["modebar", "config", "browser", "performance-strip"]
+        .map((id) => document.getElementById(id))
+        .filter((node): node is HTMLElement => !!node);
+      const controls = roots.flatMap((root) => [
+        root,
+        ...Array.from(root.querySelectorAll<HTMLElement>("button,input,select,textarea,a[href],[tabindex]")),
+      ]);
+      return {
+        roots: roots.map((root) => ({
+          id: root.id,
+          inert: root.inert,
+          ariaHidden: root.getAttribute("aria-hidden"),
+          pointerEvents: getComputedStyle(root).pointerEvents,
+        })),
+        focusable: controls.filter((node) => {
+          node.focus();
+          return document.activeElement === node;
+        }).map((node) => node.id || node.tagName),
+        centerHit: document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id ?? "",
+      };
+    });
+    expect(hiddenControls.roots.every((root) => root.inert)).toBe(true);
+    expect(hiddenControls.roots.every((root) => root.ariaHidden === "true")).toBe(true);
+    expect(hiddenControls.roots.every((root) => root.pointerEvents === "none")).toBe(true);
+    expect(hiddenControls.focusable).toEqual([]);
+    expect(["stage", "generate-preview", "switch-hold", "stage-wrap"]).toContain(
+      hiddenControls.centerHit,
+    );
     await page.keyboard.press("Tab");
     await expect(page.locator("body")).toHaveClass(/controls-visible/);
 

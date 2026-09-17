@@ -32,6 +32,20 @@
         object-fit: contain; background: #000; display: none; z-index: 1;
       }
       #generate-preview.visible { display: block; }
+      #switch-hold {
+        position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+        background: #000; display: none; z-index: 2; opacity: 1;
+        transition: opacity 300ms ease;
+      }
+      #switch-hold.visible { display: block; }
+      #switch-hold.releasing { opacity: 0; }
+      #switch-hold.fallback-drift {
+        display: block; animation: fallback-drift 18s ease-in-out infinite alternate;
+      }
+      @keyframes fallback-drift {
+        from { transform: scale(1.01) translate3d(-0.5%, -0.3%, 0); }
+        to { transform: scale(1.08) translate3d(0.8%, 0.5%, 0); }
+      }
       #stage.hidden-live { visibility: hidden; }
       #gen-status {
         position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
@@ -154,7 +168,8 @@
       body.controls-hidden #modebar,
       body.controls-hidden #config,
       body.controls-hidden #browser,
-      body.controls-hidden #meta-strip { display: none !important; }
+      body.controls-hidden #meta-strip,
+      body.controls-hidden #performance-strip { display: none !important; pointer-events: none !important; }
       body.fullscreen-art #modebar { opacity: 0; pointer-events: none; }
       #variants {
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; margin-top: 0.4rem;
@@ -177,7 +192,6 @@
         padding: 0.35rem 0.75rem; font-size: 11px; pointer-events: auto;
       }
       #performance-strip.visible { display: flex; }
-      body.controls-hidden #performance-strip { display: flex; }
       #performance-strip button {
         background: transparent; border: 1px solid var(--line); color: var(--ink);
         border-radius: 6px; padding: 0.2rem 0.45rem; cursor: pointer;
@@ -188,6 +202,7 @@
     <div id="stage-wrap">
       <canvas id="stage"></canvas>
       <img id="generate-preview" alt="Generated preview" />
+      <img id="switch-hold" alt="" aria-hidden="true" />
       <div id="gen-status">Generating…</div>
       <div id="unsupported-banner"></div>
       <div id="performance-strip" aria-label="Performance controls">

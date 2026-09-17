@@ -232,6 +232,8 @@ export class StudioApp {
   private pieceLoadedAt = Date.now();
   private lastVisualDigest = "";
   private descriptors = new Map<string, StudioPieceDescriptor>();
+  private browserThumbUrls = new Map<string, string>();
+  private browserThumbAbort: AbortController | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -345,6 +347,32 @@ export class StudioApp {
 
   /** Sample visible presented art (live canvas or api-preview img) for tests/diagnostics. */
   samplePresentedPixels(gridW = 64, gridH = 36): import("../live/pixelMetrics").PixelFrame | null {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (hold?.classList.contains("visible") && hold.complete && hold.naturalWidth > 0) {
+      const prior =
+        this.apiPreviewPresentGrid && this.apiPreviewPresentStats
+          ? { pixels: this.apiPreviewPresentGrid, stats: this.apiPreviewPresentStats }
+          : undefined;
+      const sampled = samplePreviewImageGrid(
+        hold,
+        gridW,
+        gridH,
+        { centerX: 0, centerY: 0, scale: 1, rotation: 0 },
+        prior,
+      );
+      if (sampled) {
+        this.apiPreviewPresentGrid = sampled.grid;
+        this.apiPreviewPresentStats = sampled.stats;
+        return sampled.stats;
+      }
+    }
+    return this.sampleIncomingPresentedPixels(gridW, gridH);
+  }
+
+  private sampleIncomingPresentedPixels(
+    gridW = 64,
+    gridH = 36,
+  ): import("../live/pixelMetrics").PixelFrame | null {
     const surface = studioSurface(this.pieceId, this.mode);
     if (surface === "live" && this.session) {
       try {
@@ -1206,11 +1234,6 @@ export class StudioApp {
 
   private showGenerationFailed(err: unknown, backend: string): void {
     const msg = err instanceof Error ? err.message : String(err);
-    const img = document.getElementById("generate-preview") as HTMLImageElement | null;
-    if (img) {
-      img.classList.remove("visible");
-      img.removeAttribute("src");
-    }
     this.showFailureBanner(
       "Generation failed",
       `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${msg}`,
@@ -1317,6 +1340,10 @@ export class StudioApp {
   }
 
   async setPiece(pieceId: string): Promise<void> {
+    this.browserThumbAbort?.abort();
+    this.browserThumbAbort = null;
+    const preserveCurrentVisual = this.mode === "animate" || this.mode === "react";
+    if (preserveCurrentVisual) this.beginVisualTransition();
     this.pieceId = pieceId;
     this.prefs.pieceId = pieceId;
     this.recipeDigest = "";
@@ -1342,9 +1369,16 @@ export class StudioApp {
     this.frame = 0;
     this.persist();
     await this.applyPieceScene();
+    if (preserveCurrentVisual) {
+      if (this.unsupportedMessage) this.keepTransitionAsFallback();
+      else if (await this.waitForIncomingVisual()) this.finishVisualTransition();
+      else this.keepTransitionAsFallback();
+    }
     this.pushHistory();
     this.renderConfig();
-    this.renderBrowser();
+    document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
+      card.classList.toggle("selected", card.dataset.pieceId === this.pieceId);
+    });
     this.syncModebarCapabilities();
     this.syncUrl(true);
   }
@@ -1939,6 +1973,71 @@ export class StudioApp {
     if (push) history.replaceState(null, "", u);
   }
 
+  private beginVisualTransition(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold) return;
+    const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
+    let src = "";
+    if (preview?.classList.contains("visible") && preview.src) {
+      src = preview.src;
+    } else if (this.canvas.width > 0 && this.canvas.height > 0) {
+      try {
+        src = this.canvas.toDataURL("image/png");
+      } catch {
+        src = "";
+      }
+    }
+    if (!src) return;
+    hold.src = src;
+    hold.classList.remove("releasing", "fallback-drift");
+    hold.classList.add("visible");
+  }
+
+  private async waitForIncomingVisual(timeoutMs = 20_000): Promise<boolean> {
+    const started = performance.now();
+    while (performance.now() - started < timeoutMs) {
+      const px = this.sampleIncomingPresentedPixels(64, 36);
+      if (
+        px &&
+        (px.meanLuminance > 2 || px.luminanceVariance > 1 || px.occupiedFraction > 0.00025)
+      ) {
+        return true;
+      }
+      await new Promise((resolve) => window.setTimeout(resolve, 50));
+    }
+    return false;
+  }
+
+  private finishVisualTransition(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold?.classList.contains("visible")) return;
+    if (this.pieceTransition === "cut") {
+      hold.classList.remove("visible", "releasing", "fallback-drift");
+      hold.removeAttribute("src");
+      return;
+    }
+    hold.classList.add("releasing");
+    window.setTimeout(() => {
+      hold.classList.remove("visible", "releasing", "fallback-drift");
+      hold.removeAttribute("src");
+    }, 320);
+  }
+
+  private keepTransitionAsFallback(): void {
+    const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
+    if (!hold?.src) return;
+    hold.classList.remove("releasing");
+    hold.classList.add("visible", "fallback-drift");
+  }
+
+  private setControlTreeState(id: string, hidden: boolean): void {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.inert = hidden;
+    node.setAttribute("aria-hidden", hidden ? "true" : "false");
+    node.style.pointerEvents = hidden ? "none" : "";
+  }
+
   syncChrome(): void {
     document.body.classList.toggle("controls-visible", this.controlsVisible);
     document.body.classList.toggle("controls-hidden", !this.controlsVisible);
@@ -1948,11 +2047,14 @@ export class StudioApp {
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
     const perf = document.getElementById("performance-strip");
     if (perf) {
-      perf.classList.toggle("visible", this.mode === "animate");
+      perf.classList.toggle("visible", this.mode === "animate" && this.controlsVisible);
       const label = document.getElementById("perf-piece");
       if (label) label.textContent = this.pieceId.split("/").pop() ?? this.pieceId;
       const pauseBtn = document.getElementById("perf-pause");
       if (pauseBtn) pauseBtn.textContent = this.playing ? "Pause" : "Play";
+    }
+    for (const id of ["modebar", "config", "browser", "performance-strip"]) {
+      this.setControlTreeState(id, !this.controlsVisible);
     }
     const strip = document.getElementById("meta-strip");
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
@@ -2028,7 +2130,8 @@ export class StudioApp {
       const desc = this.descriptors.get(p.piece_id);
       const capLabel = (label: string, ok: boolean) =>
         `<span class="${ok ? "cap-ok" : "cap-na"}">${label}${ok ? "" : " · unsupported"}</span>`;
-      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" />
+      const thumb = this.browserThumbUrls.get(p.piece_id);
+      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
         <div class="name">${p.title || p.name || p.piece_id}</div>
         <div class="meta caps">${capLabel("Generate", desc?.generate.supported ?? false)} · ${capLabel("Animate", desc?.animate.supported ?? false)} · ${capLabel("React", desc?.react.supported ?? false)}</div>
         <div class="meta">${p.family || p.piece_id.split("/")[0]} · ${desc?.animate.backend ?? "—"}</div>
@@ -2036,12 +2139,18 @@ export class StudioApp {
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       host.appendChild(div);
     }
-    // Lazy real thumbnails (actual /api/render) for visible catalog entries
-    void this.loadBrowserThumbs(list.slice(0, 16).map((p) => p.piece_id));
+    // Do not queue renderer work while the browser is closed. Cache URLs across re-renders.
+    if (this.browserVisible) {
+      void this.loadBrowserThumbs(list.slice(0, 8).map((p) => p.piece_id));
+    }
   }
 
   private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
+    this.browserThumbAbort?.abort();
+    const controller = new AbortController();
+    this.browserThumbAbort = controller;
     for (const pieceId of pieceIds) {
+      if (controller.signal.aborted) return;
       if (!supportsMode(pieceId, "generate")) continue;
       const img = document.querySelector<HTMLImageElement>(`#browser img.thumb[data-piece="${pieceId}"]`);
       if (!img || img.dataset.loaded) continue;
@@ -2049,6 +2158,7 @@ export class StudioApp {
         const res = await fetch("/api/render", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          signal: controller.signal,
           body: JSON.stringify({
             piece: pieceId,
             seed: 42,
@@ -2062,12 +2172,16 @@ export class StudioApp {
         });
         if (!res.ok) continue;
         const blob = await res.blob();
-        img.src = URL.createObjectURL(blob);
+        const url = URL.createObjectURL(blob);
+        this.browserThumbUrls.set(pieceId, url);
+        img.src = url;
         img.dataset.loaded = "1";
       } catch {
-        /* optional */
+        if (controller.signal.aborted) return;
+        /* optional thumbnail */
       }
     }
+    if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }
 
   renderConfig(): void {
@@ -2170,7 +2284,7 @@ export class StudioApp {
           <button type="button" id="cfg-next-piece" title="Next piece ]">▶</button>
           <button type="button" id="cfg-random-piece">Random</button>
         </div>
-        <label>Animation method</label>
+        <label for="cfg-anim-method">Animation method</label>
         <select id="cfg-anim-method">${[
           ...methods.map(
             (m) =>

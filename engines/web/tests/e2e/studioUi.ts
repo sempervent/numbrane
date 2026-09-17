@@ -32,6 +32,7 @@ export async function openStudioHome(page: Page): Promise<void> {
 }
 
 export async function openPieceBrowser(page: Page): Promise<void> {
+  if (await page.locator("#browser.visible").count()) return;
   await page.evaluate(() => {
     (
       window as unknown as { __NUMBRANE_STUDIO__?: { showChromeForTest?: (b?: boolean) => void } }
