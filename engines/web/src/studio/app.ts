@@ -220,12 +220,16 @@ export class StudioApp {
   visualSwitchIntervalSec = 30;
   visualSequenceSeed = 137;
   pieceTransition: PerformanceTransition = "crossfade";
+  /** Visible crossfade duration (ms) — hold overlay fades while incoming stage is live. */
+  private readonly visualCrossfadeMs = 680;
   performanceFavorites: string[] = [];
   performanceCycleFavoritesOnly = false;
   performanceCyclePackOrder = false;
   private browserPreview: BrowserPreviewSession | null = null;
   private browserMotionTimer: number | null = null;
   private browserMotionPieceId: string | null = null;
+  private browserThumbFailed = new Set<string>();
+  private browserThumbLiveOnly = new Set<string>();
   private randomSequencer: RandomAnimationSequencer | null = null;
   private visualSequencer: VisualSwitchSequencer | null = null;
   private lastRandomTickMs = 0;
@@ -599,6 +603,8 @@ export class StudioApp {
   }
 
   private async applyPieceScene(): Promise<void> {
+    this.hideBrowserMotionPane();
+    await this.browserPreview?.teardown();
     this.stopApiAnim();
     const surface = studioSurface(this.pieceId, this.mode);
     const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -1388,6 +1394,8 @@ export class StudioApp {
   async setPiece(pieceId: string): Promise<void> {
     this.browserThumbAbort?.abort();
     this.browserThumbAbort = null;
+    this.hideBrowserMotionPane();
+    await this.browserPreview?.teardown();
     const preserveCurrentVisual = this.mode === "animate" || this.mode === "react";
     if (preserveCurrentVisual) this.beginVisualTransition();
     this.pieceId = pieceId;
@@ -1540,7 +1548,9 @@ export class StudioApp {
       document
         .querySelector(`#browser .piece[data-piece-id="${CSS.escape(pieceId)}"]`)
         ?.classList.add("motion-active");
-      void preview.startMotion(pieceId);
+      void preview.startMotion(pieceId).catch(() => {
+        if (cap) cap.textContent = "MOTION FAILED — use Animate";
+      });
     }, 320);
   }
 
@@ -2229,6 +2239,7 @@ export class StudioApp {
   }
 
   private beginVisualTransition(): void {
+    if (this.pieceTransition === "cut") return;
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold) return;
     const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -2271,11 +2282,13 @@ export class StudioApp {
       hold.removeAttribute("src");
       return;
     }
+    hold.style.transition = `opacity ${this.visualCrossfadeMs}ms ease`;
     hold.classList.add("releasing");
     window.setTimeout(() => {
       hold.classList.remove("visible", "releasing", "fallback-drift");
       hold.removeAttribute("src");
-    }, 320);
+      hold.style.transition = "";
+    }, this.visualCrossfadeMs + 40);
   }
 
   private keepTransitionAsFallback(): void {
@@ -2414,6 +2427,15 @@ export class StudioApp {
       div.tabIndex = 0;
       const starred = this.performanceFavorites.includes(p.piece_id);
       const thumb = this.browserThumbUrls.get(p.piece_id);
+      const thumbFail = this.browserThumbFailed.has(p.piece_id);
+      const thumbLive = this.browserThumbLiveOnly.has(p.piece_id);
+      const placeholder = thumbFail
+        ? "PREVIEW FAILED"
+        : thumbLive
+          ? "HOVER · MOTION"
+          : !thumb
+            ? "preview…"
+            : "";
       const badges = [
         meta?.density,
         meta?.motion,
@@ -2425,7 +2447,7 @@ export class StudioApp {
       div.innerHTML = `
         <div class="thumb-wrap">
           <img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
-          ${!thumb ? `<span class="thumb-placeholder">preview…</span>` : ""}
+          ${placeholder ? `<span class="thumb-placeholder${thumbFail ? " failed" : ""}">${placeholder}</span>` : ""}
         </div>
         <div class="piece-body">
           <div class="name-row">
@@ -2480,6 +2502,8 @@ export class StudioApp {
     await loadThumbQueue(
       pieceIds,
       (pieceId, url) => {
+        this.browserThumbFailed.delete(pieceId);
+        this.browserThumbLiveOnly.delete(pieceId);
         this.browserThumbUrls.set(pieceId, url);
         const img = document.querySelector<HTMLImageElement>(
           `#browser img.thumb[data-piece="${pieceId}"]`,
@@ -2490,11 +2514,18 @@ export class StudioApp {
           img.parentElement?.querySelector(".thumb-placeholder")?.remove();
         }
       },
-      {
-        concurrency: 4,
-        signal: controller.signal,
-        previewSession: this.ensureBrowserPreview() ?? undefined,
+      (pieceId, reason) => {
+        if (reason === "failed") this.browserThumbFailed.add(pieceId);
+        if (reason === "live-only") this.browserThumbLiveOnly.add(pieceId);
+        const ph = document.querySelector(
+          `#browser .piece[data-piece-id="${CSS.escape(pieceId)}"] .thumb-placeholder`,
+        );
+        if (ph) {
+          ph.textContent = reason === "failed" ? "PREVIEW FAILED" : "HOVER · MOTION";
+          ph.classList.toggle("failed", reason === "failed");
+        }
       },
+      { concurrency: 3, signal: controller.signal },
     );
     if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }

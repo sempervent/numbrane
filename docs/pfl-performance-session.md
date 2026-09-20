@@ -40,9 +40,22 @@ Catalog source: `engines/web/src/studio/performance/catalog.ts`.
 - **Episode 1 flow:** `PFL_EPISODE_1_FLOW` in catalog TS; pack fixture `pieces/pfl/episode-1-visual-set/pack.json`.
 - **Midnight roles:** `MIDNIGHT_ROLES` + expanded `pieces/pfl/midnight-pfl-pack/pack.json`.
 
+## Docker deployment (required for release)
+
+Studio in Compose serves **`engines/web/dist` baked into the image**. A cached `docker buildx bake studio` can leave a **stale bundle** (pieces appear blank while CI/Vite looks fine).
+
+For human rehearsal after Studio changes:
+
+```bash
+docker buildx bake studio --no-cache
+docker compose up -d --force-recreate studio
+```
+
+Hard-reload the browser and confirm `#meta-strip` / help shows the expected build SHA.
+
 ## Motion preview (browser)
 
-- **Poster** — live capture for browser-native pieces (matches Animate); `/api/render` for api-preview stills.
+- **Poster** — `/api/render` when Generate is supported; otherwise **HOVER · MOTION** (live-only pieces). No parallel LiveSession poster farm (avoids WebGL/WASM contention with the main stage).
 - **Hover/focus a card** (~320ms) — single **motion preview pane** (480×270, ~18 FPS, one piece at a time).
 - **Reduced motion** — motion pane disabled; posters and **Animate** still available.
 

@@ -4,8 +4,7 @@
 
 import { defaultsForPiece } from "../runtime/registry";
 import { performanceMeta } from "./catalog";
-import type { BrowserPreviewSession } from "./browserPreviewSession";
-import { usesLiveBrowserPreview } from "./browserPreviewSession";
+import { supportsMode } from "../runtime/registry";
 
 export type ThumbRequest = {
   pieceId: string;
@@ -54,47 +53,30 @@ export async function fetchPiecePosterThumb(
 }
 
 /** Limited concurrency queue for browser thumbnails. */
-async function posterBlobForPiece(
-  pieceId: string,
-  signal: AbortSignal | undefined,
-  previewSession?: BrowserPreviewSession,
-): Promise<Blob | null> {
-  if (usesLiveBrowserPreview(pieceId) && previewSession) {
-    return previewSession.captureLivePoster(pieceId);
-  }
-  return fetchPiecePosterThumb(thumbRequestForPiece(pieceId), signal);
-}
+export type ThumbLoadResult = "ok" | "failed" | "live-only";
 
+/** Posters via /api/render only — never spin up parallel LiveSessions (GPU/WASM isolation). */
 export async function loadThumbQueue(
   pieceIds: string[],
   onLoaded: (pieceId: string, url: string) => void,
-  opts: {
-    concurrency?: number;
-    signal?: AbortSignal;
-    previewSession?: BrowserPreviewSession;
-  } = {},
+  onFailed: (pieceId: string, reason: ThumbLoadResult) => void,
+  opts: { concurrency?: number; signal?: AbortSignal } = {},
 ): Promise<void> {
-  const live = opts.previewSession;
-  const apiConcurrency = opts.concurrency ?? 4;
-  const liveIds = pieceIds.filter((id) => usesLiveBrowserPreview(id));
-  const apiIds = pieceIds.filter((id) => !usesLiveBrowserPreview(id));
-
-  for (const pieceId of liveIds) {
-    if (opts.signal?.aborted) return;
-    const blob = await posterBlobForPiece(pieceId, opts.signal, live);
-    if (opts.signal?.aborted) return;
-    if (blob) onLoaded(pieceId, URL.createObjectURL(blob));
-  }
-
+  const apiConcurrency = opts.concurrency ?? 3;
   let idx = 0;
   const worker = async (): Promise<void> => {
-    while (idx < apiIds.length) {
+    while (idx < pieceIds.length) {
       if (opts.signal?.aborted) return;
       const i = idx++;
-      const pieceId = apiIds[i]!;
-      const blob = await posterBlobForPiece(pieceId, opts.signal, live);
+      const pieceId = pieceIds[i]!;
+      if (!supportsMode(pieceId, "generate")) {
+        onFailed(pieceId, "live-only");
+        continue;
+      }
+      const blob = await fetchPiecePosterThumb(thumbRequestForPiece(pieceId), opts.signal);
       if (opts.signal?.aborted) return;
       if (blob) onLoaded(pieceId, URL.createObjectURL(blob));
+      else onFailed(pieceId, "failed");
     }
   };
   await Promise.all(Array.from({ length: apiConcurrency }, () => worker()));
