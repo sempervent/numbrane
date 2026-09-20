@@ -121,8 +121,6 @@ export async function createGeometryIrPiece(
       scratch.height = ctx.height;
       const c2 = scratch.getContext("2d");
       if (!c2) return;
-      c2.fillStyle = "#050508";
-      c2.fillRect(0, 0, ctx.width, ctx.height);
       const cx = ctx.width * 0.5;
       const cy = ctx.height * 0.5;
       const constructionT = Math.min(1, Math.max(0, params["anim.constructionT"] ?? 1));
@@ -134,15 +132,62 @@ export async function createGeometryIrPiece(
       const breathe =
         holdComplete ? 1 : 1 + 0.04 * Math.sin(last.t * 1.15) * (endBehavior === 5 ? 1 : 0);
       const drawScale = scale * breathe;
+      const bg = c2.createRadialGradient(cx, cy, 0, cx, cy, Math.max(ctx.width, ctx.height) * 0.65);
+      bg.addColorStop(0, `hsla(${params.hue * 360}, 35%, 12%, 1)`);
+      bg.addColorStop(0.45, "#080a12");
+      bg.addColorStop(1, "#020204");
+      c2.fillStyle = bg;
+      c2.fillRect(0, 0, ctx.width, ctx.height);
+      c2.globalAlpha = 0.08 + params.density * 0.06;
+      c2.fillStyle = `hsl(${params.hue * 360} 40% 30%)`;
+      for (let i = 0; i < 48; i++) {
+        const a = (i / 48) * Math.PI * 2 + last.t * 0.02;
+        const rr = drawScale * (0.35 + (i % 7) * 0.04);
+        c2.fillRect(cx + Math.cos(a) * rr - 1, cy + Math.sin(a) * rr - 1, 2, 2);
+      }
+      c2.globalAlpha = 1;
       const rot = holdComplete
         ? params.rotation
         : params.rotation + last.t * 0.04 * params.chaos;
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
-      const rgb = `hsl(${params.hue * 360} 70% ${48 + audio.energy * 18}%)`;
+      const lum = 42 + params.exposure * 12 + audio.energy * 22;
+      const rgb = `hsl(${params.hue * 360} 78% ${lum}%)`;
+      const glow = `hsla(${params.hue * 360}, 85%, 62%, 0.35)`;
+      c2.lineCap = "round";
+      c2.lineJoin = "round";
+      c2.lineWidth = 1.4 + params.density * 1.4;
+      c2.shadowColor = glow;
+      c2.shadowBlur = 10 + params.density * 14;
       c2.strokeStyle = rgb;
-      c2.lineWidth = 1.2 + params.density * 0.8;
-      c2.globalAlpha = 0.92;
+      c2.globalAlpha = 0.95;
+      const strokeLine = (x0: number, y0: number, x1: number, y1: number) => {
+        c2.globalAlpha = 0.22;
+        c2.lineWidth = (1.4 + params.density * 1.4) * 2.2;
+        c2.shadowBlur = 18;
+        c2.beginPath();
+        c2.moveTo(x0, y0);
+        c2.lineTo(x1, y1);
+        c2.stroke();
+        c2.globalAlpha = 0.95;
+        c2.lineWidth = 1.4 + params.density * 1.4;
+        c2.shadowBlur = 10 + params.density * 14;
+        c2.beginPath();
+        c2.moveTo(x0, y0);
+        c2.lineTo(x1, y1);
+        c2.stroke();
+      };
+      const strokeCircle = (x: number, y: number, r: number, fill = false) => {
+        c2.beginPath();
+        c2.arc(x, y, r, 0, Math.PI * 2);
+        if (fill) {
+          c2.globalAlpha = 0.12;
+          c2.fillStyle = glow;
+          c2.fill();
+          c2.globalAlpha = 0.95;
+        }
+        c2.stroke();
+      };
       const xf = (x: number, y: number) => {
         const xr = x * cos - y * sin;
         const yr = x * sin + y * cos;
@@ -166,16 +211,11 @@ export async function createGeometryIrPiece(
             const [x1, y1] = xf(Number(p.x2), Number(p.y2));
             const mx = x0 + (x1 - x0) * local;
             const my = y0 + (y1 - y0) * local;
-            c2.beginPath();
-            c2.moveTo(x0, y0);
-            c2.lineTo(mx, my);
-            c2.stroke();
+            strokeLine(x0, y0, mx, my);
           } else if (p.kind === "circle") {
             const [x, y] = xf(Number(p.cx), Number(p.cy));
             const r = Math.max(2, Number(p.r) * drawScale * reveal * local);
-            c2.beginPath();
-            c2.arc(x, y, r, 0, Math.PI * 2);
-            c2.stroke();
+            strokeCircle(x, y, r, true);
           }
         }
       } else {
@@ -189,21 +229,17 @@ export async function createGeometryIrPiece(
           const [x1, y1] = xf(b.x, b.y);
           const mx = x0 + (x1 - x0) * local;
           const my = y0 + (y1 - y0) * local;
-          c2.beginPath();
-          c2.moveTo(x0, y0);
-          c2.lineTo(mx, my);
-          c2.stroke();
+          strokeLine(x0, y0, mx, my);
         }
         for (let i = 0; i < maxCenters; i++) {
           const p = ir.centers[i]!;
           const local = Math.min(1, buildProgress * totalSteps - (edgeCount + i));
           const [x, y] = xf(p.x, p.y);
           const r = Math.max(2, p.r * drawScale * reveal * Math.max(0.2, local));
-          c2.beginPath();
-          c2.arc(x, y, r, 0, Math.PI * 2);
-          c2.stroke();
+          strokeCircle(x, y, r, true);
         }
       }
+      c2.shadowBlur = 0;
       gl.bindTexture(gl.TEXTURE_2D, blit.tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
       gl.useProgram(blit.prog);
