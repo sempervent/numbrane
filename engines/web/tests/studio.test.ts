@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { KeyboardRegistry, type CommandContext } from "../src/studio/keyboard/registry";
+import {
+  KeyboardRegistry,
+  keyboardChordFromEvent,
+  type CommandContext,
+} from "../src/studio/keyboard/registry";
 import { moreLikeThis, applyMetaAxis } from "../src/studio/explore/variants";
 import { ExploreHistory, loadPrefs } from "../src/studio/prefs";
 import { matchesFilter, familyOf } from "../src/studio/catalog";
@@ -8,6 +12,13 @@ import { defaultMappingsForPiece } from "../src/studio/audio/mappings";
 import { presetsForPiece, ANIM_ARCS } from "../src/studio/presets";
 import { COMPOSITIONS } from "../src/studio/compositions";
 import { webpIsAnimated } from "../src/studio/export/api";
+
+function keyEv(init: KeyboardEventInit): KeyboardEvent {
+  return {
+    ...init,
+    preventDefault: () => undefined,
+  } as KeyboardEvent;
+}
 
 const baseCtx: CommandContext = {
   mode: "generate",
@@ -19,6 +30,30 @@ const baseCtx: CommandContext = {
 };
 
 describe("studio keyboard registry", () => {
+  it("normalizes physical ? and Shift+/ to the same chord", () => {
+    expect(keyboardChordFromEvent(keyEv({ key: "?", shiftKey: true }))).toBe("shift+/");
+    expect(keyboardChordFromEvent(keyEv({ key: "/", shiftKey: true }))).toBe("shift+/");
+  });
+
+  it("handle opens help when user presses ? (Shift+/ chord)", () => {
+    const reg = new KeyboardRegistry();
+    let help = false;
+    reg.register({
+      id: "help",
+      keys: "?",
+      match: ["?", "shift+/"],
+      label: "Show/hide keyboard commands",
+      group: "global",
+      handler: () => {
+        help = !help;
+      },
+    });
+    expect(reg.handle(keyEv({ key: "?", shiftKey: true }), baseCtx)).toBe(true);
+    expect(help).toBe(true);
+    expect(reg.handle(keyEv({ key: "/", shiftKey: true }), baseCtx)).toBe(true);
+    expect(help).toBe(false);
+  });
+
   it("help catalog stays aligned with registered commands", () => {
     const reg = new KeyboardRegistry();
     let help = false;

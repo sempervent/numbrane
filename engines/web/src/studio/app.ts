@@ -954,6 +954,7 @@ export class StudioApp {
         group: "global",
         handler: () => {
           this.helpVisible = !this.helpVisible;
+          if (this.helpVisible) this.renderHelp();
           this.syncChrome();
         },
       },
@@ -1069,7 +1070,7 @@ export class StudioApp {
       },
       {
         id: "prev",
-        keys: "[",
+        keys: "[ / ←",
         match: ["[", "arrowleft"],
         label: "Previous visualization",
         group: "animate",
@@ -1078,7 +1079,7 @@ export class StudioApp {
       },
       {
         id: "next",
-        keys: "]",
+        keys: "] / →",
         match: ["]", "arrowright"],
         label: "Next visualization",
         group: "animate",
