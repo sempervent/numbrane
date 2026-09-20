@@ -44,6 +44,11 @@ import { AnimationRuntime } from "./animationRuntime";
 import { FramePacingRing, type FramePacingSnapshot } from "./framePacing";
 import type { AnimationSpec } from "../studio/animation/spec";
 import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
+import { normalizeSpecForLivePerformance } from "../studio/animation/performance";
+import {
+  VisualLivenessWatchdog,
+  type VisualLivenessSnapshot,
+} from "./visualLiveness";
 
 export type HudStats = {
   fps: number;
@@ -82,6 +87,9 @@ export type LiveDiagnostics = {
   lastRenderMs: number;
   lastAudioMs: number;
   liveSessionCount: 1;
+  visualLiveness: VisualLivenessSnapshot;
+  animationPhase: number;
+  performanceMode: boolean;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -165,6 +173,8 @@ export class LiveSession {
   private layerEnabled = new Map<string, boolean>();
   private layerRenderOrder: string[] = [];
   private overlayAnimationRuntimes = new Map<string, AnimationRuntime>();
+  private readonly visualLiveness = new VisualLivenessWatchdog();
+  private sessionStartedPerfMs = performance.now();
   private readonly framePacing = new FramePacingRing(360);
   private lastUpdateMs = 0;
   private replayer: PerformanceReplayer | null = null;
@@ -291,6 +301,8 @@ export class LiveSession {
     if (loaded === 0) {
       throw new Error("No live runtimes loaded for scene");
     }
+    this.sessionStartedPerfMs = performance.now();
+    this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
   }
 
   /** Paint one or more logical frames immediately (Studio first-frame guarantee). */
@@ -327,11 +339,32 @@ export class LiveSession {
     entries: Array<{ layerId: string; spec: AnimationSpec }>,
   ): void {
     this.clearOverlayLayerAnimations();
+    const t = this.animationRuntime.animationTimeSec;
     for (const { layerId, spec } of entries) {
       const rt = new AnimationRuntime(spec);
       rt.performanceMode = true;
+      rt.seekTime(t);
       this.overlayAnimationRuntimes.set(layerId, rt);
     }
+  }
+
+  /** Non-destructive recovery when live output stalls while transport is playing. */
+  attemptLiveLivenessRecovery(liveMode: "animate" | "react" = "animate"): boolean {
+    const scene = this.runtime.getScene();
+    if (!scene) return false;
+    const primaryPiece = scene.layers[0]?.piece ?? "";
+    const normalized = normalizeSpecForLivePerformance(
+      primaryPiece,
+      this.animationRuntime.spec,
+      liveMode,
+    );
+    this.animationRuntime.setSpec(normalized);
+    this.animationRuntime.performanceMode = true;
+    this.animationRuntime.seekTime(this.animationRuntime.animationTimeSec);
+    this.runtime.setFreezePieceUpdates(false);
+    this.runtime.setSimulationPaused(false);
+    this.visualLiveness.markRecovering(performance.now());
+    return true;
   }
 
   getLayerPerformanceStates(): Array<{
@@ -421,6 +454,15 @@ export class LiveSession {
       lastRenderMs: this.hud.glMs,
       lastAudioMs: this.hud.audioMs,
       liveSessionCount: 1,
+      visualLiveness: this.visualLiveness.snapshot(
+        performance.now(),
+        snap.playing,
+        this.runtime.isSimulationPaused(),
+        this.animationRuntime.animationTimeSec,
+        this.sessionStartedPerfMs,
+      ),
+      animationPhase: this.animationRuntime.evaluate().phase,
+      performanceMode: this.animationRuntime.performanceMode,
     };
   }
 
@@ -907,6 +949,27 @@ export class LiveSession {
       try {
         // Digest-only — do not advance the comparison chain used by tests/diagnostics.
         this.readPresentedPixels(64, 36, false);
+        this.visualLiveness.noteDigest(
+          this.pixelDigest,
+          performance.now(),
+          snap.playing,
+          simPaused,
+        );
+        const live = this.visualLiveness.snapshot(
+          performance.now(),
+          snap.playing,
+          simPaused,
+          this.animationRuntime.animationTimeSec,
+          this.sessionStartedPerfMs,
+        );
+        if (
+          live.status === "stalled" &&
+          this.animationRuntime.performanceMode &&
+          snap.playing &&
+          !simPaused
+        ) {
+          this.attemptLiveLivenessRecovery("animate");
+        }
       } catch {
         /* readPixels may fail during resize; keep last digest */
       }
@@ -1027,6 +1090,7 @@ export class LiveSession {
     }
     const paused = this.runtime.isSimulationPaused();
     const envelopeComplete =
+      !this.animationRuntime.performanceMode &&
       (spec.endBehavior === "hold" || spec.endBehavior === "stop") &&
       animSt.phase >= 0.999 &&
       !hasComponent(spec, "generative");

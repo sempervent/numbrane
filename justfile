@@ -500,6 +500,14 @@ studio-docker-matrix: studio-docker-up
     npx playwright test -c playwright.docker-matrix.config.ts
 
 [group('studio')]
+studio-live-liveness-soak: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist --enable-unsafe-swiftshader}"
+    npx playwright test -c playwright.docker-matrix.config.ts --grep "Studio live liveness"
+
+[group('studio')]
 studio-performance-soak-60: studio-docker-up
     #!/usr/bin/env bash
     set -euo pipefail

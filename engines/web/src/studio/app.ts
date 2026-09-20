@@ -46,6 +46,7 @@ import {
 } from "./animation/methods";
 import { RandomAnimationSequencer } from "./animation/randomSequencer";
 import {
+  defaultLayerLiveMethodId,
   normalizeSpecForLivePerformance,
   resolveLivePerformanceMethodSpec,
   VisualSwitchSequencer,
@@ -368,6 +369,9 @@ export class StudioApp {
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
       performanceMode: this.session?.animationRuntime.performanceMode ?? false,
+      animationCyclePhase:
+        this.session?.animationRuntime.evaluate().cyclePhase ?? 0,
+      visualLiveness: diag?.visualLiveness ?? null,
       cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
       cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
       compositionId: this.compositionId,
@@ -2284,28 +2288,30 @@ export class StudioApp {
     if (!this.session || (this.mode !== "animate" && this.mode !== "react")) return;
     this.session.clearOverlayLayerAnimations();
     const scene = this.session.runtime.getScene();
-    if (!this.compositionId || !scene || scene.layers.length < 2) return;
-    const recipe = compositionById(this.compositionId);
-    if (!recipe?.layerMethods) return;
+    if (!scene || scene.layers.length < 2) return;
+    const recipe = this.compositionId ? compositionById(this.compositionId) : undefined;
     const overlays: Array<{ layerId: string; spec: import("./animation/spec").AnimationSpec }> = [];
     for (const layer of scene.layers) {
       if (layer.id === "L0") continue;
-      const methodId = recipe.layerMethods[layer.id];
-      if (!methodId) continue;
+      const methodId =
+        recipe?.layerMethods?.[layer.id] ??
+        defaultLayerLiveMethodId(layer.piece);
       overlays.push({
         layerId: layer.id,
         spec: resolveLivePerformanceMethodSpec(layer.piece, methodId, this.mode),
       });
     }
     this.session.setOverlayLayerAnimations(overlays);
-    const l0Method = recipe.layerMethods.L0;
     const l0 = scene.layers.find((l) => l.id === "L0");
+    const l0Method =
+      recipe?.layerMethods?.L0 ??
+      (l0 ? defaultLayerLiveMethodId(l0.piece) : undefined);
     if (l0Method && l0) {
       this.animationMethodId = l0Method;
       this.activeAnimationMethodId = l0Method;
       this.animationSpec = resolveLivePerformanceMethodSpec(l0.piece, l0Method, this.mode);
       this.session.setAnimationSpec(this.animationSpec, {
-        preserveTime: false,
+        preserveTime: true,
         performanceMode: true,
       });
       this.applyStudioPerformanceClock();
@@ -3523,12 +3529,13 @@ export class StudioApp {
       } else if (
         warmupMs > 2500 &&
         diag.renderCount > 0 &&
-        now - this.lastVisualChangeMs > 2000 &&
-        !this.session.runtime.isSimulationPaused() &&
-        !this.session.runtime.isPieceUpdatesFrozen() &&
-        !this.session.animationRuntime.performanceMode
+        (diag.visualLiveness?.status === "stalled" ||
+          (now - this.lastVisualChangeMs > 4500 &&
+            !this.session.runtime.isSimulationPaused() &&
+            !this.session.runtime.isPieceUpdatesFrozen()))
       ) {
         const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+        const animSt = this.session.animationRuntime.evaluate();
         this.stallError = [
           "Animation stalled",
           `piece: ${this.pieceId}`,
@@ -3536,6 +3543,9 @@ export class StudioApp {
           `update count: ${diag.updateCount}`,
           `render count: ${diag.renderCount}`,
           `present count: ${diag.presentCount}`,
+          `phase: ${animSt.phase.toFixed(3)}`,
+          `cyclePhase: ${animSt.cyclePhase.toFixed(3)}`,
+          diag.visualLiveness?.stallReason ?? "",
         ].join("\n");
         const stallBanner = document.getElementById("unsupported-banner");
         if (stallBanner) {

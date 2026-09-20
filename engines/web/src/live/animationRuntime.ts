@@ -3,20 +3,18 @@
  */
 
 import { cameraViewAtPerformanceTime, interpolateCamera } from "../studio/animation/camera";
-import {
-  animationPhase,
-  constructionProgress,
-  hasComponent,
-  type AnimationSpec,
-  type CameraView,
-} from "../studio/animation/spec";
+import { livePerformanceTimeAt, performanceCycleDurationSec } from "../studio/animation/livePerformanceTime";
+import { hasComponent, type AnimationSpec, type CameraView } from "../studio/animation/spec";
 import { ANIM_ARCS } from "../studio/presets";
 import type { LivePiece } from "./piece";
 
 export type AnimationRuntimeState = {
   animationTimeSec: number;
+  /** Repeating live phase (performance) or export envelope phase. */
   phase: number;
+  cyclePhase: number;
   constructionT: number;
+  performanceTimeSec: number;
   camera: CameraView;
   freezeGenerative: boolean;
   useSourceSnapshot: boolean;
@@ -76,13 +74,12 @@ export class AnimationRuntime {
   }
 
   evaluate(): AnimationRuntimeState {
-    const phase = this.performanceMode
-      ? Math.min(1, Math.max(0, this.timeSec / Math.max(0.25, this.spec.durationSec || 8)))
-      : animationPhase(this.timeSec, this.spec.durationSec, this.spec.endBehavior);
-    const constructionT = constructionProgress(phase, this.spec.endBehavior);
+    const live = livePerformanceTimeAt(this.timeSec, this.spec, this.performanceMode);
+    const phase = this.performanceMode ? live.cyclePhase : live.exportPhase;
+    const constructionT = live.constructionPhase;
     const cameraActive = hasComponent(this.spec, "camera");
     const generativeActive = hasComponent(this.spec, "generative");
-    const cycleSec = this.spec.durationSec > 0 ? this.spec.durationSec : 8;
+    const cycleSec = performanceCycleDurationSec(this.spec);
     const camera =
       cameraActive && this.spec.camera.motion !== "none"
         ? this.performanceMode
@@ -92,14 +89,16 @@ export class AnimationRuntime {
               cycleSec,
               this.spec.easing,
             )
-          : interpolateCamera(this.spec.camera, phase, this.spec.easing)
+          : interpolateCamera(this.spec.camera, live.exportPhase, this.spec.easing)
         : { centerX: 0, centerY: 0, scale: 1, rotation: 0 };
     const freezeGenerative = cameraActive && !generativeActive && !this.performanceMode;
     const useSourceSnapshot = freezeGenerative && this.snapshotReady;
     return {
       animationTimeSec: this.timeSec,
       phase,
+      cyclePhase: live.cyclePhase,
       constructionT,
+      performanceTimeSec: live.performanceTimeSec,
       camera,
       freezeGenerative,
       useSourceSnapshot,
@@ -125,15 +124,19 @@ export class AnimationRuntime {
     const st = this.evaluate();
     for (const piece of pieces) {
       piece.setParameter("anim.phase", st.phase);
+      piece.setParameter("anim.cyclePhase", st.cyclePhase);
       piece.setParameter("anim.constructionT", st.constructionT);
       piece.setParameter("anim.endBehavior", endBehaviorCode(this.spec.endBehavior));
       piece.setParameter("anim.timeSec", st.animationTimeSec);
+      piece.setParameter("anim.performanceTimeSec", st.performanceTimeSec);
+      piece.setParameter("anim.livePerformance", this.performanceMode ? 1 : 0);
 
       if (hasComponent(this.spec, "parameters")) {
         const arc = ANIM_ARCS.find((a) => a.id === this.spec.motion);
         const base = piece.getBaseParameters();
         if (arc) {
-          const next = arc.apply({ ...base }, st.phase);
+          const arcPhase = this.performanceMode ? st.cyclePhase : st.phase;
+          const next = arc.apply({ ...base }, arcPhase);
           for (const [k, v] of Object.entries(next)) {
             if (typeof v === "number") piece.setParameter(k, v);
           }

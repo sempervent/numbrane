@@ -20,6 +20,7 @@ export default defineConfig({
     "**/studio-pan-continuity.spec.ts",
     "**/studio-full-bleed.spec.ts",
     "**/studio-composition.spec.ts",
+    "**/studio-live-liveness.spec.ts",
   ],
   timeout: 120_000,
   fullyParallel: false,

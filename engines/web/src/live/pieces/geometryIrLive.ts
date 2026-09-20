@@ -85,7 +85,11 @@ export async function createGeometryIrPiece(
       last = frame;
       const endBehavior = Math.floor(params["anim.endBehavior"] ?? 5);
       const constructionT = params["anim.constructionT"] ?? 1;
-      if (endBehavior === 0 && constructionT >= 0.999) return;
+      const livePerf = (params["anim.livePerformance"] ?? 0) > 0.5;
+      if (endBehavior === 0 && constructionT >= 0.999 && !livePerf) return;
+      if (livePerf && constructionT >= 0.999) {
+        params.rotation += Math.sin(last.t * 0.35) * 0.002;
+      }
       if (audio.onset > 0.55) params.rotation += 0.03;
       params.rotation += audio.low * 0.008;
     },
@@ -126,11 +130,17 @@ export async function createGeometryIrPiece(
       const constructionT = Math.min(1, Math.max(0, params["anim.constructionT"] ?? 1));
       const endBehavior = params["anim.endBehavior"] ?? 5;
       const buildProgress = constructionT;
-      const holdComplete = constructionT >= 0.999 && endBehavior === 0;
+      const livePerf = (params["anim.livePerformance"] ?? 0) > 0.5;
+      const holdComplete = constructionT >= 0.999 && endBehavior === 0 && !livePerf;
       const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom *
         (holdComplete ? 1 : 1 + audio.energy * 0.12);
       const breathe =
-        holdComplete ? 1 : 1 + 0.04 * Math.sin(last.t * 1.15) * (endBehavior === 5 ? 1 : 0);
+        holdComplete
+          ? 1
+          : 1 +
+            0.04 *
+              Math.sin(last.t * 1.15) *
+              (endBehavior === 5 || livePerf ? 1 : 0);
       const drawScale = scale * breathe;
       const bg = c2.createRadialGradient(cx, cy, 0, cx, cy, Math.max(ctx.width, ctx.height) * 0.65);
       bg.addColorStop(0, `hsla(${params.hue * 360}, 35%, 12%, 1)`);

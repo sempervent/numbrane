@@ -6,7 +6,12 @@ import { rendererKindFor, studioSurface } from "../runtime/surface";
 import type { StudioMode } from "../keyboard/registry";
 import { hasComponent, type AnimationSpec } from "./spec";
 import { normalizeSpecForPiece } from "./capabilities";
-import { applyAnimationMethod, RANDOM_METHOD_ID } from "./methods";
+import {
+  applyAnimationMethod,
+  animationMethodsForPiece,
+  defaultAnimationMethodId,
+  RANDOM_METHOD_ID,
+} from "./methods";
 
 export type PerformanceTransition = "cut" | "crossfade" | "fade-black";
 
@@ -52,6 +57,23 @@ export function normalizeSpecForLivePerformance(
     out.endBehavior = "continuous";
   }
   return out;
+}
+
+/** Default live Animate method for a compositor layer (underlying piece, not mashup id). */
+export function defaultLayerLiveMethodId(pieceId: string): string {
+  const methods = animationMethodsForPiece(pieceId);
+  const continuousGen = methods.find(
+    (m) =>
+      m.category === "native" &&
+      m.source === "generative" &&
+      m.defaultEndBehavior === "continuous",
+  );
+  if (continuousGen) return continuousGen.id;
+  const construction = methods.find((m) => m.source === "construction");
+  if (construction) return construction.id;
+  const native = methods.find((m) => m.category === "native");
+  if (native) return native.id;
+  return defaultAnimationMethodId(pieceId);
 }
 
 export function resolveLivePerformanceMethodSpec(
