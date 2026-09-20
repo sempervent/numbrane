@@ -642,6 +642,41 @@ def delete_animation_job(job_id: str) -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+class PackExportBody(BaseModel):
+    pack: dict[str, Any]
+    performance_set: dict[str, Any] = Field(default_factory=dict)
+    preview: bool = False
+
+
+@app.post("/api/pack/export")
+def api_pack_export(body: PackExportBody) -> JSONResponse:
+    from docker.pack_export import PackExportFailure, export_pfl_pack
+
+    try:
+        result = export_pfl_pack(
+            artifacts=_ensure_artifacts(),
+            pack=dict(body.pack or {}),
+            performance_set=dict(body.performance_set or {}),
+            preview=body.preview,
+            python=PYTHON,
+            cli=CLI,
+            cwd=ROOT / "engines/python",
+            validate_piece=_validate_piece,
+        )
+    except PackExportFailure as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "error": str(exc),
+                "failed_item_id": exc.item_id,
+                "errors": exc.errors,
+            },
+        )
+    status = 200 if result.get("ok") else 500
+    return JSONResponse(status_code=status, content=result)
+
+
 def _inject_color_params(params: dict[str, Any]) -> dict[str, Any]:
     """Bridge Studio color_json / color_primary into Python renderer params."""
     out = dict(params)
