@@ -40,7 +40,7 @@ test.describe("Rendered visual quality census", () => {
         await waitForAnimationTime(page, warm + 12, 90_000);
         a = await sampleStagePixels(page);
       }
-      await waitForAnimationTime(page, warm + 8, 90_000);
+      await waitForAnimationTime(page, warm + 14, 90_000);
       const b = await sampleStagePixels(page);
       expect(frameIsVisible(b), `${pieceId}: stage never became visibly structured`).toBe(true);
       const q = classifyVisualQuality(
