@@ -5,6 +5,11 @@
 import type { CameraView } from "../animation/spec";
 import { analyzeRgbaGrid, type PixelFrame } from "../../live/pixelMetrics";
 
+function mirror01(c: number): number {
+  const m = ((c % 2) + 2) % 2;
+  return m < 1 ? m : 2 - m;
+}
+
 export function cameraTexUv(uvx: number, uvy: number, cam: CameraView): [number, number] {
   let px = uvx - 0.5;
   let py = uvy - 0.5;
@@ -73,14 +78,9 @@ export function samplePreviewImageGrid(
       const uvy = (gy + 0.5) / gridH;
       const [tux, tuy] = cameraTexUv(uvx, uvy, camera);
       const di = (gy * gridW + gx) * 4;
-      if (tux < 0 || tuy < 0 || tux > 1 || tuy > 1) {
-        grid[di] = 5;
-        grid[di + 1] = 5;
-        grid[di + 2] = 8;
-        grid[di + 3] = 255;
-        continue;
-      }
-      const [r, g, b, a] = sampleBilinear(src, sw, sh, tux, tuy);
+      const mux = mirror01(tux);
+      const muy = mirror01(tuy);
+      const [r, g, b, a] = sampleBilinear(src, sw, sh, mux, muy);
       grid[di] = r;
       grid[di + 1] = g;
       grid[di + 2] = b;

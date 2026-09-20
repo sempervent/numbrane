@@ -35,8 +35,8 @@ export function normalizeSpecForLivePerformance(
   ) {
     out.source = "composite";
     out.components = ["generative", "camera"];
-    out.endBehavior = out.motion === "drift" ? "continuous" : "loop";
-    if (out.durationSec <= 0) out.durationSec = 16;
+    out.endBehavior = "continuous";
+    if (out.durationSec <= 0) out.durationSec = out.motion === "drift" ? 16 : 8;
     return out;
   }
 

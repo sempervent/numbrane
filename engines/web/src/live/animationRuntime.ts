@@ -2,7 +2,7 @@
  * Live session animation semantics — timeline, camera, construction, freeze rules.
  */
 
-import { interpolateCamera } from "../studio/animation/camera";
+import { cameraViewAtPerformanceTime, interpolateCamera } from "../studio/animation/camera";
 import {
   animationPhase,
   constructionProgress,
@@ -76,13 +76,23 @@ export class AnimationRuntime {
   }
 
   evaluate(): AnimationRuntimeState {
-    const phase = animationPhase(this.timeSec, this.spec.durationSec, this.spec.endBehavior);
+    const phase = this.performanceMode
+      ? Math.min(1, Math.max(0, this.timeSec / Math.max(0.25, this.spec.durationSec || 8)))
+      : animationPhase(this.timeSec, this.spec.durationSec, this.spec.endBehavior);
     const constructionT = constructionProgress(phase, this.spec.endBehavior);
     const cameraActive = hasComponent(this.spec, "camera");
     const generativeActive = hasComponent(this.spec, "generative");
+    const cycleSec = this.spec.durationSec > 0 ? this.spec.durationSec : 8;
     const camera =
       cameraActive && this.spec.camera.motion !== "none"
-        ? interpolateCamera(this.spec.camera, phase, this.spec.easing)
+        ? this.performanceMode
+          ? cameraViewAtPerformanceTime(
+              this.spec.camera,
+              this.timeSec,
+              cycleSec,
+              this.spec.easing,
+            )
+          : interpolateCamera(this.spec.camera, phase, this.spec.easing)
         : { centerX: 0, centerY: 0, scale: 1, rotation: 0 };
     const freezeGenerative = cameraActive && !generativeActive && !this.performanceMode;
     const useSourceSnapshot = freezeGenerative && this.snapshotReady;
