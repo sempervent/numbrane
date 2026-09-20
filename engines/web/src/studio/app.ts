@@ -443,6 +443,14 @@ export class StudioApp {
     this.session?.runtime.transport.start();
   }
 
+  /** Studio Animate/React: unbounded live clock — never freeze generative sim for camera-only methods. */
+  private applyStudioPerformanceClock(): void {
+    if (!this.session) return;
+    if (this.mode !== "animate" && this.mode !== "react") return;
+    if (studioSurface(this.pieceId, this.mode) !== "live") return;
+    this.session.animationRuntime.performanceMode = true;
+  }
+
   private kickLiveSurface(): void {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
     this.session.ensureLoopRunning();
@@ -459,11 +467,12 @@ export class StudioApp {
     if (!this.session || this.mode !== "animate") return;
     this.animationSpec = normalizeSpecForLivePerformance(
       this.pieceId,
-      { ...this.animationSpec, durationSec: this.anim.durationSec },
+      this.animationSpec,
       this.mode,
     );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     this.session.setAnimationSpec(this.animationSpec);
+    this.applyStudioPerformanceClock();
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       this.syncApiPreviewAnimate(preview);
       return;
@@ -728,7 +737,10 @@ export class StudioApp {
       this.anim.durationSec = this.animationSpec.durationSec;
       this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
       this.session.setAnimationSpec(this.animationSpec);
+      this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
+    } else if (this.mode === "react") {
+      this.applyStudioPerformanceClock();
     }
     this.kickLiveSurface();
     this.stallError = "";
@@ -2182,6 +2194,10 @@ export class StudioApp {
     document.getElementById("help")?.classList.toggle("visible", this.helpVisible);
     document.getElementById("hud")?.classList.toggle("visible", this.hudVisible);
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
+    const stallBanner = document.getElementById("unsupported-banner");
+    if (stallBanner && this.helpVisible && stallBanner.textContent?.startsWith("Animation stalled")) {
+      stallBanner.classList.remove("visible");
+    }
     const perf = document.getElementById("performance-strip");
     if (perf) {
       perf.classList.toggle("visible", this.mode === "animate" && this.controlsVisible);
@@ -3143,7 +3159,9 @@ export class StudioApp {
         warmupMs > 2500 &&
         diag.renderCount > 0 &&
         now - this.lastVisualChangeMs > 2000 &&
-        !this.session.runtime.isSimulationPaused()
+        !this.session.runtime.isSimulationPaused() &&
+        !this.session.runtime.isPieceUpdatesFrozen() &&
+        !this.session.animationRuntime.performanceMode
       ) {
         const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
         this.stallError = [

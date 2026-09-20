@@ -12,6 +12,8 @@ import { defaultMappingsForPiece } from "../src/studio/audio/mappings";
 import { presetsForPiece, ANIM_ARCS } from "../src/studio/presets";
 import { COMPOSITIONS } from "../src/studio/compositions";
 import { webpIsAnimated } from "../src/studio/export/api";
+import { normalizeSpecForLivePerformance } from "../src/studio/animation/performance";
+import { applyAnimationMethod } from "../src/studio/animation/methods";
 
 function keyEv(init: KeyboardEventInit): KeyboardEvent {
   return {
@@ -116,6 +118,28 @@ describe("studio keyboard registry", () => {
     });
     expect(reg.helpCatalog("generate").mode.some((c) => c.id === "g")).toBe(true);
     expect(reg.helpCatalog("react").mode.some((c) => c.id === "g")).toBe(false);
+  });
+});
+
+describe("live performance normalization", () => {
+  it("generative live pieces use continuous unbounded clock", () => {
+    const spec = normalizeSpecForLivePerformance(
+      "reaction-diffusion/reaction-diffusion",
+      applyAnimationMethod("reaction-diffusion/reaction-diffusion", "continuous-evolution"),
+      "animate",
+    );
+    expect(spec.endBehavior).toBe("continuous");
+    expect(spec.durationSec).toBe(0);
+  });
+
+  it("geometry-ir camera-only methods composite generative on live surface", () => {
+    const spec = normalizeSpecForLivePerformance(
+      "reference/circle-lattice",
+      applyAnimationMethod("reference/circle-lattice", "pan-left-right"),
+      "animate",
+    );
+    expect(spec.source).toBe("composite");
+    expect(spec.components).toContain("generative");
   });
 });
 

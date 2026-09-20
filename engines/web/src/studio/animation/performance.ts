@@ -2,7 +2,7 @@
  * Live performance surface — unbounded PerformanceClock vs finite ExportTimeline.
  */
 
-import { rendererKindFor } from "../runtime/surface";
+import { rendererKindFor, studioSurface } from "../runtime/surface";
 import type { StudioMode } from "../keyboard/registry";
 import { hasComponent, type AnimationSpec } from "./spec";
 import { normalizeSpecForPiece } from "./capabilities";
@@ -10,9 +10,9 @@ import { applyAnimationMethod, RANDOM_METHOD_ID } from "./methods";
 
 export type PerformanceTransition = "cut" | "crossfade";
 
-function isLiveNativeBackend(pieceId: string): boolean {
-  const kind = rendererKindFor(pieceId, "animate");
-  return kind === "webgl-stateful" || kind === "wasm" || kind === "shader-native";
+/** Any piece that animates on the browser live surface (not python-api preview). */
+function isLiveNativeBackend(pieceId: string, mode: StudioMode = "animate"): boolean {
+  return studioSurface(pieceId, mode) === "live";
 }
 
 /** Normalize animation spec for indefinite browser-live performance. */
@@ -24,7 +24,7 @@ export function normalizeSpecForLivePerformance(
   const out = normalizeSpecForPiece(pieceId, { ...spec, camera: { ...spec.camera } });
   if (mode !== "animate" && mode !== "react") return out;
 
-  const liveNative = isLiveNativeBackend(pieceId);
+  const liveNative = isLiveNativeBackend(pieceId, mode);
 
   // Camera-only on live native must composite with generative — never freeze empty snapshot.
   if (

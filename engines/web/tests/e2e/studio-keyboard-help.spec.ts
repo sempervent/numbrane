@@ -11,9 +11,12 @@ test.describe("Studio keyboard help (?)", () => {
     await page.goto("/studio.html?mode=generate&piece=geometry/metatron&seed=42");
     await waitStudio(page);
 
-    await page.keyboard.press("?");
+    await page.keyboard.down("Shift");
+    await page.keyboard.press("/");
+    await page.keyboard.up("Shift");
     await expect(page.locator("#help")).toHaveClass(/visible/);
     await expect(page.locator("#help")).toContainText("Keyboard");
+    await expect(page.locator("#unsupported-banner")).not.toContainText("Animation stalled");
     await page.keyboard.press("?");
     await expect(page.locator("#help")).not.toHaveClass(/visible/);
 
