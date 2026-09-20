@@ -77,11 +77,7 @@ export function applyZoomMode(
   return { start: s0, end: s1 };
 }
 
-export function interpolateCamera(
-  spec: CameraAnimSpec,
-  phase: number,
-  easing: AnimationEasing,
-): CameraView {
+function resolveCameraEndpoints(spec: CameraAnimSpec): { start: CameraView; end: CameraView } {
   let { start, end } =
     spec.panPreset === "custom"
       ? { start: spec.start, end: spec.end }
@@ -89,12 +85,54 @@ export function interpolateCamera(
   if (spec.zoomMode !== "none") {
     ({ start, end } = applyZoomMode(start, end, spec.zoomMode, spec.anchorX, spec.anchorY));
   }
+  return { start, end };
+}
+
+/** Finite export / preview envelope — phase in [0, 1]. */
+export function interpolateCamera(
+  spec: CameraAnimSpec,
+  phase: number,
+  easing: AnimationEasing,
+): CameraView {
+  const { start, end } = resolveCameraEndpoints(spec);
   const t = easingFn(easing, phase);
   return {
     centerX: start.centerX + (end.centerX - start.centerX) * t,
     centerY: start.centerY + (end.centerY - start.centerY) * t,
     scale: start.scale + (end.scale - start.scale) * t,
     rotation: start.rotation + (end.rotation - start.rotation) * t,
+  };
+}
+
+/**
+ * Live performance camera — monotonic motion, no phase wrap.
+ * `cycleSec` is one full pan/zoom span (speed control), not a restart period.
+ */
+export function cameraViewAtPerformanceTime(
+  spec: CameraAnimSpec,
+  timeSec: number,
+  cycleSec: number,
+  easing: AnimationEasing,
+): CameraView {
+  const { start, end } = resolveCameraEndpoints(spec);
+  const period = Math.max(0.25, cycleSec);
+  const spanX = end.centerX - start.centerX;
+  const spanY = end.centerY - start.centerY;
+  const spanScale = end.scale - start.scale;
+  const spanRot = end.rotation - start.rotation;
+  const cycles = timeSec / period;
+  const whole = Math.floor(cycles);
+  const frac = cycles - whole;
+  const t = easingFn(easing, frac);
+  const baseX = start.centerX + spanX * whole;
+  const baseY = start.centerY + spanY * whole;
+  const baseScale = start.scale + spanScale * whole;
+  const baseRot = start.rotation + spanRot * whole;
+  return {
+    centerX: baseX + spanX * t,
+    centerY: baseY + spanY * t,
+    scale: baseScale + spanScale * t,
+    rotation: baseRot + spanRot * t,
   };
 }
 

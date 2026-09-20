@@ -37,6 +37,7 @@ import type { FrameState } from "./piece";
 import {
   analyzeRgbaGrid,
   downsampleRgba,
+  luminanceAt,
   type PixelFrame,
 } from "./pixelMetrics";
 import { AnimationRuntime } from "./animationRuntime";
@@ -88,6 +89,14 @@ export type LiveSessionOptions = {
   fps?: number;
   outputOnly?: boolean;
   transparent?: boolean;
+  /** Match compositor backing store to visible stage (Studio performance capture). */
+  stageViewportFit?: boolean;
+};
+
+export type SetAnimationSpecOptions = {
+  /** Keep monotonic performance clock when adjusting export/speed metadata. */
+  preserveTime?: boolean;
+  performanceMode?: boolean;
 };
 
 export class LiveSession {
@@ -105,6 +114,8 @@ export class LiveSession {
   private lastOnset = false;
   private quality: QualityProfile = "high";
   private resolution: ResolutionPreset = "1920x1080";
+  private stageViewportFit = false;
+  private resizeObserver: ResizeObserver | null = null;
   private raf = 0;
   private running = false;
   private hud: HudStats = {
@@ -154,6 +165,7 @@ export class LiveSession {
 
   constructor(opts: LiveSessionOptions) {
     this.canvas = opts.canvas;
+    this.stageViewportFit = opts.stageViewportFit ?? false;
     this.compositor = new Compositor(opts.canvas);
     this.compositor.transparent = opts.transparent ?? false;
     this.runtime = new LiveRuntime({ seed: opts.seed, fps: opts.fps });
@@ -172,7 +184,13 @@ export class LiveSession {
 
   async init(): Promise<void> {
     await this.compositor.init();
-    this.applyResolution(this.resolution);
+    if (this.stageViewportFit) {
+      this.fitStageViewport();
+      this.resizeObserver = new ResizeObserver(() => this.fitStageViewport());
+      this.resizeObserver.observe(this.canvas.parentElement ?? this.canvas);
+    } else {
+      this.applyResolution(this.resolution);
+    }
     this.audio.onStatusChange = () => this.emitStatus();
     // MIDI is optional — do not request access on startup.
     this.emitStatus({
@@ -206,10 +224,20 @@ export class LiveSession {
     this.layerOpacity.clear();
     this.layerBlend.clear();
     const gl = this.compositor.gl;
-    const scale = QUALITY_SCALE[this.quality];
-    const { width, height } = parseResolution(this.resolution);
-    const w = Math.max(1, Math.floor(width * Math.min(1, scale)));
-    const h = Math.max(1, Math.floor(height * Math.min(1, scale)));
+    let w: number;
+    let h: number;
+    if (this.stageViewportFit) {
+      const rect = this.canvas.getBoundingClientRect();
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      const scale = QUALITY_SCALE[this.quality];
+      w = Math.max(1, Math.floor(rect.width * dpr * Math.min(1, scale)));
+      h = Math.max(1, Math.floor(rect.height * dpr * Math.min(1, scale)));
+    } else {
+      const scale = QUALITY_SCALE[this.quality];
+      const { width, height } = parseResolution(this.resolution);
+      w = Math.max(1, Math.floor(width * Math.min(1, scale)));
+      h = Math.max(1, Math.floor(height * Math.min(1, scale)));
+    }
     this.compositor.resize(w, h);
     this.canvas.width = w;
     this.canvas.height = h;
@@ -255,12 +283,19 @@ export class LiveSession {
     }
   }
 
-  setAnimationSpec(spec: AnimationSpec): void {
+  setAnimationSpec(spec: AnimationSpec, opts?: SetAnimationSpecOptions): void {
+    const prevTime = this.animationRuntime.animationTimeSec;
     this.animationRuntime.setSpec(spec);
-    this.animationRuntime.performanceMode =
-      spec.endBehavior === "continuous" && spec.durationSec <= 0;
-    this.animationRuntime.reset();
-    this.lastAnimWallMs = 0;
+    const perf =
+      opts?.performanceMode ??
+      (spec.endBehavior === "continuous" && spec.durationSec <= 0);
+    this.animationRuntime.performanceMode = perf;
+    if (opts?.preserveTime) {
+      this.animationRuntime.seekTime(prevTime);
+    } else {
+      this.animationRuntime.reset();
+      this.lastAnimWallMs = 0;
+    }
   }
 
   getAnimationSpec(): AnimationSpec {
@@ -477,10 +512,29 @@ export class LiveSession {
 
   applyResolution(preset: ResolutionPreset): void {
     this.resolution = preset;
+    if (this.stageViewportFit) {
+      this.fitStageViewport();
+      return;
+    }
     const { width, height } = parseResolution(preset);
+    this.applyRenderSize(width, height);
+  }
+
+  /** Backing store = visible stage × DPR (performance full-bleed). */
+  fitStageViewport(): void {
+    const parent = this.canvas.parentElement?.getBoundingClientRect();
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cssW = Math.max(1, parent?.width || rect.width || window.innerWidth);
+    const cssH = Math.max(1, parent?.height || rect.height || window.innerHeight);
+    this.applyRenderSize(cssW, cssH, dpr);
+  }
+
+  private applyRenderSize(cssWidth: number, cssHeight: number, dpr = 1): void {
     const scale = QUALITY_SCALE[this.quality];
-    const w = Math.max(1, Math.floor(width * Math.min(1, scale)));
-    const h = Math.max(1, Math.floor(height * Math.min(1, scale)));
+    const w = Math.max(1, Math.floor(cssWidth * dpr * Math.min(1, scale)));
+    const h = Math.max(1, Math.floor(cssHeight * dpr * Math.min(1, scale)));
+    if (this.canvas.width === w && this.canvas.height === h) return;
     this.canvas.width = w;
     this.canvas.height = h;
     this.compositor.resize(w, h);
@@ -551,6 +605,64 @@ export class LiveSession {
       stats: this.baselinePresentedStats!,
     });
     return stats.changedPixelFraction;
+  }
+
+  /** Corner luminance from presented frame (grid space — catches letterboxed scope). */
+  readPresentedScopeMetrics(gridW = 32, gridH = 18): {
+    borderMeanLuma: number;
+    innerMeanLuma: number;
+    corners: { tl: number; tr: number; bl: number; br: number };
+  } {
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    let borderSum = 0;
+    let borderN = 0;
+    let innerSum = 0;
+    let innerN = 0;
+    for (let gy = 0; gy < gridH; gy++) {
+      for (let gx = 0; gx < gridW; gx++) {
+        const lum = luminanceAt(grid, gy * gridW + gx);
+        const border = gx === 0 || gy === 0 || gx === gridW - 1 || gy === gridH - 1;
+        if (border) {
+          borderSum += lum;
+          borderN += 1;
+        } else {
+          innerSum += lum;
+          innerN += 1;
+        }
+      }
+    }
+    const cell = (gx: number, gy: number) => luminanceAt(grid, gy * gridW + gx);
+    return {
+      borderMeanLuma: borderSum / Math.max(1, borderN),
+      innerMeanLuma: innerSum / Math.max(1, innerN),
+      corners: {
+        bl: cell(0, 0),
+        br: cell(gridW - 1, 0),
+        tl: cell(0, gridH - 1),
+        tr: cell(gridW - 1, gridH - 1),
+      },
+    };
+  }
+
+  readPresentedCornerLuminances(gridW = 32, gridH = 18): {
+    tl: number;
+    tr: number;
+    bl: number;
+    br: number;
+  } {
+    const gl = this.compositor.gl;
+    const cw = this.canvas.width;
+    const ch = this.canvas.height;
+    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    return this.readPresentedScopeMetrics(gridW, gridH).corners;
   }
 
   /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */

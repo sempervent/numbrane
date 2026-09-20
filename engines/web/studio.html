@@ -25,7 +25,7 @@
         cursor: none;
       }
       body.controls-visible, body.pointer-active { cursor: default; }
-      #stage-wrap { position: fixed; inset: 0; background: #000; }
+      #stage-wrap { position: fixed; inset: 0; background: #000; overflow: hidden; }
       #stage { width: 100%; height: 100%; display: block; }
       #generate-preview {
         position: absolute; inset: 0; width: 100%; height: 100%;
@@ -33,9 +33,12 @@
       }
       #generate-preview.visible { display: block; }
       #switch-hold {
-        position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+        position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
         background: #000; display: none; z-index: 2; opacity: 1;
-        transition: opacity 300ms ease;
+        transition: opacity 680ms ease;
+      }
+      body.performance-stage #generate-preview.visible {
+        object-fit: cover;
       }
       #switch-hold.visible { display: block; }
       #switch-hold.releasing { opacity: 0; }
@@ -62,10 +65,68 @@
         border-radius: 12px; padding: 1rem 1.25rem; display: none;
       }
       #unsupported-banner.visible { display: block; }
-      #browser .piece img.thumb {
-        width: 100%; height: 72px; object-fit: cover; display: block;
-        margin-bottom: 0.35rem; border-radius: 4px; background: #111;
+      #browser .browser-lede {
+        color: var(--mute); font-size: 11px; margin: 0 0 0.5rem; line-height: 1.35;
       }
+      #browser .browser-mini {
+        width: 100%; margin: 0 0 0.5rem; padding: 0.35rem 0.5rem;
+        background: rgba(18, 22, 32, 0.9); color: var(--mute);
+        border: 1px solid var(--line); border-radius: 6px; font: inherit; cursor: pointer;
+      }
+      #browser .piece-grid {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem;
+      }
+      #browser .piece {
+        display: flex; flex-direction: column; padding: 0.45rem;
+      }
+      #browser .thumb-wrap {
+        position: relative; width: 100%; aspect-ratio: 16 / 9;
+        border-radius: 6px; overflow: hidden; background: #0a0c10; margin-bottom: 0.35rem;
+      }
+      #browser .piece img.thumb {
+        width: 100%; height: 100%; object-fit: cover; display: block;
+        margin: 0; border-radius: 0; background: #111;
+      }
+      #browser .thumb-placeholder {
+        position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+        color: var(--mute); font-size: 10px; letter-spacing: 0.06em;
+        text-align: center; padding: 0.25rem;
+      }
+      #browser .thumb-placeholder.failed { color: var(--danger, #f87171); }
+      #browser .name-row { display: flex; align-items: center; justify-content: space-between; gap: 0.25rem; }
+      #browser .piece .star {
+        border: 0; background: transparent; color: var(--mute); cursor: pointer;
+        font-size: 14px; padding: 0; line-height: 1;
+      }
+      #browser .piece .star.on { color: var(--accent); }
+      #browser .badges { display: flex; flex-wrap: wrap; gap: 0.2rem; margin: 0.15rem 0; }
+      #browser .badge {
+        font-size: 9px; letter-spacing: 0.04em; text-transform: uppercase;
+        padding: 0.1rem 0.35rem; border-radius: 999px;
+        border: 1px solid var(--line); color: var(--accent);
+      }
+      #browser .piece-actions {
+        display: grid; grid-template-columns: 1fr 1fr; gap: 0.25rem; margin-top: 0.35rem;
+      }
+      #browser .piece-actions button {
+        font-size: 10px; padding: 0.25rem 0.35rem; margin: 0;
+        background: rgba(18, 22, 32, 0.95); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 4px; cursor: pointer;
+      }
+      #browser .piece-actions button:hover { border-color: var(--accent); color: var(--accent); }
+      #browser .browser-motion {
+        margin: 0 0 0.55rem; border: 1px solid var(--line); border-radius: 8px;
+        overflow: hidden; background: #050508;
+      }
+      #browser .browser-motion[hidden] { display: none !important; }
+      #browser #browser-motion-canvas {
+        width: 100%; height: auto; display: block; aspect-ratio: 16 / 9;
+      }
+      #browser .browser-motion-label {
+        margin: 0; padding: 0.35rem 0.5rem; font-size: 10px; color: var(--mute);
+        letter-spacing: 0.04em;
+      }
+      #browser .piece.motion-active { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(125,211,252,0.25); }
       #chrome {
         position: fixed; inset: 0; pointer-events: none; z-index: 20;
       }
@@ -141,7 +202,7 @@
         font-size: 11px; white-space: pre; line-height: 1.45;
       }
       #browser {
-        left: 1rem; top: 4.2rem; width: min(420px, calc(100vw - 2rem));
+        left: 1rem; top: 4.2rem; width: min(560px, calc(100vw - 2rem));
         max-height: calc(100vh - 5.5rem); overflow: auto; padding: 0.9rem;
       }
       #browser .piece {
@@ -220,7 +281,14 @@
         <button type="button" data-mode="react">React</button>
       </div>
       <aside id="config" class="panel visible"></aside>
-      <aside id="browser" class="panel"></aside>
+      <aside id="browser" class="panel">
+        <div id="browser-header"></div>
+        <div id="browser-motion" class="browser-motion" hidden>
+          <canvas id="browser-motion-canvas" width="480" height="270" aria-label="Motion preview"></canvas>
+          <p id="browser-motion-label" class="browser-motion-label"></p>
+        </div>
+        <div id="browser-list-host"></div>
+      </aside>
       <div id="help" class="panel"></div>
       <div id="hud" class="panel"></div>
       <div id="meta-strip"></div>

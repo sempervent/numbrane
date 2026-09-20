@@ -11,7 +11,14 @@ import {
   type StudioMode,
 } from "./keyboard/registry";
 import { ExploreHistory, loadPrefs, savePrefs, type StudioPrefs } from "./prefs";
-import { fetchPieceCatalog, matchesFilter, type PieceInfo } from "./catalog";
+import { fetchPieceCatalog, type PieceInfo } from "./catalog";
+import {
+  filterPerformanceCatalog,
+  performanceMeta,
+  type PerformanceBrowserFilter,
+} from "./performance/catalog";
+import { loadThumbQueue } from "./performance/browserThumbs";
+import { BrowserPreviewSession } from "./performance/browserPreviewSession";
 import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
 import {
   resolveStudioDescriptor,
@@ -153,7 +160,7 @@ export class StudioApp {
   helpVisible = false;
   hudVisible = false;
   browserVisible = false;
-  filter = "all";
+  performanceFilter: PerformanceBrowserFilter = "curated";
   locked = new Set<string>();
   pflStyleId = "";
   mutationScale: MutationScale = "moderate";
@@ -213,8 +220,16 @@ export class StudioApp {
   visualSwitchIntervalSec = 30;
   visualSequenceSeed = 137;
   pieceTransition: PerformanceTransition = "crossfade";
+  /** Visible crossfade duration (ms) — hold overlay fades while incoming stage is live. */
+  private readonly visualCrossfadeMs = 680;
   performanceFavorites: string[] = [];
   performanceCycleFavoritesOnly = false;
+  performanceCyclePackOrder = false;
+  private browserPreview: BrowserPreviewSession | null = null;
+  private browserMotionTimer: number | null = null;
+  private browserMotionPieceId: string | null = null;
+  private browserThumbFailed = new Set<string>();
+  private browserThumbLiveOnly = new Set<string>();
   private randomSequencer: RandomAnimationSequencer | null = null;
   private visualSequencer: VisualSwitchSequencer | null = null;
   private lastRandomTickMs = 0;
@@ -262,6 +277,9 @@ export class StudioApp {
     this.params.hue = hexToHueTurn(this.color.primary.value);
     this.controlsVisible = this.prefs.controlsVisible;
     this.history = new ExploreHistory(this.prefs.recent);
+    this.performanceFavorites = [...this.prefs.performanceShortlist];
+    this.performanceCycleFavoritesOnly = this.prefs.performanceCycleShortlistOnly;
+    this.performanceCyclePackOrder = this.prefs.performanceCyclePackOrder;
   }
 
   async boot(): Promise<void> {
@@ -286,6 +304,7 @@ export class StudioApp {
       seed: this.seed,
       outputOnly: false,
       transparent: false,
+      stageViewportFit: true,
     });
     await this.session.init();
     window.__NUMBRANE_STUDIO__ = this;
@@ -348,6 +367,9 @@ export class StudioApp {
       activeAnimationMethodId: this.activeAnimationMethodId,
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
+      performanceMode: this.session?.animationRuntime.performanceMode ?? false,
+      cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
+      cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
     };
@@ -360,6 +382,19 @@ export class StudioApp {
     this.color.mode = "solid";
     this.applyLiveColor();
     this.renderConfig();
+  }
+
+  sampleStageScopeMetrics(): {
+    borderMeanLuma: number;
+    innerMeanLuma: number;
+    corners: { tl: number; tr: number; bl: number; br: number };
+  } | null {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
+    try {
+      return this.session.readPresentedScopeMetrics();
+    } catch {
+      return null;
+    }
   }
 
   /** Sample visible presented art (live canvas or api-preview img) for tests/diagnostics. */
@@ -463,7 +498,7 @@ export class StudioApp {
     }
   }
 
-  syncAnimationSpecToSession(preview = true): void {
+  syncAnimationSpecToSession(preview = true, opts?: { resetTime?: boolean }): void {
     if (!this.session || this.mode !== "animate") return;
     this.animationSpec = normalizeSpecForLivePerformance(
       this.pieceId,
@@ -471,7 +506,13 @@ export class StudioApp {
       this.mode,
     );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
-    this.session.setAnimationSpec(this.animationSpec);
+    const livePerf =
+      studioSurface(this.pieceId, this.mode) === "live" &&
+      (this.mode === "animate" || this.mode === "react");
+    this.session.setAnimationSpec(this.animationSpec, {
+      preserveTime: opts?.resetTime !== true,
+      performanceMode: livePerf,
+    });
     this.applyStudioPerformanceClock();
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       this.syncApiPreviewAnimate(preview);
@@ -585,6 +626,8 @@ export class StudioApp {
   }
 
   private async applyPieceScene(): Promise<void> {
+    this.hideBrowserMotionPane();
+    await this.browserPreview?.teardown();
     this.stopApiAnim();
     const surface = studioSurface(this.pieceId, this.mode);
     const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -736,12 +779,16 @@ export class StudioApp {
       );
       this.anim.durationSec = this.animationSpec.durationSec;
       this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
-      this.session.setAnimationSpec(this.animationSpec);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: false,
+        performanceMode: true,
+      });
       this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
     }
+    this.session.fitStageViewport();
     this.kickLiveSurface();
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
@@ -1286,7 +1333,7 @@ export class StudioApp {
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
-      this.syncAnimationSpecToSession(true);
+      this.syncAnimationSpecToSession(true, { resetTime: true });
     }
     this.renderConfig();
   }
@@ -1312,7 +1359,7 @@ export class StudioApp {
       this.mode,
     );
     this.anim.durationSec = this.animationSpec.durationSec;
-    this.syncAnimationSpecToSession(true);
+    this.syncAnimationSpecToSession(true, { resetTime: true });
     this.lastRandomTickMs = performance.now();
   }
 
@@ -1325,7 +1372,7 @@ export class StudioApp {
       applyAnimationMethod(this.pieceId, next),
       this.mode,
     );
-    this.syncAnimationSpecToSession(true);
+    this.syncAnimationSpecToSession(true, { resetTime: true });
     this.lastRandomTickMs = performance.now();
     this.renderConfig();
   }
@@ -1374,6 +1421,8 @@ export class StudioApp {
   async setPiece(pieceId: string): Promise<void> {
     this.browserThumbAbort?.abort();
     this.browserThumbAbort = null;
+    this.hideBrowserMotionPane();
+    await this.browserPreview?.teardown();
     const preserveCurrentVisual = this.mode === "animate" || this.mode === "react";
     if (preserveCurrentVisual) this.beginVisualTransition();
     this.pieceId = pieceId;
@@ -1468,10 +1517,88 @@ export class StudioApp {
 
   private performancePiecePool(): string[] {
     const all = this.pieces.map((p) => p.piece_id);
+    if (this.performanceCyclePackOrder && this.pack.items.length > 0) {
+      const packIds = this.pack.items
+        .map((i) => i.pieceId)
+        .filter((id, idx, arr) => arr.indexOf(id) === idx && all.includes(id));
+      if (packIds.length > 0) return packIds;
+    }
     if (this.performanceCycleFavoritesOnly && this.performanceFavorites.length > 0) {
       return this.performanceFavorites.filter((id) => all.includes(id));
     }
-    return all;
+    const curated = filterPerformanceCatalog(this.pieces, "curated", this.performanceFavorites).map(
+      (p) => p.piece_id,
+    );
+    return curated.length >= 4 ? curated : all;
+  }
+
+  private ensureBrowserPreview(): BrowserPreviewSession | null {
+    const canvas = document.getElementById("browser-motion-canvas") as HTMLCanvasElement | null;
+    if (!canvas) return null;
+    if (!this.browserPreview) this.browserPreview = new BrowserPreviewSession(canvas);
+    return this.browserPreview;
+  }
+
+  private clearBrowserMotionTimer(): void {
+    if (this.browserMotionTimer != null) {
+      window.clearTimeout(this.browserMotionTimer);
+      this.browserMotionTimer = null;
+    }
+  }
+
+  private hideBrowserMotionPane(): void {
+    this.clearBrowserMotionTimer();
+    this.browserMotionPieceId = null;
+    void this.browserPreview?.stopMotion();
+    document.getElementById("browser-motion")?.setAttribute("hidden", "");
+    document.querySelectorAll("#browser .piece.motion-active").forEach((el) => {
+      el.classList.remove("motion-active");
+    });
+  }
+
+  private scheduleBrowserMotion(pieceId: string, label: string): void {
+    this.clearBrowserMotionTimer();
+    if (!this.browserVisible) return;
+    const preview = this.ensureBrowserPreview();
+    if (!preview || preview.isReducedMotion) return;
+    this.browserMotionTimer = window.setTimeout(() => {
+      this.browserMotionTimer = null;
+      if (!this.browserVisible) return;
+      this.browserMotionPieceId = pieceId;
+      const pane = document.getElementById("browser-motion");
+      const cap = document.getElementById("browser-motion-label");
+      pane?.removeAttribute("hidden");
+      if (cap) cap.textContent = `Motion preview · ${label}`;
+      document.querySelectorAll("#browser .piece.motion-active").forEach((el) => {
+        el.classList.remove("motion-active");
+      });
+      document
+        .querySelector(`#browser .piece[data-piece-id="${CSS.escape(pieceId)}"]`)
+        ?.classList.add("motion-active");
+      void preview.startMotion(pieceId).catch(() => {
+        if (cap) cap.textContent = "MOTION FAILED — use Animate";
+      });
+    }, 320);
+  }
+
+  togglePerformanceShortlist(pieceId: string): void {
+    const i = this.performanceFavorites.indexOf(pieceId);
+    if (i >= 0) this.performanceFavorites.splice(i, 1);
+    else this.performanceFavorites.unshift(pieceId);
+    this.performanceFavorites = this.performanceFavorites.slice(0, 24);
+    this.persist();
+    toast(
+      i >= 0 ? "removed from performance shortlist" : `shortlisted (${this.performanceFavorites.length})`,
+    );
+    this.renderBrowser();
+  }
+
+  async auditionPieceFromBrowser(pieceId: string): Promise<void> {
+    await this.setPiece(pieceId);
+    if (this.mode !== "animate") await this.setMode("animate");
+    this.browserVisible = false;
+    this.syncChrome();
+    toast(`Animate · ${pieceId.split("/").pop()}`);
   }
 
   private initVisualSequencer(): void {
@@ -1786,6 +1913,19 @@ export class StudioApp {
     toast(`loaded Midnight PFL Pack (${fixture.items.length} items)`);
   }
 
+  async loadEpisode1PackFixture(): Promise<void> {
+    const fixture = await fetchPackFixture("episode-1-visual-set");
+    if (!fixture) {
+      toast("Episode 1 visual set fixture missing");
+      return;
+    }
+    this.pack = fixture;
+    savePackDraft(this.pack);
+    this.packPanelOpen = true;
+    this.renderConfig();
+    toast(`loaded Episode 1 set (${fixture.items.length} items)`);
+  }
+
   async saveSeedState(): Promise<void> {
     const id = newSeedId(this.pieceId, this.seed);
     let previewDataUrl: string | undefined;
@@ -2041,7 +2181,10 @@ export class StudioApp {
       // Fallback: browser logical-frame WebM path
       try {
         const exportSpec = normalizeSpecForPiece(this.pieceId, this.animationSpec);
-        this.session?.setAnimationSpec(exportSpec);
+        this.session?.setAnimationSpec(exportSpec, {
+          performanceMode: false,
+          preserveTime: false,
+        });
         let exportPrimed = false;
         const result = await exportAnimation(
           { ...cfg, loop: exportLoopFlag(exportSpec.endBehavior) },
@@ -2093,6 +2236,9 @@ export class StudioApp {
 
   private persist(): void {
     this.prefs.color = this.color;
+    this.prefs.performanceShortlist = [...this.performanceFavorites];
+    this.prefs.performanceCycleShortlistOnly = this.performanceCycleFavoritesOnly;
+    this.prefs.performanceCyclePackOrder = this.performanceCyclePackOrder;
     savePrefs(this.prefs);
   }
 
@@ -2123,6 +2269,7 @@ export class StudioApp {
   }
 
   private beginVisualTransition(): void {
+    if (this.pieceTransition === "cut") return;
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold) return;
     const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -2165,11 +2312,13 @@ export class StudioApp {
       hold.removeAttribute("src");
       return;
     }
+    hold.style.transition = `opacity ${this.visualCrossfadeMs}ms ease`;
     hold.classList.add("releasing");
     window.setTimeout(() => {
       hold.classList.remove("visible", "releasing", "fallback-drift");
       hold.removeAttribute("src");
-    }, 320);
+      hold.style.transition = "";
+    }, this.visualCrossfadeMs + 40);
   }
 
   private keepTransitionAsFallback(): void {
@@ -2188,12 +2337,17 @@ export class StudioApp {
   }
 
   syncChrome(): void {
+    document.body.classList.toggle(
+      "performance-stage",
+      this.mode === "animate" || this.mode === "react",
+    );
     document.body.classList.toggle("controls-visible", this.controlsVisible);
     document.body.classList.toggle("controls-hidden", !this.controlsVisible);
     document.getElementById("config")?.classList.toggle("visible", this.controlsVisible);
     document.getElementById("help")?.classList.toggle("visible", this.helpVisible);
     document.getElementById("hud")?.classList.toggle("visible", this.hudVisible);
     document.getElementById("browser")?.classList.toggle("visible", this.browserVisible);
+    if (!this.browserVisible) this.hideBrowserMotionPane();
     const stallBanner = document.getElementById("unsupported-banner");
     if (stallBanner && this.helpVisible && stallBanner.textContent?.startsWith("Animation stalled")) {
       stallBanner.classList.remove("visible");
@@ -2243,97 +2397,170 @@ export class StudioApp {
   renderBrowser(): void {
     const el = document.getElementById("browser");
     if (!el) return;
-    const filters = [
-      "all",
-      "still",
-      "animated",
-      "realtime",
-      "audio-reactive",
-      "geometry",
-      "growth",
-      "fields",
-      "fractals",
-      "tiling",
-      "particles",
-      "mashups",
+    this.hideBrowserMotionPane();
+    const header = document.getElementById("browser-header");
+    const host = document.getElementById("browser-list-host");
+    if (!header || !host) return;
+    const filters: { id: PerformanceBrowserFilter; label: string }[] = [
+      { id: "curated", label: "curated" },
+      { id: "shortlist", label: "★ shortlist" },
+      { id: "midnight", label: "midnight" },
+      { id: "intense", label: "intense" },
+      { id: "calm", label: "calm" },
+      { id: "dense", label: "dense" },
+      { id: "geometry", label: "geometry" },
+      { id: "all-animated", label: "all animate" },
     ];
-    const list = this.pieces.filter((p) => matchesFilter(p, this.filter));
-    el.innerHTML = `
-      <h1 style="font-family:Syne,sans-serif;margin:0 0 0.5rem">Pieces</h1>
+    const list = filterPerformanceCatalog(
+      this.pieces,
+      this.performanceFilter,
+      this.performanceFavorites,
+    );
+    const cycleLabel = this.performanceCycleFavoritesOnly ? "cycle ★ only" : "cycle curated";
+    const packCycleLabel = this.performanceCyclePackOrder ? "pack order ON" : "cycle pack order";
+    header.innerHTML = `
+      <h1 style="font-family:Syne,sans-serif;margin:0 0 0.25rem">Performance catalog</h1>
+      <p class="browser-lede">Poster + hover motion preview (one at a time). Shortlist · Animate · Pack.</p>
       <div class="chips" id="filters"></div>
-      <div id="piece-list"></div>
+      <button type="button" id="browser-cycle-toggle" class="browser-mini">${cycleLabel}</button>
+      <button type="button" id="browser-pack-cycle-toggle" class="browser-mini">${packCycleLabel}</button>
     `;
-    const chips = el.querySelector("#filters")!;
+    host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
+    const chips = header.querySelector("#filters")!;
     for (const f of filters) {
       const b = document.createElement("button");
       b.type = "button";
-      b.textContent = f;
-      if (f === this.filter) b.classList.add("on");
+      b.textContent = f.label;
+      if (f.id === this.performanceFilter) b.classList.add("on");
       b.addEventListener("click", () => {
-        this.filter = f;
+        this.performanceFilter = f.id;
         this.renderBrowser();
       });
       chips.appendChild(b);
     }
-    const host = el.querySelector("#piece-list")!;
+    header.querySelector("#browser-cycle-toggle")?.addEventListener("click", () => {
+      this.performanceCycleFavoritesOnly = !this.performanceCycleFavoritesOnly;
+      if (this.performanceCycleFavoritesOnly) this.performanceCyclePackOrder = false;
+      this.persist();
+      this.initVisualSequencer();
+      this.renderBrowser();
+    });
+    header.querySelector("#browser-pack-cycle-toggle")?.addEventListener("click", () => {
+      this.performanceCyclePackOrder = !this.performanceCyclePackOrder;
+      if (this.performanceCyclePackOrder) this.performanceCycleFavoritesOnly = false;
+      this.persist();
+      this.initVisualSequencer();
+      this.renderBrowser();
+    });
+    const listHost = host.querySelector("#piece-list")!;
     for (const p of list) {
+      const meta = performanceMeta(p.piece_id);
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
       div.dataset.pieceId = p.piece_id;
-      const desc = this.descriptors.get(p.piece_id);
-      const capLabel = (label: string, ok: boolean) =>
-        `<span class="${ok ? "cap-ok" : "cap-na"}">${label}${ok ? "" : " · unsupported"}</span>`;
+      div.tabIndex = 0;
+      const starred = this.performanceFavorites.includes(p.piece_id);
       const thumb = this.browserThumbUrls.get(p.piece_id);
-      div.innerHTML = `<img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
-        <div class="name">${p.title || p.name || p.piece_id}</div>
-        <div class="meta caps">${capLabel("Generate", desc?.generate.supported ?? false)} · ${capLabel("Animate", desc?.animate.supported ?? false)} · ${capLabel("React", desc?.react.supported ?? false)}</div>
-        <div class="meta">${p.family || p.piece_id.split("/")[0]} · ${desc?.animate.backend ?? "—"}</div>
-        <div class="meta">${p.description || ""}</div>`;
+      const thumbFail = this.browserThumbFailed.has(p.piece_id);
+      const thumbLive = this.browserThumbLiveOnly.has(p.piece_id);
+      const placeholder = thumbFail
+        ? "PREVIEW FAILED"
+        : thumbLive
+          ? "HOVER · MOTION"
+          : !thumb
+            ? "preview…"
+            : "";
+      const badges = [
+        meta?.density,
+        meta?.motion,
+        ...(meta?.roles.filter((r) => r === "midnight" || r === "peak").slice(0, 2) ?? []),
+      ]
+        .filter(Boolean)
+        .map((b) => `<span class="badge">${b}</span>`)
+        .join("");
+      div.innerHTML = `
+        <div class="thumb-wrap">
+          <img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
+          ${placeholder ? `<span class="thumb-placeholder${thumbFail ? " failed" : ""}">${placeholder}</span>` : ""}
+        </div>
+        <div class="piece-body">
+          <div class="name-row">
+            <span class="name">${p.title || p.name || p.piece_id.split("/").pop()}</span>
+            <button type="button" class="star ${starred ? "on" : ""}" data-star="${p.piece_id}" title="Performance shortlist">★</button>
+          </div>
+          <div class="badges">${badges}</div>
+          <div class="meta">${meta?.character ?? p.description ?? p.piece_id}</div>
+          <div class="piece-actions">
+            <button type="button" data-animate="${p.piece_id}">Animate</button>
+            <button type="button" data-pack="${p.piece_id}">+ Pack</button>
+          </div>
+        </div>`;
+      div.querySelector(`[data-star="${p.piece_id}"]`)?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        this.togglePerformanceShortlist(p.piece_id);
+      });
+      div.querySelector(`[data-animate="${p.piece_id}"]`)?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void this.auditionPieceFromBrowser(p.piece_id);
+      });
+      div.querySelector(`[data-pack="${p.piece_id}"]`)?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        void this.setPiece(p.piece_id).then(() => this.addCurrentToPack("animation"));
+      });
+      const displayName = p.title || p.name || p.piece_id.split("/").pop() || p.piece_id;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
-      host.appendChild(div);
+      div.addEventListener("mouseenter", () => this.scheduleBrowserMotion(p.piece_id, displayName));
+      div.addEventListener("mouseleave", () => {
+        if (this.browserMotionPieceId === p.piece_id) this.hideBrowserMotionPane();
+      });
+      div.addEventListener("focusin", () => this.scheduleBrowserMotion(p.piece_id, displayName));
+      div.addEventListener("focusout", () => {
+        if (this.browserMotionPieceId === p.piece_id) this.hideBrowserMotionPane();
+      });
+      listHost.appendChild(div);
     }
-    // Do not queue renderer work while the browser is closed. Cache URLs across re-renders.
     if (this.browserVisible) {
-      void this.loadBrowserThumbs(list.slice(0, 8).map((p) => p.piece_id));
+      this.ensureBrowserPreview();
+      const need = list
+        .map((p) => p.piece_id)
+        .filter((id) => !this.browserThumbUrls.has(id));
+      void this.loadBrowserThumbs(need);
     }
   }
 
   private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
+    if (!pieceIds.length) return;
     this.browserThumbAbort?.abort();
     const controller = new AbortController();
     this.browserThumbAbort = controller;
-    for (const pieceId of pieceIds) {
-      if (controller.signal.aborted) return;
-      if (!supportsMode(pieceId, "generate")) continue;
-      const img = document.querySelector<HTMLImageElement>(`#browser img.thumb[data-piece="${pieceId}"]`);
-      if (!img || img.dataset.loaded) continue;
-      try {
-        const res = await fetch("/api/render", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
-            piece: pieceId,
-            seed: 42,
-            width: 160,
-            height: 90,
-            frame: 0,
-            format: "png",
-            quality: "preview",
-            parameters: defaultsForPiece(pieceId),
-          }),
-        });
-        if (!res.ok) continue;
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
+    await loadThumbQueue(
+      pieceIds,
+      (pieceId, url) => {
+        this.browserThumbFailed.delete(pieceId);
+        this.browserThumbLiveOnly.delete(pieceId);
         this.browserThumbUrls.set(pieceId, url);
-        img.src = url;
-        img.dataset.loaded = "1";
-      } catch {
-        if (controller.signal.aborted) return;
-        /* optional thumbnail */
-      }
-    }
+        const img = document.querySelector<HTMLImageElement>(
+          `#browser img.thumb[data-piece="${pieceId}"]`,
+        );
+        if (img) {
+          img.src = url;
+          img.dataset.loaded = "1";
+          img.parentElement?.querySelector(".thumb-placeholder")?.remove();
+        }
+      },
+      (pieceId, reason) => {
+        if (reason === "failed") this.browserThumbFailed.add(pieceId);
+        if (reason === "live-only") this.browserThumbLiveOnly.add(pieceId);
+        const ph = document.querySelector(
+          `#browser .piece[data-piece-id="${CSS.escape(pieceId)}"] .thumb-placeholder`,
+        );
+        if (ph) {
+          ph.textContent = reason === "failed" ? "PREVIEW FAILED" : "HOVER · MOTION";
+          ph.classList.toggle("failed", reason === "failed");
+        }
+      },
+      { concurrency: 3, signal: controller.signal },
+    );
     if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }
 
@@ -2423,6 +2650,7 @@ export class StudioApp {
               .join("")}
           </select>
           <button type="button" id="cfg-pack-midnight">Load Midnight fixture</button>
+          <button type="button" id="cfg-pack-episode1">Load Episode 1 set</button>
           <div id="pack-items">
             ${this.pack.items
               .map(
@@ -2524,7 +2752,11 @@ export class StudioApp {
           <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
           <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
         </select>
-        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · performance clock</p>
+        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · unbounded performance clock${
+          hasComponent(this.animationSpec, "camera") && !hasComponent(this.animationSpec, "construction")
+            ? " · pan speed = export duration below"
+            : ""
+        }</p>
         <div class="row">
           <button type="button" class="primary" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
         </div>
@@ -2711,6 +2943,9 @@ export class StudioApp {
     el.querySelector("#cfg-pack-favs")?.addEventListener("click", () => this.addFavoritesToPack());
     el.querySelector("#cfg-pack-midnight")?.addEventListener("click", () =>
       void this.loadMidnightPackFixture(),
+    );
+    el.querySelector("#cfg-pack-episode1")?.addEventListener("click", () =>
+      void this.loadEpisode1PackFixture(),
     );
     el.querySelector("#cfg-pack-name")?.addEventListener("change", (e) => {
       this.pack.name = (e.target as HTMLInputElement).value;
@@ -3113,7 +3348,7 @@ export class StudioApp {
       if (next) {
         this.activeAnimationMethodId = next;
         this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, next, this.mode);
-        this.syncAnimationSpecToSession(false);
+        this.syncAnimationSpecToSession(false, { resetTime: true });
         this.renderConfig();
       }
       this.lastRandomTickMs = nowPerf;

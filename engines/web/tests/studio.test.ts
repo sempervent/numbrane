@@ -140,6 +140,8 @@ describe("live performance normalization", () => {
     );
     expect(spec.source).toBe("composite");
     expect(spec.components).toContain("generative");
+    expect(spec.endBehavior).toBe("continuous");
+    expect(spec.durationSec).toBeGreaterThan(0);
   });
 });
 

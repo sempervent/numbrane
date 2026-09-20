@@ -30,6 +30,10 @@ export type StudioPrefs = {
   quality: string;
   controlsVisible: boolean;
   favorites: FavoriteEntry[];
+  /** Performance browser shortlist (piece ids for ]/[ cycling). */
+  performanceShortlist: string[];
+  performanceCycleShortlistOnly: boolean;
+  performanceCyclePackOrder: boolean;
   recent: HistoryEntry[];
   lastSetId: string;
   color?: unknown;
@@ -42,6 +46,9 @@ const DEFAULTS: StudioPrefs = {
   quality: "high",
   controlsVisible: true,
   favorites: [],
+  performanceShortlist: [],
+  performanceCycleShortlistOnly: false,
+  performanceCyclePackOrder: false,
   recent: [],
   lastSetId: "pfl-default",
 };
@@ -55,6 +62,11 @@ export function loadPrefs(): StudioPrefs {
       ...DEFAULTS,
       ...parsed,
       favorites: Array.isArray(parsed.favorites) ? parsed.favorites : [],
+      performanceShortlist: Array.isArray(parsed.performanceShortlist)
+        ? parsed.performanceShortlist
+        : [],
+      performanceCycleShortlistOnly: !!parsed.performanceCycleShortlistOnly,
+      performanceCyclePackOrder: !!parsed.performanceCyclePackOrder,
       recent: Array.isArray(parsed.recent) ? parsed.recent : [],
     };
   } catch {

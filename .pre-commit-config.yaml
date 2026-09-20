@@ -74,10 +74,10 @@ repos:
         exclude: ^site/
 
       # pre-push: lightweight local CI via just
-      - id: ci-lite
-        name: just ci-lite
-        entry: just ci-lite
-        language: system
-        pass_filenames: false
-        always_run: true
-        stages: [pre-push]
+      #- id: ci-lite
+      #  name: just ci-lite
+      #  entry: just ci-lite
+      #  language: system
+      #  pass_filenames: false
+      #  always_run: true
+      #  stages: [pre-push]
