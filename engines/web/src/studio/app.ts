@@ -3,7 +3,7 @@
  */
 
 import { LiveSession } from "../live/session";
-import type { SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
+import type { BlendMode, SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
 import { createLivePiece } from "../live/pieces/registry";
 import {
   createStudioRegistry,
@@ -17,7 +17,12 @@ import {
   performanceMeta,
   type PerformanceBrowserFilter,
 } from "./performance/catalog";
-import { loadThumbQueue } from "./performance/browserThumbs";
+import {
+  loadThumbQueue,
+  thumbCacheKey,
+  type BrowserThumbQueueStats,
+} from "./performance/browserThumbs";
+import { classifyVisualQuality, snapshotFromFrame } from "../live/visualQuality";
 import { BrowserPreviewSession } from "./performance/browserPreviewSession";
 import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
 import {
@@ -46,6 +51,7 @@ import {
 } from "./animation/methods";
 import { RandomAnimationSequencer } from "./animation/randomSequencer";
 import {
+  defaultLayerLiveMethodId,
   normalizeSpecForLivePerformance,
   resolveLivePerformanceMethodSpec,
   VisualSwitchSequencer,
@@ -265,7 +271,20 @@ export class StudioApp {
   private lastVisualDigest = "";
   private descriptors = new Map<string, StudioPieceDescriptor>();
   private browserThumbUrls = new Map<string, string>();
+  private browserThumbCacheKeys = new Map<string, string>();
   private browserThumbAbort: AbortController | null = null;
+  private browserThumbLoadEpoch = 0;
+  browserThumbStats: BrowserThumbQueueStats = {
+    requested: 0,
+    loaded: 0,
+    liveOnly: 0,
+    failed: 0,
+    aborted: 0,
+    inFlight: 0,
+    failures: [],
+  };
+  /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
+  studioBootComplete = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -307,8 +326,14 @@ export class StudioApp {
       stageViewportFit: true,
     });
     await this.session.init();
-    window.__NUMBRANE_STUDIO__ = this;
     this.params = { ...defaultsForPiece(this.pieceId), ...this.params };
+    this.animationMethodId = defaultAnimationMethodId(this.pieceId);
+    this.activeAnimationMethodId = this.animationMethodId;
+    this.animationSpec = resolveLivePerformanceMethodSpec(
+      this.pieceId,
+      this.animationMethodId,
+      this.mode,
+    );
     await this.applyPieceScene();
 
     this.wireKeyboard();
@@ -318,12 +343,14 @@ export class StudioApp {
     this.renderConfig();
     this.renderHelp();
     this.renderBrowser();
-    this.syncModebarCapabilities();
+    this.syncModebarState();
     this.syncChrome();
     this.syncUrl(false);
     this.pushHistory();
 
     this.loop();
+    this.studioBootComplete = true;
+    window.__NUMBRANE_STUDIO__ = this;
     toast("NUMBRANE Studio — press ? for keys");
   }
 
@@ -368,8 +395,31 @@ export class StudioApp {
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
       performanceMode: this.session?.animationRuntime.performanceMode ?? false,
+      animationCyclePhase:
+        this.session?.animationRuntime.evaluate().cyclePhase ?? 0,
+      visualLiveness: diag?.visualLiveness ?? null,
+      visualQuality: (() => {
+        const pf = diag?.presentedFrame;
+        if (!pf) return null;
+        const meta = performanceMeta(this.pieceId);
+        return classifyVisualQuality(
+          snapshotFromFrame(pf),
+          {
+            density: meta?.density ?? "medium",
+            motion: meta?.motion ?? "moderate",
+          },
+          (Date.now() - this.lastVisualChangeMs) / 1000,
+          this.playing,
+          (Date.now() - this.pieceLoadedAt) / 1000,
+        );
+      })(),
+      browserThumbStats: { ...this.browserThumbStats },
       cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
       cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
+      compositionId: this.compositionId,
+      layerStates: this.session?.getLayerPerformanceStates() ?? [],
+      framePacing: this.session?.getFramePacingSnapshot() ?? null,
+      primaryLiveSessionCount: this.getPrimaryLiveSessionCount(),
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
     };
@@ -639,7 +689,7 @@ export class StudioApp {
       statusEl?.classList.remove("visible");
       this.showModeUnsupported(this.mode);
       this.syncChrome();
-      this.syncModebarCapabilities();
+      this.syncModebarState();
       return;
     }
     this.clearFailureBanner();
@@ -789,6 +839,7 @@ export class StudioApp {
       this.applyStudioPerformanceClock();
     }
     this.session.fitStageViewport();
+    this.syncCompositionLayerAnimations();
     this.kickLiveSurface();
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
@@ -1165,7 +1216,7 @@ export class StudioApp {
         group: "global",
         handler: () => {
           if (this.helpVisible) this.helpVisible = false;
-          else if (this.browserVisible) this.browserVisible = false;
+          else if (this.browserVisible) this.setBrowserVisible(false);
           else if (document.fullscreenElement) void document.exitFullscreen();
           else {
             this.controlsVisible = false;
@@ -1193,8 +1244,7 @@ export class StudioApp {
         label: "Piece browser",
         group: "global",
         handler: () => {
-          this.browserVisible = !this.browserVisible;
-          this.syncChrome();
+          this.toggleBrowserVisible();
         },
       },
       {
@@ -1255,9 +1305,19 @@ export class StudioApp {
   /** E2E helper — show chrome and optional piece browser without keyboard side effects. */
   showChromeForTest(showBrowser = true): void {
     this.controlsVisible = true;
-    if (showBrowser) this.browserVisible = true;
-    this.syncChrome();
-    if (showBrowser) this.renderBrowser();
+    if (showBrowser) this.setBrowserVisible(true);
+    else this.syncChrome();
+  }
+
+  /** Authoritative mode bar — never rely on static HTML active classes. */
+  syncModebarState(): void {
+    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+      const mode = btn.dataset.mode as StudioMode;
+      const active = mode === this.mode;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    this.syncModebarCapabilities();
   }
 
   syncModebarCapabilities(): void {
@@ -1274,6 +1334,21 @@ export class StudioApp {
       btn.title = ok ? "" : `${mode} unsupported for ${this.pieceId}`;
       btn.style.opacity = ok ? "1" : "0.45";
     });
+  }
+
+  setBrowserVisible(visible: boolean): void {
+    this.browserVisible = visible;
+    if (!visible) this.hideBrowserMotionPane();
+    this.syncChrome();
+    if (visible) this.renderBrowser();
+  }
+
+  private toggleBrowserVisible(): void {
+    this.setBrowserVisible(!this.browserVisible);
+  }
+
+  private refreshAnimationBaseParams(): void {
+    this.session?.refreshAnimationBaseParams();
   }
 
   private clearFailureBanner(): void {
@@ -1400,9 +1475,7 @@ export class StudioApp {
     this.mode = mode;
     this.prefs.mode = mode;
     this.persist();
-    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.mode === mode);
-    });
+    this.syncModebarState();
     if (mode === "generate") {
       this.playing = false;
       this.session?.runtime.transport.stop();
@@ -1413,7 +1486,6 @@ export class StudioApp {
     await this.applyPieceScene();
     this.renderConfig();
     this.renderHelp();
-    this.syncModebarCapabilities();
     this.syncUrl(true);
     toast(`${mode.toUpperCase()} mode`);
   }
@@ -1460,7 +1532,7 @@ export class StudioApp {
     document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
       card.classList.toggle("selected", card.dataset.pieceId === this.pieceId);
     });
-    this.syncModebarCapabilities();
+    this.syncModebarState();
     this.syncUrl(true);
   }
 
@@ -1596,8 +1668,7 @@ export class StudioApp {
   async auditionPieceFromBrowser(pieceId: string): Promise<void> {
     await this.setPiece(pieceId);
     if (this.mode !== "animate") await this.setMode("animate");
-    this.browserVisible = false;
-    this.syncChrome();
+    this.setBrowserVisible(false);
     toast(`Animate · ${pieceId.split("/").pop()}`);
   }
 
@@ -1620,7 +1691,7 @@ export class StudioApp {
 
   /** Keyboard-first piece change — no picker, overlays, or toast. */
   async cycleVisualization(dir: number): Promise<void> {
-    this.browserVisible = false;
+    this.setBrowserVisible(false);
     this.helpVisible = false;
     await this.cyclePiece(dir);
     this.syncChrome();
@@ -2268,8 +2339,77 @@ export class StudioApp {
     if (push) history.replaceState(null, "", u);
   }
 
+  private showPerformanceFadeMask(opacity: number): void {
+    const mask = document.getElementById("performance-fade-mask");
+    if (!mask) return;
+    mask.style.opacity = String(Math.min(1, Math.max(0, opacity)));
+    mask.style.pointerEvents = opacity > 0.05 ? "auto" : "none";
+  }
+
+  private syncCompositionLayerAnimations(): void {
+    if (!this.session || (this.mode !== "animate" && this.mode !== "react")) return;
+    this.session.clearOverlayLayerAnimations();
+    const scene = this.session.runtime.getScene();
+    if (!scene || scene.layers.length < 2) return;
+    const recipe = this.compositionId ? compositionById(this.compositionId) : undefined;
+    const overlays: Array<{ layerId: string; spec: import("./animation/spec").AnimationSpec }> = [];
+    for (const layer of scene.layers) {
+      if (layer.id === "L0") continue;
+      const methodId =
+        recipe?.layerMethods?.[layer.id] ??
+        defaultLayerLiveMethodId(layer.piece);
+      overlays.push({
+        layerId: layer.id,
+        spec: resolveLivePerformanceMethodSpec(layer.piece, methodId, this.mode),
+      });
+    }
+    this.session.setOverlayLayerAnimations(overlays);
+    const l0 = scene.layers.find((l) => l.id === "L0");
+    const l0Method =
+      recipe?.layerMethods?.L0 ??
+      (l0 ? defaultLayerLiveMethodId(l0.piece) : undefined);
+    if (l0Method && l0) {
+      this.animationMethodId = l0Method;
+      this.activeAnimationMethodId = l0Method;
+      this.animationSpec = resolveLivePerformanceMethodSpec(l0.piece, l0Method, this.mode);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: true,
+        performanceMode: true,
+      });
+      this.applyStudioPerformanceClock();
+    }
+  }
+
+  async setPerformanceComposition(compositionId: string | null): Promise<void> {
+    const preserve = this.mode === "animate" || this.mode === "react";
+    if (preserve) this.beginVisualTransition();
+    this.compositionId = compositionId;
+    if (compositionId) {
+      const recipe = compositionById(compositionId);
+      const preview = recipe?.build(this.seed, this.params);
+      const basePiece = preview?.scenes[0]?.layers[0]?.piece;
+      if (basePiece) this.pieceId = basePiece;
+    }
+    await this.applyPieceScene();
+    if (preserve) {
+      if (await this.waitForIncomingVisual()) this.finishVisualTransition();
+      else this.keepTransitionAsFallback();
+    }
+    this.renderConfig();
+    this.syncUrl(true);
+  }
+
+  /** Test/diagnostics — Studio uses exactly one primary LiveSession. */
+  getPrimaryLiveSessionCount(): number {
+    return this.session ? 1 : 0;
+  }
+
   private beginVisualTransition(): void {
     if (this.pieceTransition === "cut") return;
+    if (this.pieceTransition === "fade-black") {
+      this.showPerformanceFadeMask(1);
+      return;
+    }
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold) return;
     const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -2305,6 +2445,10 @@ export class StudioApp {
   }
 
   private finishVisualTransition(): void {
+    if (this.pieceTransition === "fade-black") {
+      this.showPerformanceFadeMask(0);
+      return;
+    }
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold?.classList.contains("visible")) return;
     if (this.pieceTransition === "cut") {
@@ -2523,44 +2667,125 @@ export class StudioApp {
       this.ensureBrowserPreview();
       const need = list
         .map((p) => p.piece_id)
-        .filter((id) => !this.browserThumbUrls.has(id));
-      void this.loadBrowserThumbs(need);
+        .filter((id) => {
+          const key = thumbCacheKey(id);
+          return (
+            !this.browserThumbUrls.has(id) || this.browserThumbCacheKeys.get(id) !== key
+          );
+        });
+      this.patchBrowserThumbs();
+      void this.loadBrowserThumbs(need).then(() => {
+        if (this.browserVisible) this.patchBrowserThumbs();
+      });
     }
   }
 
+  private patchBrowserThumbs(): void {
+    document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
+      const pieceId = card.dataset.pieceId;
+      if (!pieceId) return;
+      const wrap = card.querySelector(".thumb-wrap");
+      if (!wrap) return;
+      let img = wrap.querySelector<HTMLImageElement>("img.thumb");
+      if (!img) {
+        img = document.createElement("img");
+        img.className = "thumb";
+        img.dataset.piece = pieceId;
+        img.alt = "";
+        wrap.prepend(img);
+      }
+      let ph = wrap.querySelector<HTMLElement>(".thumb-placeholder");
+      const url = this.browserThumbUrls.get(pieceId);
+      if (url) {
+        img.src = url;
+        img.dataset.loaded = "1";
+        ph?.remove();
+        return;
+      }
+      const label = this.browserThumbFailed.has(pieceId)
+        ? "PREVIEW FAILED"
+        : this.browserThumbLiveOnly.has(pieceId)
+          ? "HOVER · MOTION"
+          : "";
+      if (!label) return;
+      if (!ph) {
+        ph = document.createElement("span");
+        ph.className = "thumb-placeholder";
+        wrap.appendChild(ph);
+      }
+      ph.textContent = label;
+      ph.classList.toggle("failed", label === "PREVIEW FAILED");
+    });
+    this.reconcileBrowserThumbStats();
+  }
+
+  /** Sync queue stats from terminal card state (ignores stale aborted loads). */
+  private reconcileBrowserThumbStats(): void {
+    const visibleIds = Array.from(
+      document.querySelectorAll<HTMLElement>("#browser .piece"),
+      (el) => el.dataset.pieceId ?? "",
+    ).filter(Boolean);
+    if (!visibleIds.length) return;
+    let loaded = 0;
+    let liveOnly = 0;
+    let failed = 0;
+    let stillLoading = 0;
+    for (const id of visibleIds) {
+      if (this.browserThumbUrls.has(id)) loaded += 1;
+      else if (this.browserThumbLiveOnly.has(id)) liveOnly += 1;
+      else if (this.browserThumbFailed.has(id)) failed += 1;
+      else stillLoading += 1;
+    }
+    this.browserThumbStats = {
+      ...this.browserThumbStats,
+      requested: visibleIds.length,
+      loaded,
+      liveOnly,
+      failed,
+      inFlight: this.browserThumbStats.inFlight,
+      failures: [...this.browserThumbStats.failures],
+    };
+    this.browserThumbStats.stillLoading = stillLoading;
+  }
+
   private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
-    if (!pieceIds.length) return;
+    const epoch = ++this.browserThumbLoadEpoch;
+    if (!pieceIds.length) {
+      this.reconcileBrowserThumbStats();
+      return;
+    }
     this.browserThumbAbort?.abort();
     const controller = new AbortController();
     this.browserThumbAbort = controller;
     await loadThumbQueue(
       pieceIds,
-      (pieceId, url) => {
+      (pieceId, url, cacheKey) => {
         this.browserThumbFailed.delete(pieceId);
         this.browserThumbLiveOnly.delete(pieceId);
+        const prev = this.browserThumbUrls.get(pieceId);
+        if (prev && prev !== url) URL.revokeObjectURL(prev);
         this.browserThumbUrls.set(pieceId, url);
-        const img = document.querySelector<HTMLImageElement>(
-          `#browser img.thumb[data-piece="${pieceId}"]`,
-        );
-        if (img) {
-          img.src = url;
-          img.dataset.loaded = "1";
-          img.parentElement?.querySelector(".thumb-placeholder")?.remove();
-        }
+        this.browserThumbCacheKeys.set(pieceId, cacheKey);
+        this.patchBrowserThumbs();
       },
       (pieceId, reason) => {
         if (reason === "failed") this.browserThumbFailed.add(pieceId);
         if (reason === "live-only") this.browserThumbLiveOnly.add(pieceId);
-        const ph = document.querySelector(
-          `#browser .piece[data-piece-id="${CSS.escape(pieceId)}"] .thumb-placeholder`,
-        );
-        if (ph) {
-          ph.textContent = reason === "failed" ? "PREVIEW FAILED" : "HOVER · MOTION";
-          ph.classList.toggle("failed", reason === "failed");
-        }
+        this.patchBrowserThumbs();
       },
-      { concurrency: 3, signal: controller.signal },
+      {
+        concurrency: 3,
+        signal: controller.signal,
+        onStats: (s) => {
+          if (epoch !== this.browserThumbLoadEpoch) return;
+          this.browserThumbStats = s;
+        },
+      },
     );
+    if (epoch === this.browserThumbLoadEpoch) {
+      this.patchBrowserThumbs();
+      this.reconcileBrowserThumbStats();
+    }
     if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }
 
@@ -2713,9 +2938,34 @@ export class StudioApp {
         const segRemain = Math.max(0, this.randomIntervalSec - segElapsed);
         return `
         <h2>Performance</h2>
+        <label for="cfg-perf-comp">Composition</label>
+        <select id="cfg-perf-comp">
+          <option value="">(single piece)</option>
+          ${COMPOSITIONS.map((c) => `<option value="${c.id}" ${this.compositionId === c.id ? "selected" : ""}>${c.label}</option>`).join("")}
+        </select>
+        ${this.compositionId && this.session ? (() => {
+          const layers = this.session.getLayerPerformanceStates();
+          const blends: BlendMode[] = ["normal", "add", "multiply", "screen", "difference", "lighten", "darken"];
+          return layers.length
+            ? `<details open><summary>Layers (${layers.length})</summary>${layers
+                .map(
+                  (l) => `
+              <div class="row" style="flex-wrap:wrap;margin:0.35rem 0">
+                <label style="min-width:4rem"><input type="checkbox" data-layer-enable="${l.id}" ${l.enabled ? "checked" : ""} /> ${l.id}</label>
+                <span class="muted" style="flex:1">${l.piece.split("/").pop()}</span>
+              </div>
+              <label class="muted">Opacity ${l.id}</label>
+              <input type="range" min="0" max="1" step="0.01" data-layer-opacity="${l.id}" value="${l.opacity.toFixed(2)}" />
+              <label class="muted">Blend ${l.id}</label>
+              <select data-layer-blend="${l.id}">${blends.map((b) => `<option value="${b}" ${l.blend === b ? "selected" : ""}>${b}</option>`).join("")}</select>
+              `,
+                )
+                .join("")}${layers.length >= 2 ? `<button type="button" id="cfg-layer-swap">Swap L0 ↔ L1</button>` : ""}</details>`
+            : "";
+        })() : ""}
         <div class="row">
           <button type="button" id="cfg-prev-piece" title="Previous piece [">◀</button>
-          <span class="muted" style="flex:1;text-align:center">${this.pieceId.split("/").pop()}</span>
+          <span class="muted" style="flex:1;text-align:center">${this.compositionId ? this.compositionId : this.pieceId.split("/").pop()}</span>
           <button type="button" id="cfg-next-piece" title="Next piece ]">▶</button>
           <button type="button" id="cfg-random-piece">Random</button>
         </div>
@@ -2750,6 +3000,7 @@ export class StudioApp {
         <label>Transition</label>
         <select id="cfg-piece-transition">
           <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
+          <option value="fade-black" ${this.pieceTransition === "fade-black" ? "selected" : ""}>Fade through black</option>
           <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
         </select>
         <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · unbounded performance clock${
@@ -3037,6 +3288,34 @@ export class StudioApp {
       this.togglePlay();
       this.renderConfig();
     });
+    el.querySelector("#cfg-perf-comp")?.addEventListener("change", (e) => {
+      const v = (e.target as HTMLSelectElement).value;
+      void this.setPerformanceComposition(v || null);
+    });
+    el.querySelectorAll<HTMLInputElement>("[data-layer-enable]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const id = input.getAttribute("data-layer-enable")!;
+        this.session?.setLayerPerformanceState(id, { enabled: input.checked });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelectorAll<HTMLInputElement>("[data-layer-opacity]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const id = input.getAttribute("data-layer-opacity")!;
+        this.session?.setLayerPerformanceState(id, { opacity: Number(input.value) });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelectorAll<HTMLSelectElement>("[data-layer-blend]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.getAttribute("data-layer-blend")!;
+        this.session?.setLayerPerformanceState(id, { blend: sel.value as BlendMode });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelector("#cfg-layer-swap")?.addEventListener("click", () => {
+      if (this.session?.swapLayerOrder("L0", "L1")) this.kickLiveSurface();
+    });
     el.querySelector("#cfg-prev-piece")?.addEventListener("click", () => void this.cyclePiece(-1));
     el.querySelector("#cfg-next-piece")?.addEventListener("click", () => void this.cyclePiece(1));
     el.querySelector("#cfg-random-piece")?.addEventListener("click", () => void this.cycleRandomPiece());
@@ -3127,8 +3406,7 @@ export class StudioApp {
     el.querySelector("#cfg-mic")?.addEventListener("click", () => void this.enableMic());
     el.querySelector("#cfg-save")?.addEventListener("click", () => void this.saveSeedState());
     el.querySelector("#cfg-browser")?.addEventListener("click", () => {
-      this.browserVisible = !this.browserVisible;
-      this.syncChrome();
+      this.toggleBrowserVisible();
     });
     el.querySelector("#cfg-hide")?.addEventListener("click", () => {
       this.controlsVisible = false;
@@ -3162,6 +3440,7 @@ export class StudioApp {
           const v = Number(node.value);
           this.params[key] = v;
           this.session?.runtime.getPiece("L0")?.setParameter(key, v);
+          this.refreshAnimationBaseParams();
         }
         if (studioSurface(this.pieceId, this.mode) === "api-preview") {
           this.scheduleGeneratePreview();
@@ -3393,12 +3672,33 @@ export class StudioApp {
       } else if (
         warmupMs > 2500 &&
         diag.renderCount > 0 &&
-        now - this.lastVisualChangeMs > 2000 &&
-        !this.session.runtime.isSimulationPaused() &&
-        !this.session.runtime.isPieceUpdatesFrozen() &&
-        !this.session.animationRuntime.performanceMode
+        (diag.visualLiveness?.status === "stalled" ||
+          (() => {
+            const pf = diag.presentedFrame;
+            if (!pf) return false;
+            const meta = performanceMeta(this.pieceId);
+            const q = classifyVisualQuality(
+              snapshotFromFrame(pf),
+              {
+                density: meta?.density ?? "medium",
+                motion: meta?.motion ?? "moderate",
+              },
+              (now - this.lastVisualChangeMs) / 1000,
+              this.playing,
+              warmupMs / 1000,
+            );
+            return (
+              q.status === "degenerate-dark" ||
+              q.status === "degenerate-flat" ||
+              q.status === "static"
+            );
+          })() ||
+          (now - this.lastVisualChangeMs > 4500 &&
+            !this.session.runtime.isSimulationPaused() &&
+            !this.session.runtime.isPieceUpdatesFrozen()))
       ) {
         const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
+        const animSt = this.session.animationRuntime.evaluate();
         this.stallError = [
           "Animation stalled",
           `piece: ${this.pieceId}`,
@@ -3406,6 +3706,9 @@ export class StudioApp {
           `update count: ${diag.updateCount}`,
           `render count: ${diag.renderCount}`,
           `present count: ${diag.presentCount}`,
+          `phase: ${animSt.phase.toFixed(3)}`,
+          `cyclePhase: ${animSt.cyclePhase.toFixed(3)}`,
+          diag.visualLiveness?.stallReason ?? "",
         ].join("\n");
         const stallBanner = document.getElementById("unsupported-banner");
         if (stallBanner) {

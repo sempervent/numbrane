@@ -10,6 +10,18 @@ export type BrowserCatalogPiece = {
   name?: string;
 };
 
+export async function waitForStudioBoot(page: Page, timeoutMs = 90_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const app = (window as unknown as { __NUMBRANE_STUDIO__?: { studioBootComplete?: boolean } })
+        .__NUMBRANE_STUDIO__;
+      return app?.studioBootComplete === true;
+    },
+    null,
+    { timeout: timeoutMs },
+  );
+}
+
 export async function fetchBrowserCatalog(baseURL: string): Promise<BrowserCatalogPiece[]> {
   const res = await fetch(`${baseURL}/catalog/pieces.json`);
   if (!res.ok) throw new Error(`catalog fetch failed: ${res.status}`);
@@ -19,11 +31,7 @@ export async function fetchBrowserCatalog(baseURL: string): Promise<BrowserCatal
 
 export async function openStudioHome(page: Page): Promise<void> {
   await page.goto("/studio.html", { waitUntil: "domcontentloaded", timeout: 30_000 });
-  await page.waitForFunction(
-    () => !!(window as unknown as { __NUMBRANE_STUDIO__?: unknown }).__NUMBRANE_STUDIO__,
-    null,
-    { timeout: 45_000 },
-  );
+  await waitForStudioBoot(page);
   await page.evaluate(() => {
     (
       window as unknown as { __NUMBRANE_STUDIO__?: { showChromeForTest?: (b?: boolean) => void } }

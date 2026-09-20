@@ -16,7 +16,7 @@ vec3 hsl2rgb(vec3 c) {
 void main() {
   vec2 uv = gl_FragCoord.xy / u_res;
   float t = texture(u_trail, uv).r;
-  float v = clamp(t * (0.6 + 0.8 * u_density), 0.0, 1.0);
+  float v = clamp(t * (0.85 + 1.05 * u_density), 0.0, 1.0);
   float hue = fract(u_hue + v * 0.25 + u_energy * 0.08);
   vec3 col = hsl2rgb(vec3(hue, 0.55 + u_energy * 0.2, 0.12 + v * 0.78));
   o = vec4(col, clamp(v * 1.25, 0.02, 1.0));

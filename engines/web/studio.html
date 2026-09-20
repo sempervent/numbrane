@@ -252,6 +252,10 @@
         background: rgba(0,0,0,0.55); border: 1px solid var(--line); border-radius: 999px;
         padding: 0.35rem 0.75rem; font-size: 11px; pointer-events: auto;
       }
+      #performance-fade-mask {
+        position: absolute; inset: 0; background: #000; opacity: 0;
+        pointer-events: none; z-index: 3; transition: opacity 320ms ease;
+      }
       #performance-strip.visible { display: flex; }
       #performance-strip button {
         background: transparent; border: 1px solid var(--line); color: var(--ink);
@@ -264,6 +268,7 @@
       <canvas id="stage"></canvas>
       <img id="generate-preview" alt="Generated preview" />
       <img id="switch-hold" alt="" aria-hidden="true" />
+      <div id="performance-fade-mask" aria-hidden="true"></div>
       <div id="gen-status">Generating…</div>
       <div id="unsupported-banner"></div>
       <div id="performance-strip" aria-label="Performance controls">
@@ -276,7 +281,7 @@
     </div>
     <div id="chrome">
       <div id="modebar">
-        <button type="button" data-mode="generate" class="active">Generate</button>
+        <button type="button" data-mode="generate">Generate</button>
         <button type="button" data-mode="animate">Animate</button>
         <button type="button" data-mode="react">React</button>
       </div>

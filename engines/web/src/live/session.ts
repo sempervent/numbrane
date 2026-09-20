@@ -41,8 +41,14 @@ import {
   type PixelFrame,
 } from "./pixelMetrics";
 import { AnimationRuntime } from "./animationRuntime";
+import { FramePacingRing, type FramePacingSnapshot } from "./framePacing";
 import type { AnimationSpec } from "../studio/animation/spec";
 import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
+import { normalizeSpecForLivePerformance } from "../studio/animation/performance";
+import {
+  VisualLivenessWatchdog,
+  type VisualLivenessSnapshot,
+} from "./visualLiveness";
 
 export type HudStats = {
   fps: number;
@@ -74,6 +80,16 @@ export type LiveDiagnostics = {
   transportPlaying: boolean;
   visualFps: number;
   rafStalled: boolean;
+  activeLayerCount: number;
+  quality: QualityProfile;
+  framePacing: FramePacingSnapshot;
+  lastUpdateMs: number;
+  lastRenderMs: number;
+  lastAudioMs: number;
+  liveSessionCount: 1;
+  visualLiveness: VisualLivenessSnapshot;
+  animationPhase: number;
+  performanceMode: boolean;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -154,6 +170,13 @@ export class LiveSession {
   private basePost: PostDef = {};
   private layerOpacity = new Map<string, number>();
   private layerBlend = new Map<string, BlendMode>();
+  private layerEnabled = new Map<string, boolean>();
+  private layerRenderOrder: string[] = [];
+  private overlayAnimationRuntimes = new Map<string, AnimationRuntime>();
+  private readonly visualLiveness = new VisualLivenessWatchdog();
+  private sessionStartedPerfMs = performance.now();
+  private readonly framePacing = new FramePacingRing(360);
+  private lastUpdateMs = 0;
   private replayer: PerformanceReplayer | null = null;
   private midiCcSources = new Map<string, number>();
   private lastMidiClockMs: number | null = null;
@@ -223,6 +246,8 @@ export class LiveSession {
     this.baseParams.clear();
     this.layerOpacity.clear();
     this.layerBlend.clear();
+    this.layerEnabled.clear();
+    this.layerRenderOrder = [];
     const gl = this.compositor.gl;
     let w: number;
     let h: number;
@@ -266,6 +291,8 @@ export class LiveSession {
       this.baseParams.set(layer.id, { ...piece.getBaseParameters() });
       this.layerOpacity.set(layer.id, layer.opacity ?? 1);
       this.layerBlend.set(layer.id, layer.blend ?? "normal");
+      this.layerEnabled.set(layer.id, true);
+      this.layerRenderOrder.push(layer.id);
     }
     this.basePost = { ...(scene.post ?? {}) };
     this.postFrame = { ...this.basePost };
@@ -274,12 +301,24 @@ export class LiveSession {
     if (loaded === 0) {
       throw new Error("No live runtimes loaded for scene");
     }
+    this.sessionStartedPerfMs = performance.now();
+    this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
   }
 
   /** Paint one or more logical frames immediately (Studio first-frame guarantee). */
   paintFrames(count = 2, wallNowMs = performance.now()): void {
     for (let i = 0; i < count; i++) {
       this.frame(wallNowMs + i * (1000 / 60));
+    }
+  }
+
+  /** Capture stable parameter bases for animation arcs (immune to per-frame modulation). */
+  refreshAnimationBaseParams(): void {
+    const scene = this.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.runtime.getPiece(layer.id);
+      if (piece) this.baseParams.set(layer.id, { ...piece.getBaseParameters() });
     }
   }
 
@@ -296,10 +335,99 @@ export class LiveSession {
       this.animationRuntime.reset();
       this.lastAnimWallMs = 0;
     }
+    this.refreshAnimationBaseParams();
   }
 
   getAnimationSpec(): AnimationSpec {
     return this.animationRuntime.spec;
+  }
+
+  clearOverlayLayerAnimations(): void {
+    this.overlayAnimationRuntimes.clear();
+  }
+
+  setOverlayLayerAnimations(
+    entries: Array<{ layerId: string; spec: AnimationSpec }>,
+  ): void {
+    this.clearOverlayLayerAnimations();
+    const t = this.animationRuntime.animationTimeSec;
+    for (const { layerId, spec } of entries) {
+      const rt = new AnimationRuntime(spec);
+      rt.performanceMode = true;
+      rt.seekTime(t);
+      this.overlayAnimationRuntimes.set(layerId, rt);
+    }
+  }
+
+  /** Non-destructive recovery when live output stalls while transport is playing. */
+  attemptLiveLivenessRecovery(liveMode: "animate" | "react" = "animate"): boolean {
+    const scene = this.runtime.getScene();
+    if (!scene) return false;
+    const primaryPiece = scene.layers[0]?.piece ?? "";
+    const normalized = normalizeSpecForLivePerformance(
+      primaryPiece,
+      this.animationRuntime.spec,
+      liveMode,
+    );
+    this.animationRuntime.setSpec(normalized);
+    this.animationRuntime.performanceMode = true;
+    this.animationRuntime.seekTime(this.animationRuntime.animationTimeSec);
+    this.runtime.setFreezePieceUpdates(false);
+    this.runtime.setSimulationPaused(false);
+    this.visualLiveness.markRecovering(performance.now());
+    return true;
+  }
+
+  getLayerPerformanceStates(): Array<{
+    id: string;
+    piece: string;
+    opacity: number;
+    blend: BlendMode;
+    enabled: boolean;
+  }> {
+    const scene = this.runtime.getScene();
+    if (!scene) return [];
+    return scene.layers.map((layer) => ({
+      id: layer.id,
+      piece: layer.piece,
+      opacity: this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1,
+      blend: this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
+      enabled: this.layerEnabled.get(layer.id) !== false,
+    }));
+  }
+
+  setLayerPerformanceState(
+    layerId: string,
+    patch: { opacity?: number; blend?: BlendMode; enabled?: boolean },
+  ): void {
+    if (patch.opacity != null) this.layerOpacity.set(layerId, patch.opacity);
+    if (patch.blend != null) this.layerBlend.set(layerId, patch.blend);
+    if (patch.enabled != null) this.layerEnabled.set(layerId, patch.enabled);
+  }
+
+  swapLayerOrder(a: string, b: string): boolean {
+    const scene = this.runtime.getScene();
+    if (!scene || scene.layers.length < 2) return false;
+    const order =
+      this.layerRenderOrder.length === scene.layers.length
+        ? [...this.layerRenderOrder]
+        : scene.layers.map((l) => l.id);
+    const ia = order.indexOf(a);
+    const ib = order.indexOf(b);
+    if (ia < 0 || ib < 0) return false;
+    [order[ia], order[ib]] = [order[ib]!, order[ia]!];
+    this.layerRenderOrder = order;
+    return true;
+  }
+
+  getFramePacingSnapshot(): FramePacingSnapshot {
+    return this.framePacing.snapshot(this.hud.fps, this.rafHz);
+  }
+
+  private orderedLayers(scene: SceneDef): SceneDef["layers"] {
+    if (this.layerRenderOrder.length !== scene.layers.length) return scene.layers;
+    const byId = new Map(scene.layers.map((l) => [l.id, l]));
+    return this.layerRenderOrder.map((id) => byId.get(id)).filter(Boolean) as SceneDef["layers"];
   }
 
   getDiagnostics(): LiveDiagnostics {
@@ -330,6 +458,22 @@ export class LiveSession {
         this.running &&
         this.rafCount > 20 &&
         now - this.rafProgressMs > 1500,
+      activeLayerCount: this.runtime.getScene()?.layers.length ?? 0,
+      quality: this.quality,
+      framePacing: this.getFramePacingSnapshot(),
+      lastUpdateMs: this.lastUpdateMs,
+      lastRenderMs: this.hud.glMs,
+      lastAudioMs: this.hud.audioMs,
+      liveSessionCount: 1,
+      visualLiveness: this.visualLiveness.snapshot(
+        performance.now(),
+        snap.playing,
+        this.runtime.isSimulationPaused(),
+        this.animationRuntime.animationTimeSec,
+        this.sessionStartedPerfMs,
+      ),
+      animationPhase: this.animationRuntime.evaluate().phase,
+      performanceMode: this.animationRuntime.performanceMode,
     };
   }
 
@@ -733,11 +877,27 @@ export class LiveSession {
         : 0;
     this.lastAnimWallMs = wallNowMs;
     this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    for (const rt of this.overlayAnimationRuntimes.values()) {
+      rt.tick(animWallDt, snap.playing && !simPaused);
+    }
     const animSt = this.animationRuntime.evaluate();
-    this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
-    this.runtime.setFreezePieceUpdates(animSt.useSourceSnapshot);
+    const multiOverlay = this.overlayAnimationRuntimes.size > 0;
+    if (multiOverlay) {
+      const l0 = this.runtime.getPiece("L0");
+      if (l0) this.animationRuntime.applyToPiece(l0, this.baseParams);
+      for (const [layerId, rt] of this.overlayAnimationRuntimes) {
+        const piece = this.runtime.getPiece(layerId);
+        if (piece) rt.applyToPiece(piece, this.baseParams);
+      }
+      this.runtime.setFreezePieceUpdates(false);
+    } else {
+      this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
+      this.runtime.setFreezePieceUpdates(animSt.useSourceSnapshot);
+    }
 
+    const u0 = performance.now();
     const frame = this.runtime.tick(wallNowMs);
+    this.lastUpdateMs = performance.now() - u0;
 
     // On beat edges trigger subtle envelope
     if (frame.beatPhase < 0.05 && snap.playing) {
@@ -800,6 +960,27 @@ export class LiveSession {
       try {
         // Digest-only — do not advance the comparison chain used by tests/diagnostics.
         this.readPresentedPixels(64, 36, false);
+        this.visualLiveness.noteDigest(
+          this.pixelDigest,
+          performance.now(),
+          snap.playing,
+          simPaused,
+        );
+        const live = this.visualLiveness.snapshot(
+          performance.now(),
+          snap.playing,
+          simPaused,
+          this.animationRuntime.animationTimeSec,
+          this.sessionStartedPerfMs,
+        );
+        if (
+          live.status === "stalled" &&
+          this.animationRuntime.performanceMode &&
+          snap.playing &&
+          !simPaused
+        ) {
+          this.attemptLiveLivenessRecovery("animate");
+        }
       } catch {
         /* readPixels may fail during resize; keep last digest */
       }
@@ -810,6 +991,7 @@ export class LiveSession {
     }
     this.hud.frameMs = performance.now() - t0;
     this.hud.layers = scene?.layers.length ?? 0;
+    this.framePacing.push(this.hud.frameMs);
 
     this.fpsFrames += 1;
     this.fpsAccum += this.hud.frameMs;
@@ -884,9 +1066,10 @@ export class LiveSession {
 
     if (!animSt.useSourceSnapshot) {
       this.compositor.beginFrame();
-      for (const layer of scene.layers) {
+      for (const layer of this.orderedLayers(scene)) {
         const piece = this.runtime.getPiece(layer.id);
         if (!piece) continue;
+        if (this.layerEnabled.get(layer.id) === false) continue;
         const target = this.compositor.getLayerTarget();
         piece.render({
           framebuffer: target.framebuffer,
@@ -918,6 +1101,7 @@ export class LiveSession {
     }
     const paused = this.runtime.isSimulationPaused();
     const envelopeComplete =
+      !this.animationRuntime.performanceMode &&
       (spec.endBehavior === "hold" || spec.endBehavior === "stop") &&
       animSt.phase >= 0.999 &&
       !hasComponent(spec, "generative");

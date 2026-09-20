@@ -114,12 +114,20 @@ export const ANIM_ARCS: AnimArc[] = [
   {
     id: "drift",
     label: "drift",
-    apply: (p, t) => ({
-      ...p,
-      off_center_x: (p.off_center_x ?? 0) + 0.12 * t,
-      rotation: (p.rotation ?? 0) + 0.08 * t,
-      hue: ((p.hue ?? 0.5) + 0.04 * t) % 1,
-    }),
+    apply: (p, t) => {
+      const phase = t * Math.PI * 2;
+      const w = 0.5 + 0.5 * Math.sin(phase);
+      const c = 0.5 + 0.5 * Math.cos(phase * 0.73);
+      return {
+        ...p,
+        zoom: (p.zoom ?? 1) * (0.9 + 0.16 * w),
+        chaos: (p.chaos ?? 0.3) * (0.78 + 0.38 * c),
+        density: (p.density ?? 0.7) * (0.88 + 0.2 * w),
+        hue: ((p.hue ?? 0.5) + 0.05 * Math.sin(phase)) % 1,
+        rotation: (p.rotation ?? 0) + 0.06 * Math.sin(phase * 0.5),
+        off_center_x: (p.off_center_x ?? 0) + 0.08 * Math.sin(phase * 0.4),
+      };
+    },
   },
   {
     id: "fracture",

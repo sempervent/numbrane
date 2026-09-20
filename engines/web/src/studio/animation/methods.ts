@@ -120,6 +120,25 @@ function nativeMethod(
   };
 }
 
+const PARAMETER_DRIFT: AnimationMethod = {
+  id: "parameter-drift",
+  label: "Parameter Drift",
+  category: "native",
+  source: "composite",
+  compatibleWith: (p) => p.includes("fractal") || p.includes("escape") || p.includes("sdf"),
+  defaultDuration: 12,
+  defaultEndBehavior: "continuous",
+  apply: () => {
+    const spec = defaultAnimationSpec();
+    spec.source = "composite";
+    spec.components = ["generative", "parameters"];
+    spec.motion = "drift";
+    spec.durationSec = 12;
+    spec.endBehavior = "continuous";
+    return spec;
+  },
+};
+
 const NATIVE_METHODS: AnimationMethod[] = [
   nativeMethod("continuous-evolution", "Continuous Evolution", "generative", "continuous", "continuous", 12, (p) =>
     p.includes("reaction-diffusion"),
@@ -137,15 +156,13 @@ const NATIVE_METHODS: AnimationMethod[] = [
   nativeMethod("deconstruction", "Deconstruction", "construction", "reveal", "hold", 8, (p) =>
     p.startsWith("geometry/"),
   ),
-  nativeMethod("parameter-drift", "Parameter Drift", "generative", "drift", "continuous", 12, (p) =>
-    p.includes("fractal") || p.includes("escape") || p.includes("sdf"),
-  ),
   nativeMethod("composite-evolution", "Composite Evolution", "generative", "continuous", "continuous", 12, (p) =>
     p.startsWith("mashups/"),
   ),
   nativeMethod("plasma-evolution", "Plasma Evolution", "generative", "continuous", "continuous", 0, (p) =>
     p === "audiovisual/nodes" || p === "reference/audiovisual-nodes",
   ),
+  PARAMETER_DRIFT,
 ];
 
 export const RANDOM_METHOD_ID = "random";

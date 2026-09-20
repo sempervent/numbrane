@@ -133,6 +133,17 @@ export async function createSlimeMoldPiece(
       }
       const n = Math.floor(200 + params.density * 600);
       spawn(n);
+      const cx = (simW / 2) | 0;
+      const cy = (simH / 2) | 0;
+      for (let dy = -6; dy <= 6; dy++) {
+        for (let dx = -6; dx <= 6; dx++) {
+          const x = cx + dx;
+          const y = cy + dy;
+          if (x >= 0 && x < simW && y >= 0 && y < simH) {
+            trail[y * simW + x] = 1.2;
+          }
+        }
+      }
       uploadTrail();
     },
     resize() {},
