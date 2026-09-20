@@ -2,13 +2,39 @@
   "protocol_version": "0.1.0",
   "pack_id": "pfl-packs/midnight-pfl-pack",
   "name": "Midnight PFL Pack",
-  "description": "Production rehearsal pack — continuous shader, reaction-diffusion, sacred geometry construction.",
+  "description": "Midnight roles — omen, fracture, signal, organism, ritual construction, aftermath.",
   "style": "pfl-ritual",
   "created_at": "2026-01-01T00:00:00.000Z",
   "still_preset": "projection-16x9",
   "items": [
     {
-      "id": "item-0001",
+      "id": "mid-01",
+      "kind": "animation",
+      "pieceId": "fractals/escape-time",
+      "seed": 777,
+      "styleId": "pfl-signal",
+      "parameters": { "pfl_style": "pfl-signal", "density": 0.58 },
+      "durationSec": 14,
+      "animArc": "slow-drift",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Midnight role: warning / omen"
+    },
+    {
+      "id": "mid-02",
+      "kind": "animation",
+      "pieceId": "flagship/latticefall",
+      "seed": 12007,
+      "styleId": "pfl-signal",
+      "parameters": { "density": 0.65 },
+      "durationSec": 10,
+      "animArc": "continuous-evolution",
+      "transitionIn": "cut",
+      "transitionOut": "crossfade",
+      "notes": "Midnight role: fracture / destabilization"
+    },
+    {
+      "id": "mid-03",
       "kind": "animation",
       "pieceId": "fractals/sdf-raymarch2d",
       "seed": 91337,
@@ -19,17 +45,14 @@
         "palette": "bone-black",
         "pfl_style": "pfl-signal"
       },
-      "durationSec": 12,
+      "durationSec": 16,
       "animArc": "pan-left-right",
       "transitionIn": "crossfade",
       "transitionOut": "crossfade",
-      "notes": "Continuous browser-native animation",
-      "stillPreset": "projection-16x9",
-      "animPreset": "loop-12s",
-      "animFormat": "webp"
+      "notes": "Midnight role: signal / void mouth — live shader"
     },
     {
-      "id": "item-0002",
+      "id": "mid-04",
       "kind": "animation",
       "pieceId": "reaction-diffusion/reaction-diffusion",
       "seed": 44021,
@@ -41,36 +64,56 @@
         "settle_steps": 1200,
         "pfl_style": "pfl-organism"
       },
-      "durationSec": 12,
+      "durationSec": 16,
       "animArc": "emergence",
       "transitionIn": "crossfade",
       "transitionOut": "crossfade",
-      "notes": "Stateful simulation — export via Python frames",
-      "stillPreset": "projection-16x9",
-      "animPreset": "loop-12s",
-      "animFormat": "webp"
+      "notes": "Midnight role: collapse / devouring"
     },
     {
-      "id": "item-0003",
-      "kind": "still",
+      "id": "mid-05",
+      "kind": "animation",
       "pieceId": "geometry/metatron",
       "seed": 271828,
       "frame": 0,
       "styleId": "pfl-ritual",
       "parameters": {
-        "density": 0.58,
+        "density": 0.72,
         "composition_mode": "construction",
         "pfl_style": "pfl-ritual",
         "palette": "bone-black"
       },
+      "durationSec": 18,
+      "animArc": "construction-hold",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Midnight role: ritual construction"
+    },
+    {
+      "id": "mid-06",
+      "kind": "animation",
+      "pieceId": "geometry/sri-yantra",
+      "seed": 1618,
+      "styleId": "pfl-ritual",
+      "parameters": { "pfl_style": "pfl-ritual", "palette": "bone-black" },
+      "durationSec": 14,
+      "animArc": "construction-hold",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Midnight role: impossible aftermath"
+    },
+    {
+      "id": "mid-07",
+      "kind": "animation",
+      "pieceId": "mashups/ritual-diagrams",
+      "seed": 555,
+      "styleId": "pfl-ritual",
+      "parameters": { "pfl_style": "pfl-ritual" },
       "durationSec": 12,
       "animArc": "construction-hold",
       "transitionIn": "crossfade",
       "transitionOut": "crossfade",
-      "notes": "Geometric construction still",
-      "stillPreset": "projection-16x9",
-      "animPreset": "loop-12s",
-      "animFormat": "webp"
+      "notes": "Midnight bridge — stacked diagrams"
     }
   ]
 }

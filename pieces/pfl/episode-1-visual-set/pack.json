@@ -1,0 +1,136 @@
+{
+  "protocol_version": "0.1.0",
+  "pack_id": "pfl-packs/episode-1-visual-set",
+  "name": "PFL Episode 1 Visual Set",
+  "description": "First-pass rehearsal sequence — intro, build, midnight, aftermath.",
+  "style": "pfl-ritual",
+  "created_at": "2026-09-20T00:00:00.000Z",
+  "still_preset": "projection-16x9",
+  "items": [
+    {
+      "id": "ep1-01",
+      "kind": "animation",
+      "pieceId": "fields/flow-hatching",
+      "seed": 44,
+      "parameters": { "density": 0.55, "pfl_style": "pfl-ritual" },
+      "durationSec": 16,
+      "animArc": "slow-drift",
+      "notes": "Intro — calm texture"
+    },
+    {
+      "id": "ep1-02",
+      "kind": "animation",
+      "pieceId": "geometry/flower-of-life",
+      "seed": 31415,
+      "parameters": { "pfl_style": "pfl-ritual", "palette": "bone-black" },
+      "durationSec": 14,
+      "animArc": "construction-hold",
+      "notes": "Intro — ceremonial geometry"
+    },
+    {
+      "id": "ep1-03",
+      "kind": "animation",
+      "pieceId": "growth/slime-mold",
+      "seed": 7,
+      "parameters": { "density": 0.65 },
+      "durationSec": 16,
+      "animArc": "emergence",
+      "notes": "Build — organic tension"
+    },
+    {
+      "id": "ep1-04",
+      "kind": "animation",
+      "pieceId": "fractals/escape-time",
+      "seed": 777,
+      "parameters": { "pfl_style": "pfl-signal" },
+      "durationSec": 12,
+      "animArc": "slow-drift",
+      "notes": "Build — omen pressure"
+    },
+    {
+      "id": "ep1-05",
+      "kind": "animation",
+      "pieceId": "tiling/truchet-tiles",
+      "seed": 88,
+      "parameters": {},
+      "durationSec": 10,
+      "animArc": "pan-left-right",
+      "notes": "Transition bridge"
+    },
+    {
+      "id": "ep1-06",
+      "kind": "animation",
+      "pieceId": "particles/noodles",
+      "seed": 9,
+      "parameters": { "density": 0.7 },
+      "durationSec": 12,
+      "animArc": "continuous-evolution",
+      "notes": "Peak energy"
+    },
+    {
+      "id": "ep1-07",
+      "kind": "animation",
+      "pieceId": "flagship/latticefall",
+      "seed": 12007,
+      "parameters": {},
+      "durationSec": 10,
+      "animArc": "continuous-evolution",
+      "notes": "Fracture into midnight"
+    },
+    {
+      "id": "ep1-08",
+      "kind": "animation",
+      "pieceId": "fractals/sdf-raymarch2d",
+      "seed": 91337,
+      "parameters": { "density": 0.62, "palette": "bone-black", "pfl_style": "pfl-signal" },
+      "durationSec": 16,
+      "animArc": "pan-left-right",
+      "notes": "Midnight signal field"
+    },
+    {
+      "id": "ep1-09",
+      "kind": "animation",
+      "pieceId": "reaction-diffusion/reaction-diffusion",
+      "seed": 44021,
+      "parameters": { "preset": "coral", "pfl_style": "pfl-organism" },
+      "durationSec": 16,
+      "animArc": "emergence",
+      "notes": "Midnight organism"
+    },
+    {
+      "id": "ep1-10",
+      "kind": "animation",
+      "pieceId": "geometry/metatron",
+      "seed": 271828,
+      "parameters": {
+        "density": 0.72,
+        "composition_mode": "construction",
+        "pfl_style": "pfl-ritual",
+        "palette": "bone-black"
+      },
+      "durationSec": 18,
+      "animArc": "construction-hold",
+      "notes": "Midnight ritual construction"
+    },
+    {
+      "id": "ep1-11",
+      "kind": "animation",
+      "pieceId": "geometry/sri-yantra",
+      "seed": 1618,
+      "parameters": { "pfl_style": "pfl-ritual" },
+      "durationSec": 14,
+      "animArc": "construction-hold",
+      "notes": "Midnight aftermath diagram"
+    },
+    {
+      "id": "ep1-12",
+      "kind": "animation",
+      "pieceId": "fractals/strange-attractors",
+      "seed": 113,
+      "parameters": {},
+      "durationSec": 12,
+      "animArc": "slow-drift",
+      "notes": "Outro dissolve"
+    }
+  ]
+}
