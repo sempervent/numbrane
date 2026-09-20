@@ -491,6 +491,30 @@ animation-export:
     cd "{{root}}/engines/python"
     uv run pytest tests/test_render_service.py -q
 
+[group('studio')]
+studio-docker-matrix: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist --enable-unsafe-swiftshader}"
+    npx playwright test -c playwright.docker-matrix.config.ts
+
+[group('studio')]
+studio-performance-soak-60: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist --enable-unsafe-swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts --grep "60"
+
+[group('studio')]
+studio-performance-soak-120: studio-docker-up
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---enable-webgl --ignore-gpu-blocklist --enable-unsafe-swiftshader}"
+    npx playwright test -c playwright.performance-soak.config.ts --grep "120"
+
 # ── Docker Bake ──────────────────────────────────────────────────────
 
 [group('docker')]

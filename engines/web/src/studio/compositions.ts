@@ -2,12 +2,19 @@
  * Composition recipes — authentic multi-piece compositor scenes.
  */
 
-import type { SetDef } from "../live/types";
+import type { BlendMode, SetDef } from "../live/types";
+
+export type CompositionLayerDefaults = {
+  opacity?: number;
+  blend?: BlendMode;
+};
 
 export type CompositionRecipe = {
   id: string;
   label: string;
   description: string;
+  /** Live Animate method id per layer (L0 follows Studio primary method when omitted). */
+  layerMethods?: Partial<Record<string, string>>;
   build: (seed: number, params: Record<string, number | string | boolean>) => SetDef;
 };
 
@@ -35,6 +42,62 @@ function setOf(
 }
 
 export const COMPOSITIONS: CompositionRecipe[] = [
+  {
+    id: "geometry-sdf",
+    label: "Geometry + SDF",
+    description: "Metatron ritual geometry over SDF raymarch field",
+    layerMethods: {
+      L0: "pan-left-right",
+      L1: "construction",
+    },
+    build: (seed, params) =>
+      setOf("geometry-sdf", "Geometry + SDF", [
+        {
+          id: "L0",
+          piece: "fractals/sdf-raymarch2d",
+          opacity: 1,
+          blend: "normal",
+          seed,
+          parameters: { ...params },
+        },
+        {
+          id: "L1",
+          piece: "geometry/metatron",
+          opacity: 0.48,
+          blend: "screen",
+          seed,
+          parameters: { ...params, density: 0.52 },
+        },
+      ]),
+  },
+  {
+    id: "yantra-sdf",
+    label: "Yantra + SDF",
+    description: "Sri Yantra over SDF depth field",
+    layerMethods: {
+      L0: "slow-drift",
+      L1: "construction",
+    },
+    build: (seed, params) =>
+      setOf("yantra-sdf", "Yantra + SDF", [
+        {
+          id: "L0",
+          piece: "fractals/sdf-raymarch2d",
+          opacity: 1,
+          blend: "normal",
+          seed,
+          parameters: { ...params },
+        },
+        {
+          id: "L1",
+          piece: "geometry/sri-yantra",
+          opacity: 0.5,
+          blend: "screen",
+          seed: seed ^ 0x9e3779b9,
+          parameters: { ...params, density: 0.55 },
+        },
+      ]),
+  },
   {
     id: "attractor-hatch",
     label: "Attractor + hatch",
@@ -66,6 +129,10 @@ export const COMPOSITIONS: CompositionRecipe[] = [
     id: "rd-geometry",
     label: "RD + geometry mask",
     description: "Reaction diffusion with Metatron overlay",
+    layerMethods: {
+      L0: "continuous-evolution",
+      L1: "construction",
+    },
     build: (seed, params) =>
       setOf("rd-geometry", "RD + geometry", [
         {
@@ -90,6 +157,10 @@ export const COMPOSITIONS: CompositionRecipe[] = [
     id: "slime-sdf",
     label: "Slime + SDF",
     description: "Authentic slime mold over SDF raymarch",
+    layerMethods: {
+      L0: "continuous-evolution",
+      L1: "pan-left-right",
+    },
     build: (seed, params) =>
       setOf("slime-sdf", "Slime + SDF", [
         {
@@ -138,6 +209,10 @@ export const COMPOSITIONS: CompositionRecipe[] = [
     id: "metatron-noodles",
     label: "Metatron + particles",
     description: "Sacred geometry with noodle trails",
+    layerMethods: {
+      L0: "construction",
+      L1: "flow",
+    },
     build: (seed, params) =>
       setOf("metatron-noodles", "Metatron + noodles", [
         {
@@ -162,6 +237,10 @@ export const COMPOSITIONS: CompositionRecipe[] = [
     id: "yantra-rd",
     label: "Sri Yantra + RD",
     description: "Reaction diffusion under ritual geometry",
+    layerMethods: {
+      L0: "continuous-evolution",
+      L1: "slow-drift",
+    },
     build: (seed, params) =>
       setOf("yantra-rd", "Yantra + RD", [
         {

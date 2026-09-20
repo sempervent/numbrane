@@ -8,7 +8,7 @@ import { hasComponent, type AnimationSpec } from "./spec";
 import { normalizeSpecForPiece } from "./capabilities";
 import { applyAnimationMethod, RANDOM_METHOD_ID } from "./methods";
 
-export type PerformanceTransition = "cut" | "crossfade";
+export type PerformanceTransition = "cut" | "crossfade" | "fade-black";
 
 /** Any piece that animates on the browser live surface (not python-api preview). */
 function isLiveNativeBackend(pieceId: string, mode: StudioMode = "animate"): boolean {

@@ -19,6 +19,7 @@ export default defineConfig({
     "**/studio-crossfade.spec.ts",
     "**/studio-pan-continuity.spec.ts",
     "**/studio-full-bleed.spec.ts",
+    "**/studio-composition.spec.ts",
   ],
   timeout: 120_000,
   fullyParallel: false,

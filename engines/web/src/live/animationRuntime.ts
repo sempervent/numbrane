@@ -117,6 +117,10 @@ export class AnimationRuntime {
     if (!this.sourceDigest) this.sourceDigest = digest;
   }
 
+  applyToPiece(piece: LivePiece, _baseParams: Map<string, Record<string, number>>): void {
+    this.applyToPieces([piece], _baseParams);
+  }
+
   applyToPieces(pieces: Iterable<LivePiece>, _baseParams: Map<string, Record<string, number>>): void {
     const st = this.evaluate();
     for (const piece of pieces) {

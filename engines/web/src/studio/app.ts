@@ -3,7 +3,7 @@
  */
 
 import { LiveSession } from "../live/session";
-import type { SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
+import type { BlendMode, SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
 import { createLivePiece } from "../live/pieces/registry";
 import {
   createStudioRegistry,
@@ -370,6 +370,10 @@ export class StudioApp {
       performanceMode: this.session?.animationRuntime.performanceMode ?? false,
       cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
       cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
+      compositionId: this.compositionId,
+      layerStates: this.session?.getLayerPerformanceStates() ?? [],
+      framePacing: this.session?.getFramePacingSnapshot() ?? null,
+      primaryLiveSessionCount: this.getPrimaryLiveSessionCount(),
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
     };
@@ -789,6 +793,7 @@ export class StudioApp {
       this.applyStudioPerformanceClock();
     }
     this.session.fitStageViewport();
+    this.syncCompositionLayerAnimations();
     this.kickLiveSurface();
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
@@ -2268,8 +2273,75 @@ export class StudioApp {
     if (push) history.replaceState(null, "", u);
   }
 
+  private showPerformanceFadeMask(opacity: number): void {
+    const mask = document.getElementById("performance-fade-mask");
+    if (!mask) return;
+    mask.style.opacity = String(Math.min(1, Math.max(0, opacity)));
+    mask.style.pointerEvents = opacity > 0.05 ? "auto" : "none";
+  }
+
+  private syncCompositionLayerAnimations(): void {
+    if (!this.session || (this.mode !== "animate" && this.mode !== "react")) return;
+    this.session.clearOverlayLayerAnimations();
+    const scene = this.session.runtime.getScene();
+    if (!this.compositionId || !scene || scene.layers.length < 2) return;
+    const recipe = compositionById(this.compositionId);
+    if (!recipe?.layerMethods) return;
+    const overlays: Array<{ layerId: string; spec: import("./animation/spec").AnimationSpec }> = [];
+    for (const layer of scene.layers) {
+      if (layer.id === "L0") continue;
+      const methodId = recipe.layerMethods[layer.id];
+      if (!methodId) continue;
+      overlays.push({
+        layerId: layer.id,
+        spec: resolveLivePerformanceMethodSpec(layer.piece, methodId, this.mode),
+      });
+    }
+    this.session.setOverlayLayerAnimations(overlays);
+    const l0Method = recipe.layerMethods.L0;
+    const l0 = scene.layers.find((l) => l.id === "L0");
+    if (l0Method && l0) {
+      this.animationMethodId = l0Method;
+      this.activeAnimationMethodId = l0Method;
+      this.animationSpec = resolveLivePerformanceMethodSpec(l0.piece, l0Method, this.mode);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: false,
+        performanceMode: true,
+      });
+      this.applyStudioPerformanceClock();
+    }
+  }
+
+  async setPerformanceComposition(compositionId: string | null): Promise<void> {
+    const preserve = this.mode === "animate" || this.mode === "react";
+    if (preserve) this.beginVisualTransition();
+    this.compositionId = compositionId;
+    if (compositionId) {
+      const recipe = compositionById(compositionId);
+      const preview = recipe?.build(this.seed, this.params);
+      const basePiece = preview?.scenes[0]?.layers[0]?.piece;
+      if (basePiece) this.pieceId = basePiece;
+    }
+    await this.applyPieceScene();
+    if (preserve) {
+      if (await this.waitForIncomingVisual()) this.finishVisualTransition();
+      else this.keepTransitionAsFallback();
+    }
+    this.renderConfig();
+    this.syncUrl(true);
+  }
+
+  /** Test/diagnostics — Studio uses exactly one primary LiveSession. */
+  getPrimaryLiveSessionCount(): number {
+    return this.session ? 1 : 0;
+  }
+
   private beginVisualTransition(): void {
     if (this.pieceTransition === "cut") return;
+    if (this.pieceTransition === "fade-black") {
+      this.showPerformanceFadeMask(1);
+      return;
+    }
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold) return;
     const preview = document.getElementById("generate-preview") as HTMLImageElement | null;
@@ -2305,6 +2377,10 @@ export class StudioApp {
   }
 
   private finishVisualTransition(): void {
+    if (this.pieceTransition === "fade-black") {
+      this.showPerformanceFadeMask(0);
+      return;
+    }
     const hold = document.getElementById("switch-hold") as HTMLImageElement | null;
     if (!hold?.classList.contains("visible")) return;
     if (this.pieceTransition === "cut") {
@@ -2713,9 +2789,34 @@ export class StudioApp {
         const segRemain = Math.max(0, this.randomIntervalSec - segElapsed);
         return `
         <h2>Performance</h2>
+        <label for="cfg-perf-comp">Composition</label>
+        <select id="cfg-perf-comp">
+          <option value="">(single piece)</option>
+          ${COMPOSITIONS.map((c) => `<option value="${c.id}" ${this.compositionId === c.id ? "selected" : ""}>${c.label}</option>`).join("")}
+        </select>
+        ${this.compositionId && this.session ? (() => {
+          const layers = this.session.getLayerPerformanceStates();
+          const blends: BlendMode[] = ["normal", "add", "multiply", "screen", "difference", "lighten", "darken"];
+          return layers.length
+            ? `<details open><summary>Layers (${layers.length})</summary>${layers
+                .map(
+                  (l) => `
+              <div class="row" style="flex-wrap:wrap;margin:0.35rem 0">
+                <label style="min-width:4rem"><input type="checkbox" data-layer-enable="${l.id}" ${l.enabled ? "checked" : ""} /> ${l.id}</label>
+                <span class="muted" style="flex:1">${l.piece.split("/").pop()}</span>
+              </div>
+              <label class="muted">Opacity ${l.id}</label>
+              <input type="range" min="0" max="1" step="0.01" data-layer-opacity="${l.id}" value="${l.opacity.toFixed(2)}" />
+              <label class="muted">Blend ${l.id}</label>
+              <select data-layer-blend="${l.id}">${blends.map((b) => `<option value="${b}" ${l.blend === b ? "selected" : ""}>${b}</option>`).join("")}</select>
+              `,
+                )
+                .join("")}${layers.length >= 2 ? `<button type="button" id="cfg-layer-swap">Swap L0 ↔ L1</button>` : ""}</details>`
+            : "";
+        })() : ""}
         <div class="row">
           <button type="button" id="cfg-prev-piece" title="Previous piece [">◀</button>
-          <span class="muted" style="flex:1;text-align:center">${this.pieceId.split("/").pop()}</span>
+          <span class="muted" style="flex:1;text-align:center">${this.compositionId ? this.compositionId : this.pieceId.split("/").pop()}</span>
           <button type="button" id="cfg-next-piece" title="Next piece ]">▶</button>
           <button type="button" id="cfg-random-piece">Random</button>
         </div>
@@ -2750,6 +2851,7 @@ export class StudioApp {
         <label>Transition</label>
         <select id="cfg-piece-transition">
           <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
+          <option value="fade-black" ${this.pieceTransition === "fade-black" ? "selected" : ""}>Fade through black</option>
           <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
         </select>
         <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · unbounded performance clock${
@@ -3036,6 +3138,34 @@ export class StudioApp {
     el.querySelector("#cfg-play")?.addEventListener("click", () => {
       this.togglePlay();
       this.renderConfig();
+    });
+    el.querySelector("#cfg-perf-comp")?.addEventListener("change", (e) => {
+      const v = (e.target as HTMLSelectElement).value;
+      void this.setPerformanceComposition(v || null);
+    });
+    el.querySelectorAll<HTMLInputElement>("[data-layer-enable]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const id = input.getAttribute("data-layer-enable")!;
+        this.session?.setLayerPerformanceState(id, { enabled: input.checked });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelectorAll<HTMLInputElement>("[data-layer-opacity]").forEach((input) => {
+      input.addEventListener("input", () => {
+        const id = input.getAttribute("data-layer-opacity")!;
+        this.session?.setLayerPerformanceState(id, { opacity: Number(input.value) });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelectorAll<HTMLSelectElement>("[data-layer-blend]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.getAttribute("data-layer-blend")!;
+        this.session?.setLayerPerformanceState(id, { blend: sel.value as BlendMode });
+        this.kickLiveSurface();
+      });
+    });
+    el.querySelector("#cfg-layer-swap")?.addEventListener("click", () => {
+      if (this.session?.swapLayerOrder("L0", "L1")) this.kickLiveSurface();
     });
     el.querySelector("#cfg-prev-piece")?.addEventListener("click", () => void this.cyclePiece(-1));
     el.querySelector("#cfg-next-piece")?.addEventListener("click", () => void this.cyclePiece(1));
