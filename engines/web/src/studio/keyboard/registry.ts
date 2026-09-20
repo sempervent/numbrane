@@ -29,7 +29,18 @@ export type CommandDef = {
   handler: CommandHandler;
 };
 
-function normalizeEvent(e: KeyboardEvent): string {
+/** Normalized chord string used for registry matching (exported for tests). */
+export function keyboardChordFromEvent(e: KeyboardEvent): string {
+  // Physical ? on US QWERTY is Shift+/; browsers often emit key "?" with shiftKey set.
+  if (e.key === "?" || (e.key === "/" && e.shiftKey)) {
+    const mods: string[] = [];
+    if (e.altKey) mods.push("alt");
+    if (e.metaKey) mods.push("meta");
+    if (e.ctrlKey) mods.push("ctrl");
+    mods.push("shift", "/");
+    return mods.join("+");
+  }
+
   const parts: string[] = [];
   if (e.shiftKey && e.key !== "Shift") parts.push("shift");
   if (e.altKey && e.key !== "Alt") parts.push("alt");
@@ -100,7 +111,7 @@ export class KeyboardRegistry {
     ) {
       if (e.key !== "Escape") return false;
     }
-    const chord = normalizeEvent(e);
+    const chord = keyboardChordFromEvent(e);
     for (const cmd of this.commands) {
       if (cmd.modes && !cmd.modes.includes(ctx.mode) && cmd.group !== "global") continue;
       if (cmd.group !== "global" && cmd.group !== ctx.mode && !cmd.modes?.includes(ctx.mode)) {

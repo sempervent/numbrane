@@ -59,6 +59,21 @@ import {
   samplePreviewImageGrid,
 } from "./animate/apiPreviewPresent";
 import { PFL_STYLES, applyStyle, type MutationScale } from "./style/pfl";
+import {
+  emptyPack,
+  itemFromLook,
+  loadPackDraft,
+  savePackDraft,
+  reorderItems,
+  STILL_PRESETS,
+  ANIM_PRESETS,
+  slugify,
+  fetchPackFixture,
+  type PflPack,
+  type PackItem,
+  type PackItemKind,
+} from "./pack/types";
+import { exportPackApi, loadPackManifest } from "./pack/api";
 import type { ReactSensitivity } from "./audio/profiles";
 import { apiExportAnimation, webpIsAnimated } from "./export/api";
 import { encodeAnimationJob } from "./export/animationJobs";
@@ -208,6 +223,8 @@ export class StudioApp {
   private apiPreviewPresentGrid: Uint8Array | null = null;
   private apiPreviewPresentStats: import("../live/pixelMetrics").PixelFrame | null = null;
   compositionId: string | null = null;
+  pack: PflPack = loadPackDraft() ?? emptyPack("Midnight PFL Pack");
+  packPanelOpen = false;
   audioEnabled = false;
   audioLevel = 0;
   currentSeedId: string | null = null;
@@ -937,6 +954,7 @@ export class StudioApp {
         group: "global",
         handler: () => {
           this.helpVisible = !this.helpVisible;
+          if (this.helpVisible) this.renderHelp();
           this.syncChrome();
         },
       },
@@ -1052,19 +1070,21 @@ export class StudioApp {
       },
       {
         id: "prev",
-        keys: "[",
-        match: ["["],
-        label: "Previous piece",
-        group: "global",
-        handler: () => void this.cyclePiece(-1),
+        keys: "[ / ←",
+        match: ["[", "arrowleft"],
+        label: "Previous visualization",
+        group: "animate",
+        modes: ["animate", "react"],
+        handler: () => void this.cycleVisualization(-1),
       },
       {
         id: "next",
-        keys: "]",
-        match: ["]"],
-        label: "Next piece",
-        group: "global",
-        handler: () => void this.cyclePiece(1),
+        keys: "] / →",
+        match: ["]", "arrowright"],
+        label: "Next visualization",
+        group: "animate",
+        modes: ["animate", "react"],
+        handler: () => void this.cycleVisualization(1),
       },
       {
         id: "blackout",
@@ -1459,6 +1479,14 @@ export class StudioApp {
     if (next) await this.setPiece(next);
   }
 
+  /** Keyboard-first piece change — no picker, overlays, or toast. */
+  async cycleVisualization(dir: number): Promise<void> {
+    this.browserVisible = false;
+    this.helpVisible = false;
+    await this.cyclePiece(dir);
+    this.syncChrome();
+  }
+
   async cycleRandomPiece(): Promise<void> {
     const ids = this.performancePiecePool().filter((id) => id !== this.pieceId);
     if (ids.length === 0) return;
@@ -1635,6 +1663,115 @@ export class StudioApp {
     this.anim.startFrame = this.frame;
     toast(`Animate This · frame ${this.frame}`);
     await this.setMode("animate");
+  }
+
+  addCurrentToPack(kind: PackItemKind = "still"): void {
+    const item = itemFromLook({
+      pieceId: this.pieceId,
+      seed: this.seed,
+      frame: this.frame,
+      styleId: this.pflStyleId || undefined,
+      parameters: { ...this.params },
+      kind,
+      animArc: this.activeAnimationMethodId,
+    });
+    item.stillPreset = this.pack.still_preset;
+    if (kind === "animation") {
+      item.animPreset = "loop-12s";
+      item.durationSec = 12;
+    }
+    if (kind === "react") {
+      item.durationSec = 30;
+      item.animPreset = "section-30s";
+    }
+    this.pack.items.push(item);
+    if (!this.pack.style && this.pflStyleId) this.pack.style = this.pflStyleId;
+    savePackDraft(this.pack);
+    this.packPanelOpen = true;
+    this.renderConfig();
+    toast(`added to pack (${this.pack.items.length})`);
+  }
+
+  addFavoritesToPack(): void {
+    let n = 0;
+    for (const fav of this.prefs.favorites.slice(0, 12)) {
+      const params =
+        (fav.recipe?.parameters as Record<string, number | string | boolean> | undefined) ||
+        {};
+      this.pack.items.push(
+        itemFromLook({
+          pieceId: fav.pieceId,
+          seed: fav.seed,
+          parameters: params,
+          kind: "still",
+        }),
+      );
+      n += 1;
+    }
+    savePackDraft(this.pack);
+    this.packPanelOpen = true;
+    this.renderConfig();
+    toast(`added ${n} favorites to pack`);
+  }
+
+  movePackItem(from: number, to: number): void {
+    this.pack.items = reorderItems(this.pack.items, from, to);
+    savePackDraft(this.pack);
+    this.renderConfig();
+  }
+
+  removePackItem(id: string): void {
+    this.pack.items = this.pack.items.filter((i) => i.id !== id);
+    savePackDraft(this.pack);
+    this.renderConfig();
+  }
+
+  updatePackItem(id: string, patch: Partial<PackItem>): void {
+    this.pack.items = this.pack.items.map((i) => (i.id === id ? { ...i, ...patch } : i));
+    savePackDraft(this.pack);
+  }
+
+  async exportCurrentPack(preview = false): Promise<void> {
+    if (!this.pack.items.length) {
+      toast("pack is empty — Add to Pack first");
+      return;
+    }
+    toast(preview ? "exporting pack preview…" : "exporting PFL pack…");
+    const res = await exportPackApi(this.pack, { preview });
+    if (!res.ok) {
+      toast((res.error || "pack export failed").slice(0, 140));
+      return;
+    }
+    toast(`pack → ${res.path}`);
+    this.pack.output_root = res.path;
+    savePackDraft(this.pack);
+  }
+
+  async reloadPackFromDisk(): Promise<void> {
+    const slug = slugify(this.pack.name);
+    const loaded = await loadPackManifest(slug);
+    if (!loaded) {
+      toast("no exported manifest found for this pack name");
+      return;
+    }
+    this.pack = loaded;
+    savePackDraft(this.pack);
+    this.packPanelOpen = true;
+    this.renderConfig();
+    toast(`loaded ${loaded.items.length} pack items`);
+  }
+
+  async loadMidnightPackFixture(): Promise<void> {
+    const fixture = await fetchPackFixture("midnight-pfl-pack");
+    if (!fixture) {
+      toast("Midnight pack fixture missing");
+      return;
+    }
+    this.pack = fixture;
+    savePackDraft(this.pack);
+    this.packPanelOpen = true;
+    this.renderConfig();
+    toast(`loaded Midnight PFL Pack (${fixture.items.length} items)`);
   }
 
   async saveSeedState(): Promise<void> {
@@ -2251,6 +2388,60 @@ export class StudioApp {
           <button type="button" id="cfg-series">Generate Series</button>
         </div>
         <button type="button" class="primary" id="cfg-animate-this">Animate This</button>
+        <div class="row">
+          <button type="button" id="cfg-pack-add">Add to Pack</button>
+          <button type="button" id="cfg-pack-add-anim">+ Anim section</button>
+        </div>
+        <button type="button" id="cfg-pack-favs">Favorites → Pack</button>
+        <details class="advanced" ${this.packPanelOpen ? "open" : ""} id="cfg-pack-panel">
+          <summary>PFL Pack (${this.pack.items.length})</summary>
+          <label>Pack name</label>
+          <input id="cfg-pack-name" type="text" value="${this.pack.name.replace(/"/g, "&quot;")}" />
+          <label>Still preset</label>
+          <select id="cfg-pack-still">
+            ${Object.entries(STILL_PRESETS)
+              .map(
+                ([id, p]) =>
+                  `<option value="${id}" ${this.pack.still_preset === id ? "selected" : ""}>${p.label}</option>`,
+              )
+              .join("")}
+          </select>
+          <button type="button" id="cfg-pack-midnight">Load Midnight fixture</button>
+          <div id="pack-items">
+            ${this.pack.items
+              .map(
+                (it, idx) => `
+              <div class="row" style="align-items:flex-start;gap:0.25rem;margin:0.35rem 0;border-bottom:1px solid var(--line);padding-bottom:0.35rem">
+                <span class="muted">${idx + 1}</span>
+                <div style="flex:1">
+                  <div>${it.pieceId.split("/").pop()} · s${it.seed} · ${it.kind}</div>
+                  <select data-pack-kind="${it.id}">
+                    ${(["still", "animation", "react"] as PackItemKind[])
+                      .map((k) => `<option value="${k}" ${it.kind === k ? "selected" : ""}>${k}</option>`)
+                      .join("")}
+                  </select>
+                  <select data-pack-anim="${it.id}">
+                    ${Object.entries(ANIM_PRESETS)
+                      .map(
+                        ([id, p]) =>
+                          `<option value="${id}" ${it.animPreset === id ? "selected" : ""}>${p.label}</option>`,
+                      )
+                      .join("")}
+                  </select>
+                </div>
+                <button type="button" data-pack-up="${idx}" ${idx === 0 ? "disabled" : ""}>↑</button>
+                <button type="button" data-pack-down="${idx}" ${idx >= this.pack.items.length - 1 ? "disabled" : ""}>↓</button>
+                <button type="button" data-pack-rm="${it.id}">×</button>
+              </div>`,
+              )
+              .join("") || `<p class="muted">Empty — explore then Add to Pack</p>`}
+          </div>
+          <div class="row">
+            <button type="button" class="primary" id="cfg-pack-export">Build PFL Pack</button>
+            <button type="button" id="cfg-pack-preview">Preview export</button>
+          </div>
+          <button type="button" id="cfg-pack-reload">Reload exported</button>
+        </details>
         <div id="variants"></div>
       ` : ""}
       ${this.mode === "animate" ? (() => {
@@ -2497,6 +2688,56 @@ export class StudioApp {
     el.querySelector("#cfg-variants")?.addEventListener("click", () => void this.exploreVariants());
     el.querySelector("#cfg-series")?.addEventListener("click", () => void this.exploreSeries());
     el.querySelector("#cfg-animate-this")?.addEventListener("click", () => void this.animateThis());
+    el.querySelector("#cfg-pack-add")?.addEventListener("click", () => this.addCurrentToPack("still"));
+    el.querySelector("#cfg-pack-add-anim")?.addEventListener("click", () =>
+      this.addCurrentToPack("animation"),
+    );
+    el.querySelector("#cfg-pack-favs")?.addEventListener("click", () => this.addFavoritesToPack());
+    el.querySelector("#cfg-pack-midnight")?.addEventListener("click", () =>
+      void this.loadMidnightPackFixture(),
+    );
+    el.querySelector("#cfg-pack-name")?.addEventListener("change", (e) => {
+      this.pack.name = (e.target as HTMLInputElement).value;
+      savePackDraft(this.pack);
+    });
+    el.querySelector("#cfg-pack-still")?.addEventListener("change", (e) => {
+      this.pack.still_preset = (e.target as HTMLSelectElement).value as PflPack["still_preset"];
+      savePackDraft(this.pack);
+    });
+    el.querySelector("#cfg-pack-export")?.addEventListener("click", () => void this.exportCurrentPack(false));
+    el.querySelector("#cfg-pack-preview")?.addEventListener("click", () => void this.exportCurrentPack(true));
+    el.querySelector("#cfg-pack-reload")?.addEventListener("click", () => void this.reloadPackFromDisk());
+    el.querySelectorAll<HTMLSelectElement>("[data-pack-kind]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.getAttribute("data-pack-kind")!;
+        this.updatePackItem(id, { kind: sel.value as PackItemKind });
+        this.renderConfig();
+      });
+    });
+    el.querySelectorAll<HTMLSelectElement>("[data-pack-anim]").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        const id = sel.getAttribute("data-pack-anim")!;
+        this.updatePackItem(id, { animPreset: sel.value as PackItem["animPreset"] });
+      });
+    });
+    el.querySelectorAll<HTMLButtonElement>("[data-pack-up]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const from = Number(btn.getAttribute("data-pack-up"));
+        this.movePackItem(from, from - 1);
+      });
+    });
+    el.querySelectorAll<HTMLButtonElement>("[data-pack-down]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const from = Number(btn.getAttribute("data-pack-down"));
+        this.movePackItem(from, from + 1);
+      });
+    });
+    el.querySelectorAll<HTMLButtonElement>("[data-pack-rm]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const id = btn.getAttribute("data-pack-rm")!;
+        this.removePackItem(id);
+      });
+    });
     el.querySelector("#cfg-batch")?.addEventListener("change", (e) => {
       this.variantBatch = Number((e.target as HTMLSelectElement).value) || 12;
     });

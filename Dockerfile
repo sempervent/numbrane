@@ -29,7 +29,7 @@ CMD ["pytest", "-q"]
 FROM python-runtime AS render-runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-COPY docker/__init__.py docker/render_service.py /src/docker/
+COPY docker/__init__.py docker/render_service.py docker/pack_export.py /src/docker/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --python /src/engines/python/.venv/bin/python \
       fastapi "uvicorn[standard]" pillow imageio imageio-ffmpeg

@@ -1,0 +1,76 @@
+{
+  "protocol_version": "0.1.0",
+  "pack_id": "pfl-packs/midnight-pfl-pack",
+  "name": "Midnight PFL Pack",
+  "description": "Production rehearsal pack — continuous shader, reaction-diffusion, sacred geometry construction.",
+  "style": "pfl-ritual",
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "still_preset": "projection-16x9",
+  "items": [
+    {
+      "id": "item-0001",
+      "kind": "animation",
+      "pieceId": "fractals/sdf-raymarch2d",
+      "seed": 91337,
+      "frame": 0,
+      "styleId": "pfl-signal",
+      "parameters": {
+        "density": 0.62,
+        "palette": "bone-black",
+        "pfl_style": "pfl-signal"
+      },
+      "durationSec": 12,
+      "animArc": "pan-left-right",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Continuous browser-native animation",
+      "stillPreset": "projection-16x9",
+      "animPreset": "loop-12s",
+      "animFormat": "webp"
+    },
+    {
+      "id": "item-0002",
+      "kind": "animation",
+      "pieceId": "reaction-diffusion/reaction-diffusion",
+      "seed": 44021,
+      "frame": 0,
+      "styleId": "pfl-organism",
+      "parameters": {
+        "preset": "coral",
+        "iterations": 600,
+        "settle_steps": 1200,
+        "pfl_style": "pfl-organism"
+      },
+      "durationSec": 12,
+      "animArc": "emergence",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Stateful simulation — export via Python frames",
+      "stillPreset": "projection-16x9",
+      "animPreset": "loop-12s",
+      "animFormat": "webp"
+    },
+    {
+      "id": "item-0003",
+      "kind": "still",
+      "pieceId": "geometry/metatron",
+      "seed": 271828,
+      "frame": 0,
+      "styleId": "pfl-ritual",
+      "parameters": {
+        "density": 0.58,
+        "composition_mode": "construction",
+        "pfl_style": "pfl-ritual",
+        "palette": "bone-black"
+      },
+      "durationSec": 12,
+      "animArc": "construction-hold",
+      "transitionIn": "crossfade",
+      "transitionOut": "crossfade",
+      "notes": "Geometric construction still",
+      "stillPreset": "projection-16x9",
+      "animPreset": "loop-12s",
+      "animFormat": "webp"
+    }
+  ]
+}

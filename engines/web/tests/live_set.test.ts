@@ -19,6 +19,13 @@ describe("live set + recording", () => {
     readFileSync(resolve(root, "pieces/live/pfl-default/set.json"), "utf8"),
   ) as SetDef;
 
+  it("loads midnight-pfl-pack scenes", () => {
+    const raw = readFileSync(resolve(root, "pieces/live/midnight-pfl-pack/set.json"), "utf8");
+    const set = JSON.parse(raw) as { set_id: string; scenes: unknown[] };
+    expect(set.set_id).toBe("pfl-packs-midnight-pfl-pack");
+    expect(set.scenes.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("loads pfl-default scenes", () => {
     const rt = new LiveRuntime();
     rt.loadSet(set);

@@ -9,6 +9,7 @@ import { collectPieceManifests } from "./src/studio/catalog/manifestCollection";
 const root = dirname(fileURLToPath(import.meta.url));
 const shadersDir = resolve(root, "shaders");
 const setsDir = resolve(root, "../../pieces/live");
+const pflPacksDir = resolve(root, "../../pieces/pfl");
 const piecesDir = resolve(root, "../../pieces");
 const repoRoot = resolve(root, "../..");
 
@@ -45,6 +46,47 @@ function shadersStaticPlugin(): Plugin {
       for (const name of readdirSync(shadersDir)) {
         if (!name.endsWith(".frag") && !name.endsWith(".vert")) continue;
         copyFileSync(resolve(shadersDir, name), resolve(out, name));
+      }
+    },
+  };
+}
+
+/** Serve committed PFL pack definitions from pieces/pfl/<slug>/pack.json */
+function pflPackFixturesPlugin(): Plugin {
+  return {
+    name: "numbrane-pfl-pack-fixtures",
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = req.url?.split("?")[0] ?? "";
+        const prefix = "/pieces/pfl/";
+        if (!url.startsWith(prefix) || !url.endsWith("/pack.json")) {
+          next();
+          return;
+        }
+        const slug = url.slice(prefix.length, url.length - "/pack.json".length);
+        if (!slug || slug.includes("..") || slug.includes("/")) {
+          next();
+          return;
+        }
+        const file = resolve(pflPacksDir, slug, "pack.json");
+        if (!file.startsWith(pflPacksDir) || !existsSync(file)) {
+          res.statusCode = 404;
+          res.end("pack fixture not found");
+          return;
+        }
+        res.setHeader("Content-Type", "application/json; charset=utf-8");
+        res.end(readFileSync(file));
+      });
+    },
+    writeBundle(options) {
+      if (!options.dir || !existsSync(pflPacksDir)) return;
+      const out = resolve(options.dir, "pieces/pfl");
+      for (const name of readdirSync(pflPacksDir)) {
+        const src = resolve(pflPacksDir, name, "pack.json");
+        if (!existsSync(src)) continue;
+        const destDir = resolve(out, name);
+        mkdirSync(destDir, { recursive: true });
+        copyFileSync(src, resolve(destDir, "pack.json"));
       }
     },
   };
@@ -326,7 +368,7 @@ export default defineConfig({
       process.env.NUMBRANE_BUILD_TIME ?? new Date().toISOString(),
     ),
   },
-  plugins: [shadersStaticPlugin(), liveSetsPlugin(), catalogPlugin(), renderApiPlugin()],
+  plugins: [shadersStaticPlugin(), pflPackFixturesPlugin(), liveSetsPlugin(), catalogPlugin(), renderApiPlugin()],
   server: {
     host: "0.0.0.0",
     port: 5173,
