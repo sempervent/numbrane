@@ -35,8 +35,8 @@ export async function createEscapeTimeLivePiece(
   const prog = compile(gl, fsSrc);
   const loc = (n: string) => gl.getUniformLocation(prog, n);
   let seed = 42;
-  const params: Record<string, number> = {
-    zoom: 1,
+  const userBase: Record<string, number> = {
+    zoom: 1.15,
     power: 2,
     chaos: 0.15,
     density: 0.7,
@@ -45,6 +45,7 @@ export async function createEscapeTimeLivePiece(
     center_x: -0.5,
     center_y: 0,
   };
+  const params: Record<string, number> = { ...userBase };
   let last: FrameState = {
     frame: 0,
     t: 0,
@@ -56,41 +57,55 @@ export async function createEscapeTimeLivePiece(
     bpm: 120,
   };
 
+  const applyLiveOrbit = (t: number) => {
+    const phase = t + (seed % 1000) * 0.001;
+    params.zoom = userBase.zoom * (0.82 + 0.28 * (0.5 + 0.5 * Math.sin(phase * 0.13)));
+    params.center_x = userBase.center_x + 0.16 * Math.sin(phase * 0.11);
+    params.center_y = userBase.center_y + 0.12 * Math.cos(phase * 0.097);
+  };
+
   return {
     id: pieceId,
     initialize(_recipe, s) {
       seed = s >>> 0;
-      params.center_x = -0.5 + ((seed % 97) / 97 - 0.5) * 0.4;
-      params.center_y = ((seed % 53) / 53 - 0.5) * 0.35;
-      params.hue = ((seed % 360) / 360) * 360;
+      userBase.center_x = -0.5 + ((seed % 97) / 97 - 0.5) * 0.35;
+      userBase.center_y = ((seed % 53) / 53 - 0.5) * 0.28;
+      userBase.zoom = 0.95 + ((seed % 41) / 41) * 0.55;
+      userBase.hue = ((seed % 360) / 360) * 360;
+      Object.assign(params, userBase);
+      applyLiveOrbit(0);
     },
     resize() {},
     update(frame) {
       last = frame;
-      // Continuous mathematical evolution: slow zoom + orbit center
-      params.zoom = Math.max(0.35, params.zoom * (1 + frame.dt * 0.04 * (0.5 + params.density)));
-      if (params.zoom > 8) params.zoom = 0.8;
-      params.center_x += Math.sin(frame.t * 0.11 + seed * 0.01) * frame.dt * 0.02;
-      params.center_y += Math.cos(frame.t * 0.09) * frame.dt * 0.015;
+      applyLiveOrbit(frame.t);
     },
     setParameter(name, value) {
       if (typeof value !== "number") return;
       if (name === "zoom" || name === "power" || name === "chaos" || name === "density" || name === "exposure") {
+        userBase[name] = value;
         params[name] = value;
       }
-      if (name === "hue") params.hue = value * 360;
+      if (name === "center_x" || name === "center_y") {
+        userBase[name] = value;
+        params[name] = value;
+      }
+      if (name === "hue") {
+        userBase.hue = value * 360;
+        params.hue = userBase.hue;
+      }
     },
     getParameter(name) {
       return params[name];
     },
     getBaseParameters() {
-      return { ...params };
+      return { ...userBase };
     },
     getTelemetry(): LiveTelemetry {
       return {
-        energy: Math.min(1, params.zoom / 8),
+        energy: Math.min(1, params.zoom / 2),
         texture: params.density,
-        motion: 0.5,
+        motion: 0.55,
         spectral: params.chaos,
       };
     },

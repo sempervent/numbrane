@@ -6,8 +6,9 @@
 import type { Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import type { PixelFrame } from "../../src/live/pixelMetrics";
-import { isMeaningfulVisualChange } from "../../src/live/pixelMetrics";
+import { isMeaningfulVisualChange, type PixelFrame } from "../../src/live/pixelMetrics";
+import { isPerceptuallyAlive } from "../../src/live/visualQuality";
+import type { PerformanceDensity, PerformanceMotion } from "../../src/studio/performance/catalog";
 
 export function frameIsVisible(px: PixelFrame): boolean {
   return (
@@ -177,9 +178,13 @@ export async function enterAnimate(page: Page, piece: string, seed = 42): Promis
     timeout: 30_000,
   });
   await page.waitForFunction(
-    () => !!(window as unknown as { __NUMBRANE_STUDIO__?: unknown }).__NUMBRANE_STUDIO__,
+    () => {
+      const app = (window as unknown as { __NUMBRANE_STUDIO__?: { studioBootComplete?: boolean } })
+        .__NUMBRANE_STUDIO__;
+      return app?.studioBootComplete === true;
+    },
     null,
-    { timeout: 45_000 },
+    { timeout: 90_000 },
   );
   await page.waitForTimeout(600);
 }
@@ -207,6 +212,19 @@ export function hasSustainedMotion(samples: PixelFrame[]): boolean {
     void later;
   }
   return hits >= 2;
+}
+
+export function assertPerceptuallyAlive(
+  earlier: PixelFrame,
+  later: PixelFrame,
+  profile: { density?: PerformanceDensity; motion?: PerformanceMotion } = {},
+  label = "frame pair",
+): void {
+  if (!isPerceptuallyAlive(earlier, later, profile)) {
+    throw new Error(
+      `${label}: not perceptually alive (var=${later.luminanceVariance.toFixed(1)} edge~${Math.sqrt(later.luminanceVariance).toFixed(2)} Δpx=${later.changedPixelFraction.toFixed(4)})`,
+    );
+  }
 }
 
 export async function saveFailureArtifacts(

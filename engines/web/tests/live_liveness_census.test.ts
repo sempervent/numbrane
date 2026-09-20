@@ -34,7 +34,7 @@ function assertLivePhaseContract(pieceId: string): CensusRow {
   return { id: pieceId, ok: true, reason: "" };
 }
 
-describe("live liveness census (logical time)", () => {
+describe("live animation phase contract (logical time only)", () => {
   it("Animate-capable catalog pieces avoid terminal performance phase", () => {
     const pieces = studioVisibleManifests(collectPieceManifests())
       .map((m) => m.piece_id)

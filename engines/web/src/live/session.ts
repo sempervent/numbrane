@@ -312,6 +312,16 @@ export class LiveSession {
     }
   }
 
+  /** Capture stable parameter bases for animation arcs (immune to per-frame modulation). */
+  refreshAnimationBaseParams(): void {
+    const scene = this.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.runtime.getPiece(layer.id);
+      if (piece) this.baseParams.set(layer.id, { ...piece.getBaseParameters() });
+    }
+  }
+
   setAnimationSpec(spec: AnimationSpec, opts?: SetAnimationSpecOptions): void {
     const prevTime = this.animationRuntime.animationTimeSec;
     this.animationRuntime.setSpec(spec);
@@ -325,6 +335,7 @@ export class LiveSession {
       this.animationRuntime.reset();
       this.lastAnimWallMs = 0;
     }
+    this.refreshAnimationBaseParams();
   }
 
   getAnimationSpec(): AnimationSpec {

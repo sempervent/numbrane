@@ -17,7 +17,12 @@ import {
   performanceMeta,
   type PerformanceBrowserFilter,
 } from "./performance/catalog";
-import { loadThumbQueue } from "./performance/browserThumbs";
+import {
+  loadThumbQueue,
+  thumbCacheKey,
+  type BrowserThumbQueueStats,
+} from "./performance/browserThumbs";
+import { classifyVisualQuality, snapshotFromFrame } from "../live/visualQuality";
 import { BrowserPreviewSession } from "./performance/browserPreviewSession";
 import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
 import {
@@ -266,7 +271,20 @@ export class StudioApp {
   private lastVisualDigest = "";
   private descriptors = new Map<string, StudioPieceDescriptor>();
   private browserThumbUrls = new Map<string, string>();
+  private browserThumbCacheKeys = new Map<string, string>();
   private browserThumbAbort: AbortController | null = null;
+  private browserThumbLoadEpoch = 0;
+  browserThumbStats: BrowserThumbQueueStats = {
+    requested: 0,
+    loaded: 0,
+    liveOnly: 0,
+    failed: 0,
+    aborted: 0,
+    inFlight: 0,
+    failures: [],
+  };
+  /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
+  studioBootComplete = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -308,8 +326,14 @@ export class StudioApp {
       stageViewportFit: true,
     });
     await this.session.init();
-    window.__NUMBRANE_STUDIO__ = this;
     this.params = { ...defaultsForPiece(this.pieceId), ...this.params };
+    this.animationMethodId = defaultAnimationMethodId(this.pieceId);
+    this.activeAnimationMethodId = this.animationMethodId;
+    this.animationSpec = resolveLivePerformanceMethodSpec(
+      this.pieceId,
+      this.animationMethodId,
+      this.mode,
+    );
     await this.applyPieceScene();
 
     this.wireKeyboard();
@@ -319,12 +343,14 @@ export class StudioApp {
     this.renderConfig();
     this.renderHelp();
     this.renderBrowser();
-    this.syncModebarCapabilities();
+    this.syncModebarState();
     this.syncChrome();
     this.syncUrl(false);
     this.pushHistory();
 
     this.loop();
+    this.studioBootComplete = true;
+    window.__NUMBRANE_STUDIO__ = this;
     toast("NUMBRANE Studio — press ? for keys");
   }
 
@@ -372,6 +398,22 @@ export class StudioApp {
       animationCyclePhase:
         this.session?.animationRuntime.evaluate().cyclePhase ?? 0,
       visualLiveness: diag?.visualLiveness ?? null,
+      visualQuality: (() => {
+        const pf = diag?.presentedFrame;
+        if (!pf) return null;
+        const meta = performanceMeta(this.pieceId);
+        return classifyVisualQuality(
+          snapshotFromFrame(pf),
+          {
+            density: meta?.density ?? "medium",
+            motion: meta?.motion ?? "moderate",
+          },
+          (Date.now() - this.lastVisualChangeMs) / 1000,
+          this.playing,
+          (Date.now() - this.pieceLoadedAt) / 1000,
+        );
+      })(),
+      browserThumbStats: { ...this.browserThumbStats },
       cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
       cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
       compositionId: this.compositionId,
@@ -647,7 +689,7 @@ export class StudioApp {
       statusEl?.classList.remove("visible");
       this.showModeUnsupported(this.mode);
       this.syncChrome();
-      this.syncModebarCapabilities();
+      this.syncModebarState();
       return;
     }
     this.clearFailureBanner();
@@ -1174,7 +1216,7 @@ export class StudioApp {
         group: "global",
         handler: () => {
           if (this.helpVisible) this.helpVisible = false;
-          else if (this.browserVisible) this.browserVisible = false;
+          else if (this.browserVisible) this.setBrowserVisible(false);
           else if (document.fullscreenElement) void document.exitFullscreen();
           else {
             this.controlsVisible = false;
@@ -1202,8 +1244,7 @@ export class StudioApp {
         label: "Piece browser",
         group: "global",
         handler: () => {
-          this.browserVisible = !this.browserVisible;
-          this.syncChrome();
+          this.toggleBrowserVisible();
         },
       },
       {
@@ -1264,9 +1305,19 @@ export class StudioApp {
   /** E2E helper — show chrome and optional piece browser without keyboard side effects. */
   showChromeForTest(showBrowser = true): void {
     this.controlsVisible = true;
-    if (showBrowser) this.browserVisible = true;
-    this.syncChrome();
-    if (showBrowser) this.renderBrowser();
+    if (showBrowser) this.setBrowserVisible(true);
+    else this.syncChrome();
+  }
+
+  /** Authoritative mode bar — never rely on static HTML active classes. */
+  syncModebarState(): void {
+    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+      const mode = btn.dataset.mode as StudioMode;
+      const active = mode === this.mode;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+    this.syncModebarCapabilities();
   }
 
   syncModebarCapabilities(): void {
@@ -1283,6 +1334,21 @@ export class StudioApp {
       btn.title = ok ? "" : `${mode} unsupported for ${this.pieceId}`;
       btn.style.opacity = ok ? "1" : "0.45";
     });
+  }
+
+  setBrowserVisible(visible: boolean): void {
+    this.browserVisible = visible;
+    if (!visible) this.hideBrowserMotionPane();
+    this.syncChrome();
+    if (visible) this.renderBrowser();
+  }
+
+  private toggleBrowserVisible(): void {
+    this.setBrowserVisible(!this.browserVisible);
+  }
+
+  private refreshAnimationBaseParams(): void {
+    this.session?.refreshAnimationBaseParams();
   }
 
   private clearFailureBanner(): void {
@@ -1409,9 +1475,7 @@ export class StudioApp {
     this.mode = mode;
     this.prefs.mode = mode;
     this.persist();
-    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
-      btn.classList.toggle("active", btn.dataset.mode === mode);
-    });
+    this.syncModebarState();
     if (mode === "generate") {
       this.playing = false;
       this.session?.runtime.transport.stop();
@@ -1422,7 +1486,6 @@ export class StudioApp {
     await this.applyPieceScene();
     this.renderConfig();
     this.renderHelp();
-    this.syncModebarCapabilities();
     this.syncUrl(true);
     toast(`${mode.toUpperCase()} mode`);
   }
@@ -1469,7 +1532,7 @@ export class StudioApp {
     document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
       card.classList.toggle("selected", card.dataset.pieceId === this.pieceId);
     });
-    this.syncModebarCapabilities();
+    this.syncModebarState();
     this.syncUrl(true);
   }
 
@@ -1605,8 +1668,7 @@ export class StudioApp {
   async auditionPieceFromBrowser(pieceId: string): Promise<void> {
     await this.setPiece(pieceId);
     if (this.mode !== "animate") await this.setMode("animate");
-    this.browserVisible = false;
-    this.syncChrome();
+    this.setBrowserVisible(false);
     toast(`Animate · ${pieceId.split("/").pop()}`);
   }
 
@@ -1629,7 +1691,7 @@ export class StudioApp {
 
   /** Keyboard-first piece change — no picker, overlays, or toast. */
   async cycleVisualization(dir: number): Promise<void> {
-    this.browserVisible = false;
+    this.setBrowserVisible(false);
     this.helpVisible = false;
     await this.cyclePiece(dir);
     this.syncChrome();
@@ -2605,44 +2667,125 @@ export class StudioApp {
       this.ensureBrowserPreview();
       const need = list
         .map((p) => p.piece_id)
-        .filter((id) => !this.browserThumbUrls.has(id));
-      void this.loadBrowserThumbs(need);
+        .filter((id) => {
+          const key = thumbCacheKey(id);
+          return (
+            !this.browserThumbUrls.has(id) || this.browserThumbCacheKeys.get(id) !== key
+          );
+        });
+      this.patchBrowserThumbs();
+      void this.loadBrowserThumbs(need).then(() => {
+        if (this.browserVisible) this.patchBrowserThumbs();
+      });
     }
   }
 
+  private patchBrowserThumbs(): void {
+    document.querySelectorAll<HTMLElement>("#browser .piece").forEach((card) => {
+      const pieceId = card.dataset.pieceId;
+      if (!pieceId) return;
+      const wrap = card.querySelector(".thumb-wrap");
+      if (!wrap) return;
+      let img = wrap.querySelector<HTMLImageElement>("img.thumb");
+      if (!img) {
+        img = document.createElement("img");
+        img.className = "thumb";
+        img.dataset.piece = pieceId;
+        img.alt = "";
+        wrap.prepend(img);
+      }
+      let ph = wrap.querySelector<HTMLElement>(".thumb-placeholder");
+      const url = this.browserThumbUrls.get(pieceId);
+      if (url) {
+        img.src = url;
+        img.dataset.loaded = "1";
+        ph?.remove();
+        return;
+      }
+      const label = this.browserThumbFailed.has(pieceId)
+        ? "PREVIEW FAILED"
+        : this.browserThumbLiveOnly.has(pieceId)
+          ? "HOVER · MOTION"
+          : "";
+      if (!label) return;
+      if (!ph) {
+        ph = document.createElement("span");
+        ph.className = "thumb-placeholder";
+        wrap.appendChild(ph);
+      }
+      ph.textContent = label;
+      ph.classList.toggle("failed", label === "PREVIEW FAILED");
+    });
+    this.reconcileBrowserThumbStats();
+  }
+
+  /** Sync queue stats from terminal card state (ignores stale aborted loads). */
+  private reconcileBrowserThumbStats(): void {
+    const visibleIds = Array.from(
+      document.querySelectorAll<HTMLElement>("#browser .piece"),
+      (el) => el.dataset.pieceId ?? "",
+    ).filter(Boolean);
+    if (!visibleIds.length) return;
+    let loaded = 0;
+    let liveOnly = 0;
+    let failed = 0;
+    let stillLoading = 0;
+    for (const id of visibleIds) {
+      if (this.browserThumbUrls.has(id)) loaded += 1;
+      else if (this.browserThumbLiveOnly.has(id)) liveOnly += 1;
+      else if (this.browserThumbFailed.has(id)) failed += 1;
+      else stillLoading += 1;
+    }
+    this.browserThumbStats = {
+      ...this.browserThumbStats,
+      requested: visibleIds.length,
+      loaded,
+      liveOnly,
+      failed,
+      inFlight: this.browserThumbStats.inFlight,
+      failures: [...this.browserThumbStats.failures],
+    };
+    this.browserThumbStats.stillLoading = stillLoading;
+  }
+
   private async loadBrowserThumbs(pieceIds: string[]): Promise<void> {
-    if (!pieceIds.length) return;
+    const epoch = ++this.browserThumbLoadEpoch;
+    if (!pieceIds.length) {
+      this.reconcileBrowserThumbStats();
+      return;
+    }
     this.browserThumbAbort?.abort();
     const controller = new AbortController();
     this.browserThumbAbort = controller;
     await loadThumbQueue(
       pieceIds,
-      (pieceId, url) => {
+      (pieceId, url, cacheKey) => {
         this.browserThumbFailed.delete(pieceId);
         this.browserThumbLiveOnly.delete(pieceId);
+        const prev = this.browserThumbUrls.get(pieceId);
+        if (prev && prev !== url) URL.revokeObjectURL(prev);
         this.browserThumbUrls.set(pieceId, url);
-        const img = document.querySelector<HTMLImageElement>(
-          `#browser img.thumb[data-piece="${pieceId}"]`,
-        );
-        if (img) {
-          img.src = url;
-          img.dataset.loaded = "1";
-          img.parentElement?.querySelector(".thumb-placeholder")?.remove();
-        }
+        this.browserThumbCacheKeys.set(pieceId, cacheKey);
+        this.patchBrowserThumbs();
       },
       (pieceId, reason) => {
         if (reason === "failed") this.browserThumbFailed.add(pieceId);
         if (reason === "live-only") this.browserThumbLiveOnly.add(pieceId);
-        const ph = document.querySelector(
-          `#browser .piece[data-piece-id="${CSS.escape(pieceId)}"] .thumb-placeholder`,
-        );
-        if (ph) {
-          ph.textContent = reason === "failed" ? "PREVIEW FAILED" : "HOVER · MOTION";
-          ph.classList.toggle("failed", reason === "failed");
-        }
+        this.patchBrowserThumbs();
       },
-      { concurrency: 3, signal: controller.signal },
+      {
+        concurrency: 3,
+        signal: controller.signal,
+        onStats: (s) => {
+          if (epoch !== this.browserThumbLoadEpoch) return;
+          this.browserThumbStats = s;
+        },
+      },
     );
+    if (epoch === this.browserThumbLoadEpoch) {
+      this.patchBrowserThumbs();
+      this.reconcileBrowserThumbStats();
+    }
     if (this.browserThumbAbort === controller) this.browserThumbAbort = null;
   }
 
@@ -3263,8 +3406,7 @@ export class StudioApp {
     el.querySelector("#cfg-mic")?.addEventListener("click", () => void this.enableMic());
     el.querySelector("#cfg-save")?.addEventListener("click", () => void this.saveSeedState());
     el.querySelector("#cfg-browser")?.addEventListener("click", () => {
-      this.browserVisible = !this.browserVisible;
-      this.syncChrome();
+      this.toggleBrowserVisible();
     });
     el.querySelector("#cfg-hide")?.addEventListener("click", () => {
       this.controlsVisible = false;
@@ -3298,6 +3440,7 @@ export class StudioApp {
           const v = Number(node.value);
           this.params[key] = v;
           this.session?.runtime.getPiece("L0")?.setParameter(key, v);
+          this.refreshAnimationBaseParams();
         }
         if (studioSurface(this.pieceId, this.mode) === "api-preview") {
           this.scheduleGeneratePreview();
@@ -3530,6 +3673,26 @@ export class StudioApp {
         warmupMs > 2500 &&
         diag.renderCount > 0 &&
         (diag.visualLiveness?.status === "stalled" ||
+          (() => {
+            const pf = diag.presentedFrame;
+            if (!pf) return false;
+            const meta = performanceMeta(this.pieceId);
+            const q = classifyVisualQuality(
+              snapshotFromFrame(pf),
+              {
+                density: meta?.density ?? "medium",
+                motion: meta?.motion ?? "moderate",
+              },
+              (now - this.lastVisualChangeMs) / 1000,
+              this.playing,
+              warmupMs / 1000,
+            );
+            return (
+              q.status === "degenerate-dark" ||
+              q.status === "degenerate-flat" ||
+              q.status === "static"
+            );
+          })() ||
           (now - this.lastVisualChangeMs > 4500 &&
             !this.session.runtime.isSimulationPaused() &&
             !this.session.runtime.isPieceUpdatesFrozen()))

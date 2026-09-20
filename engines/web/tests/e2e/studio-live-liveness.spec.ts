@@ -6,12 +6,14 @@ import { test, expect } from "@playwright/test";
 import type { PixelFrame } from "../../src/live/pixelMetrics";
 import { isMeaningfulVisualChange } from "../../src/live/pixelMetrics";
 import {
+  assertPerceptuallyAlive,
   enterAnimate,
   sampleStagePixels,
   studioDiag,
   waitForAnimationTime,
   waitForLiveFrame,
 } from "./animationMetrics";
+import { classifyVisualQuality, snapshotFromFrame } from "../../src/live/visualQuality";
 
 async function sampleAtTimes(
   page: import("@playwright/test").Page,
@@ -54,6 +56,20 @@ test.describe("Studio live liveness sentinels", () => {
     assertMotionBetween(samples, 4, 5, "45→50s");
     assertMotionBetween(samples, 5, 6, "50→55s");
     assertMotionBetween(samples, 6, 7, "55→60s");
+    assertPerceptuallyAlive(
+      samples[5]!,
+      samples[7]!,
+      { density: "dense", motion: "intense" },
+      "attractor 50→60s",
+    );
+    const q = classifyVisualQuality(
+      snapshotFromFrame(samples[7]!),
+      { density: "dense", motion: "intense" },
+      0,
+      true,
+      60,
+    );
+    expect(q.status === "degenerate-dark" || q.status === "degenerate-flat").toBe(false);
     expect((dLast.animationPhase ?? 0)).toBeLessThan(0.999);
   });
 

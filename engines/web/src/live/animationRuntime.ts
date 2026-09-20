@@ -123,6 +123,7 @@ export class AnimationRuntime {
   applyToPieces(pieces: Iterable<LivePiece>, _baseParams: Map<string, Record<string, number>>): void {
     const st = this.evaluate();
     for (const piece of pieces) {
+      const stableBase = _baseParams.get(piece.id) ?? piece.getBaseParameters();
       piece.setParameter("anim.phase", st.phase);
       piece.setParameter("anim.cyclePhase", st.cyclePhase);
       piece.setParameter("anim.constructionT", st.constructionT);
@@ -133,10 +134,9 @@ export class AnimationRuntime {
 
       if (hasComponent(this.spec, "parameters")) {
         const arc = ANIM_ARCS.find((a) => a.id === this.spec.motion);
-        const base = piece.getBaseParameters();
         if (arc) {
           const arcPhase = this.performanceMode ? st.cyclePhase : st.phase;
-          const next = arc.apply({ ...base }, arcPhase);
+          const next = arc.apply({ ...stableBase }, arcPhase);
           for (const [k, v] of Object.entries(next)) {
             if (typeof v === "number") piece.setParameter(k, v);
           }

@@ -68,9 +68,9 @@ void main(){
 
   // cheap 2d "raymarch" / distance shade
   float d=scene(uv);
-  float edge=smoothstep(0.02,0.0,d);
-  float glow=exp(-8.*max(d,0.))*0.65;
-  float fill=smoothstep(0.08, -0.02, d);
+  float edge=1.0-smoothstep(0.0,0.028,abs(d));
+  float glow=exp(-7.*max(d,0.))*0.55;
+  float fill=1.0-smoothstep(-0.02,0.07,d);
 
   float hue=fract(u_hue+u_time*0.02+edge*0.1);
   vec3 col=hsl2rgb(vec3(hue,0.55,0.08+fill*0.35+glow*0.4+edge*0.25));
@@ -80,7 +80,8 @@ void main(){
   col*=vig;
   vec3 bg=u_colorBg.rgb;
   if(u_colorBg.a<0.5) bg=vec3(0.02,0.02,0.03);
-  col=mix(bg,col,clamp(col.r+col.g+col.b,0.,1.));
+  float alpha=clamp(fill*0.85+glow*0.75+edge*0.55,0.08,1.0);
+  col=mix(bg,col,alpha);
   o=vec4(col,1.0);
 }`;
 
