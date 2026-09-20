@@ -25,7 +25,7 @@
         cursor: none;
       }
       body.controls-visible, body.pointer-active { cursor: default; }
-      #stage-wrap { position: fixed; inset: 0; background: #000; }
+      #stage-wrap { position: fixed; inset: 0; background: #000; overflow: hidden; }
       #stage { width: 100%; height: 100%; display: block; }
       #generate-preview {
         position: absolute; inset: 0; width: 100%; height: 100%;
@@ -33,9 +33,12 @@
       }
       #generate-preview.visible { display: block; }
       #switch-hold {
-        position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+        position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
         background: #000; display: none; z-index: 2; opacity: 1;
         transition: opacity 680ms ease;
+      }
+      body.performance-stage #generate-preview.visible {
+        object-fit: cover;
       }
       #switch-hold.visible { display: block; }
       #switch-hold.releasing { opacity: 0; }

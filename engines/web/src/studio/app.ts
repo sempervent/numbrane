@@ -304,6 +304,7 @@ export class StudioApp {
       seed: this.seed,
       outputOnly: false,
       transparent: false,
+      stageViewportFit: true,
     });
     await this.session.init();
     window.__NUMBRANE_STUDIO__ = this;
@@ -366,6 +367,9 @@ export class StudioApp {
       activeAnimationMethodId: this.activeAnimationMethodId,
       useSourceSnapshot:
         this.session?.animationRuntime.evaluate().useSourceSnapshot ?? false,
+      performanceMode: this.session?.animationRuntime.performanceMode ?? false,
+      cameraCenterX: this.session?.animationRuntime.evaluate().camera.centerX ?? 0,
+      cameraCenterY: this.session?.animationRuntime.evaluate().camera.centerY ?? 0,
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
     };
@@ -378,6 +382,19 @@ export class StudioApp {
     this.color.mode = "solid";
     this.applyLiveColor();
     this.renderConfig();
+  }
+
+  sampleStageScopeMetrics(): {
+    borderMeanLuma: number;
+    innerMeanLuma: number;
+    corners: { tl: number; tr: number; bl: number; br: number };
+  } | null {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
+    try {
+      return this.session.readPresentedScopeMetrics();
+    } catch {
+      return null;
+    }
   }
 
   /** Sample visible presented art (live canvas or api-preview img) for tests/diagnostics. */
@@ -481,7 +498,7 @@ export class StudioApp {
     }
   }
 
-  syncAnimationSpecToSession(preview = true): void {
+  syncAnimationSpecToSession(preview = true, opts?: { resetTime?: boolean }): void {
     if (!this.session || this.mode !== "animate") return;
     this.animationSpec = normalizeSpecForLivePerformance(
       this.pieceId,
@@ -489,7 +506,13 @@ export class StudioApp {
       this.mode,
     );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
-    this.session.setAnimationSpec(this.animationSpec);
+    const livePerf =
+      studioSurface(this.pieceId, this.mode) === "live" &&
+      (this.mode === "animate" || this.mode === "react");
+    this.session.setAnimationSpec(this.animationSpec, {
+      preserveTime: opts?.resetTime !== true,
+      performanceMode: livePerf,
+    });
     this.applyStudioPerformanceClock();
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       this.syncApiPreviewAnimate(preview);
@@ -756,12 +779,16 @@ export class StudioApp {
       );
       this.anim.durationSec = this.animationSpec.durationSec;
       this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
-      this.session.setAnimationSpec(this.animationSpec);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: false,
+        performanceMode: true,
+      });
       this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
     }
+    this.session.fitStageViewport();
     this.kickLiveSurface();
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
@@ -1306,7 +1333,7 @@ export class StudioApp {
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
-      this.syncAnimationSpecToSession(true);
+      this.syncAnimationSpecToSession(true, { resetTime: true });
     }
     this.renderConfig();
   }
@@ -1332,7 +1359,7 @@ export class StudioApp {
       this.mode,
     );
     this.anim.durationSec = this.animationSpec.durationSec;
-    this.syncAnimationSpecToSession(true);
+    this.syncAnimationSpecToSession(true, { resetTime: true });
     this.lastRandomTickMs = performance.now();
   }
 
@@ -1345,7 +1372,7 @@ export class StudioApp {
       applyAnimationMethod(this.pieceId, next),
       this.mode,
     );
-    this.syncAnimationSpecToSession(true);
+    this.syncAnimationSpecToSession(true, { resetTime: true });
     this.lastRandomTickMs = performance.now();
     this.renderConfig();
   }
@@ -2154,7 +2181,10 @@ export class StudioApp {
       // Fallback: browser logical-frame WebM path
       try {
         const exportSpec = normalizeSpecForPiece(this.pieceId, this.animationSpec);
-        this.session?.setAnimationSpec(exportSpec);
+        this.session?.setAnimationSpec(exportSpec, {
+          performanceMode: false,
+          preserveTime: false,
+        });
         let exportPrimed = false;
         const result = await exportAnimation(
           { ...cfg, loop: exportLoopFlag(exportSpec.endBehavior) },
@@ -2307,6 +2337,10 @@ export class StudioApp {
   }
 
   syncChrome(): void {
+    document.body.classList.toggle(
+      "performance-stage",
+      this.mode === "animate" || this.mode === "react",
+    );
     document.body.classList.toggle("controls-visible", this.controlsVisible);
     document.body.classList.toggle("controls-hidden", !this.controlsVisible);
     document.getElementById("config")?.classList.toggle("visible", this.controlsVisible);
@@ -2718,7 +2752,11 @@ export class StudioApp {
           <option value="crossfade" ${this.pieceTransition === "crossfade" ? "selected" : ""}>Crossfade</option>
           <option value="cut" ${this.pieceTransition === "cut" ? "selected" : ""}>Cut</option>
         </select>
-        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · performance clock</p>
+        <p class="muted">Live · ${this.animationSpec.source}/${this.animationSpec.motion} · unbounded performance clock${
+          hasComponent(this.animationSpec, "camera") && !hasComponent(this.animationSpec, "construction")
+            ? " · pan speed = export duration below"
+            : ""
+        }</p>
         <div class="row">
           <button type="button" class="primary" id="cfg-play">${this.playing ? "Pause" : "Play"}</button>
         </div>
@@ -3310,7 +3348,7 @@ export class StudioApp {
       if (next) {
         this.activeAnimationMethodId = next;
         this.animationSpec = resolveLivePerformanceMethodSpec(this.pieceId, next, this.mode);
-        this.syncAnimationSpecToSession(false);
+        this.syncAnimationSpecToSession(false, { resetTime: true });
         this.renderConfig();
       }
       this.lastRandomTickMs = nowPerf;
