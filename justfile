@@ -144,7 +144,8 @@ test-python-fast:
       tests/test_rng.py \
       tests/test_schemas.py \
       tests/test_seeds.py \
-      tests/test_composition_grammar.py
+      tests/test_composition_grammar.py \
+      tests/test_pack_export.py
 
 [group('test')]
 test-python-renderer-smoke:

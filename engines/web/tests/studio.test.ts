@@ -51,6 +51,24 @@ describe("studio keyboard registry", () => {
     expect(controls).toBe(false);
   });
 
+  it("lists performance visualization shortcuts under animate help", () => {
+    const reg = new KeyboardRegistry();
+    reg.register({
+      id: "next",
+      keys: "]",
+      match: ["]", "arrowright"],
+      label: "Next visualization",
+      group: "animate",
+      modes: ["animate", "react"],
+      handler: () => undefined,
+    });
+    const animateHelp = reg.helpCatalog("animate").mode;
+    expect(animateHelp.some((c) => c.id === "next" && c.keys === "]")).toBe(true);
+    const reactHelp = reg.helpCatalog("react").mode;
+    expect(reactHelp.some((c) => c.id === "next")).toBe(true);
+    expect(reg.helpCatalog("generate").mode.some((c) => c.id === "next")).toBe(false);
+  });
+
   it("mode keys are listed for help", () => {
     const reg = new KeyboardRegistry();
     reg.register({
