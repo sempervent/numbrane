@@ -1,0 +1,49 @@
+{
+  "protocol_version": "0.1.0",
+  "set_id": "pfl-packs-midnight-pfl-pack",
+  "name": "Midnight PFL Pack",
+  "bpm": 96,
+  "default_transition": { "type": "crossfade", "duration_beats": 4 },
+  "scenes": [
+    {
+      "id": "s1-item-0001",
+      "name": "01 · sdf-raymarch2d",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fractals/sdf-raymarch2d",
+          "opacity": 1,
+          "seed": 91337,
+          "parameters": {
+            "density": 0.62,
+            "palette": "bone-black",
+            "pfl_style": "pfl-signal"
+          }
+        }
+      ],
+      "modulation": [],
+      "post": { "bloom": 0.15, "vignette": 0.12 }
+    },
+    {
+      "id": "s2-item-0002",
+      "name": "02 · reaction-diffusion",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "reaction-diffusion/reaction-diffusion",
+          "opacity": 1,
+          "seed": 44021,
+          "parameters": {
+            "preset": "coral",
+            "iterations": 600,
+            "settle_steps": 1200,
+            "pfl_style": "pfl-organism"
+          }
+        }
+      ],
+      "modulation": [],
+      "post": { "bloom": 0.15, "vignette": 0.12 }
+    }
+  ],
+  "cues": []
+}
