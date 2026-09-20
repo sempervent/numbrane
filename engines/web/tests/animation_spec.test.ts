@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { interpolateCamera, panPresetViews } from "../src/studio/animation/camera";
+import {
+  cameraViewAtPerformanceTime,
+  interpolateCamera,
+  panPresetViews,
+} from "../src/studio/animation/camera";
 import {
   animationPhase,
   constructionProgress,
@@ -44,6 +48,18 @@ describe("camera pan", () => {
     );
     expect(mid.centerX).toBeCloseTo(0, 1);
     expect(start.centerX).toBeLessThan(end.centerX);
+  });
+
+  it("live performance pan stays monotonic past cycle boundaries", () => {
+    const { start, end } = panPresetViews("left-right");
+    const spec = { ...DEFAULT_CAMERA_SPEC, start, end, panPreset: "left-right" as const, motion: "pan" as const };
+    const cycle = 8;
+    const samples = [7.5, 7.9, 8.0, 8.1, 8.5, 15.9, 16.1, 30];
+    const xs = samples.map((t) => cameraViewAtPerformanceTime(spec, t, cycle, "linear").centerX);
+    for (let i = 1; i < xs.length; i++) {
+      expect(xs[i]!).toBeGreaterThan(xs[i - 1]! - 1e-6);
+    }
+    expect(xs[xs.length - 1]!).toBeGreaterThan(end.centerX * 2);
   });
 });
 

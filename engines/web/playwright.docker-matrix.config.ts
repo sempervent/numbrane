@@ -13,7 +13,13 @@ const webglArgs = [
 
 export default defineConfig({
   testDir: "./tests/e2e",
-  testMatch: ["**/docker-piece-matrix.spec.ts", "**/docker-preview-contamination.spec.ts", "**/studio-crossfade.spec.ts"],
+  testMatch: [
+    "**/docker-piece-matrix.spec.ts",
+    "**/docker-preview-contamination.spec.ts",
+    "**/studio-crossfade.spec.ts",
+    "**/studio-pan-continuity.spec.ts",
+    "**/studio-full-bleed.spec.ts",
+  ],
   timeout: 120_000,
   fullyParallel: false,
   retries: 0,

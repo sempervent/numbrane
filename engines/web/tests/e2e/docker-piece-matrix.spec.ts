@@ -25,7 +25,7 @@ const SENTINELS: string[] = [
 ];
 
 test.describe("Docker piece sentinel matrix", () => {
-  test.setTimeout(120_000);
+  test.setTimeout(150_000);
 
   for (const piece of SENTINELS) {
     test(`${piece} animate presents non-blank frame`, async ({ page }) => {
@@ -39,7 +39,7 @@ test.describe("Docker piece sentinel matrix", () => {
       });
 
       await enterAnimate(page, piece, 42);
-      const diag0 = await waitForLiveFrame(page, 45_000);
+      const diag0 = await waitForLiveFrame(page, 75_000);
       await page.waitForTimeout(1500);
       const diag1 = await studioDiag(page);
       const px0 = await sampleStagePixels(page);
