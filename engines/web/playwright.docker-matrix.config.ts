@@ -28,6 +28,8 @@ export default defineConfig({
     "**/studio-runtime-consistency.spec.ts",
     "**/studio-config-race.spec.ts",
     "**/studio-rapid-piece-switch.spec.ts",
+    "**/studio-configuration-stress.spec.ts",
+    "**/studio-browser-isolation.spec.ts",
   ],
   timeout: 120_000,
   fullyParallel: false,
