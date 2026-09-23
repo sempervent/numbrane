@@ -95,6 +95,38 @@ export async function unsupportedBannerText(page: Page): Promise<string | null> 
   return page.locator("#unsupported-banner").textContent();
 }
 
+export async function waitForStudioSceneSettled(page: Page, timeoutMs = 30_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const app = (
+        window as unknown as {
+          __NUMBRANE_STUDIO__?: {
+            getStudioConsistencySnapshot?: () => {
+              consistency?: { ok?: boolean };
+              sceneGeneration?: number;
+              committedSceneGeneration?: number;
+            };
+          };
+        }
+      ).__NUMBRANE_STUDIO__;
+      const snap = app?.getStudioConsistencySnapshot?.();
+      if (!snap?.consistency?.ok) return false;
+      return snap.committedSceneGeneration === snap.sceneGeneration;
+    },
+    null,
+    { timeout: timeoutMs },
+  );
+}
+
+export async function studioConsistency(page: Page): Promise<Record<string, unknown>> {
+  return page.evaluate(() => {
+    const app = (
+      window as unknown as { __NUMBRANE_STUDIO__?: { getStudioConsistencySnapshot?: () => unknown } }
+    ).__NUMBRANE_STUDIO__;
+    return app?.getStudioConsistencySnapshot?.() ?? {};
+  });
+}
+
 export async function studioPieceState(page: Page): Promise<Record<string, unknown>> {
   return page.evaluate(() => {
     const app = (window as unknown as {

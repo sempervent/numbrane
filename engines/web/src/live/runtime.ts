@@ -51,9 +51,9 @@ export class LiveRuntime {
     this.seed = (opts.seed ?? 42) >>> 0;
   }
 
-  loadSet(set: SetDef): void {
+  loadSet(set: SetDef, sceneIndex = 0): void {
     this.set = set;
-    this.sceneIndex = 0;
+    this.sceneIndex = Math.max(0, Math.min(sceneIndex, set.scenes.length - 1));
     this.blackout = false;
     this.transition.active = false;
     if (set.bpm) this.transport.setBpm(set.bpm);
@@ -89,6 +89,15 @@ export class LiveRuntime {
     this.pieces.clear();
     this.frame = 0;
     this.updateCount = 0;
+  }
+
+  /** Atomically install prepared pieces; returns previous instances for deferred disposal. */
+  replacePieces(next: Map<string, LivePiece>): LivePiece[] {
+    const previous = [...this.pieces.values()];
+    this.pieces = new Map(next);
+    this.frame = 0;
+    this.updateCount = 0;
+    return previous;
   }
 
   nextScene(): void {
