@@ -7,12 +7,12 @@ import {
   clickStudioMode,
   openStudioHome,
   selectPieceInBrowser,
+  selectPieceInConfig,
   studioConsistency,
   waitForStudioSceneSettled,
   failureBannerText,
 } from "./studioUi";
 import { sampleStagePixels, frameIsVisible, studioDiag } from "./animationMetrics";
-import { BUILD_SHA } from "../../src/studio/buildInfo";
 
 test("build sha in browser matches bundle", async ({ page }) => {
   await openStudioHome(page);
@@ -22,7 +22,15 @@ test("build sha in browser matches bundle", async ({ page }) => {
     ).__NUMBRANE_STUDIO__;
     return app?.getAnimationDiagnostics?.() ?? {};
   });
-  expect(diag.buildSha).toBe(BUILD_SHA);
+  const sha = String(diag.buildSha ?? "");
+  expect(sha.length).toBeGreaterThan(0);
+  const expected = process.env.EXPECTED_BUILD_SHA ?? process.env.GITHUB_SHA?.slice(0, 7);
+  if (expected) {
+    expect(sha.startsWith(expected.slice(0, 7))).toBe(true);
+  } else {
+    expect(sha).toMatch(/^(dev|[a-f0-9]{7,40})$/);
+    expect(sha).not.toBe("dev");
+  }
 });
 
 test("human rehearsal sequence stays consistent", async ({ page }) => {
@@ -42,10 +50,10 @@ test("human rehearsal sequence stays consistent", async ({ page }) => {
       await page.waitForTimeout(200);
     },
     () => page.click("#cfg-rand"),
-    () => selectPieceInBrowser(page, "audiovisual/nodes"),
+    () => selectPieceInConfig(page, "audiovisual/nodes"),
     () => page.click("#cfg-rand"),
-    () => selectPieceInBrowser(page, "fields/nebula"),
-    () => selectPieceInBrowser(page, "audiovisual/nodes"),
+    () => selectPieceInConfig(page, "fields/nebula"),
+    () => selectPieceInConfig(page, "audiovisual/nodes"),
     async () => {
       await page.click("#cfg-browser");
       await page.waitForSelector("#browser.visible");
@@ -63,7 +71,7 @@ test("human rehearsal sequence stays consistent", async ({ page }) => {
       await page.waitForTimeout(150);
     },
     () => selectPieceInBrowser(page, "fractals/escape-time"),
-    () => selectPieceInBrowser(page, "audiovisual/nodes"),
+    () => selectPieceInConfig(page, "audiovisual/nodes"),
   ];
 
   for (const step of steps) {

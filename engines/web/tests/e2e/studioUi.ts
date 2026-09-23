@@ -61,6 +61,17 @@ export async function selectPieceInBrowser(page: Page, pieceId: string): Promise
   );
 }
 
+/** Config header piece `<select>` — reliable for catalog ids not in performance browser filters. */
+export async function selectPieceInConfig(page: Page, pieceId: string): Promise<void> {
+  await page.selectOption("#cfg-piece", pieceId);
+  await page.waitForFunction(
+    (id) => (window as unknown as { __NUMBRANE_STUDIO__?: { pieceId?: string } }).__NUMBRANE_STUDIO__?.pieceId === id,
+    pieceId,
+    { timeout: 30_000 },
+  );
+  await waitForStudioSceneSettled(page);
+}
+
 export async function clickStudioMode(page: Page, mode: "generate" | "animate" | "react"): Promise<void> {
   const btn = page.locator(`#modebar button[data-mode="${mode}"]`);
   await btn.click();

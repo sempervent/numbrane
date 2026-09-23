@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import {
   clickStudioMode,
   openStudioHome,
-  selectPieceInBrowser,
+  selectPieceInConfig,
   studioConsistency,
   waitForStudioSceneSettled,
 } from "./studioUi";
@@ -16,14 +16,14 @@ test("overlapping piece/method/seed changes commit once", async ({ page }) => {
     ).__NUMBRANE_STUDIO__?.showChromeForTest?.(true);
   });
   await clickStudioMode(page, "animate");
-  await selectPieceInBrowser(page, "geometry/metatron");
+  await selectPieceInConfig(page, "geometry/metatron");
 
   void page.selectOption("#cfg-anim-method", { label: "Construction" });
   void page.click("#cfg-rand");
-  void selectPieceInBrowser(page, "audiovisual/nodes");
+  void page.selectOption("#cfg-piece", "audiovisual/nodes");
   void page.click("#cfg-rand");
-  void selectPieceInBrowser(page, "fields/nebula");
-  void selectPieceInBrowser(page, "audiovisual/nodes");
+  void page.selectOption("#cfg-piece", "fields/nebula");
+  void page.selectOption("#cfg-piece", "audiovisual/nodes");
 
   await waitForStudioSceneSettled(page, 90_000);
   const snap = await studioConsistency(page);
