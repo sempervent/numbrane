@@ -63,7 +63,22 @@ export async function selectPieceInBrowser(page: Page, pieceId: string): Promise
 
 /** Config header piece `<select>` — reliable for catalog ids not in performance browser filters. */
 export async function selectPieceInConfig(page: Page, pieceId: string): Promise<void> {
-  await page.selectOption("#cfg-piece", pieceId);
+  const hasOption = await page.evaluate(
+    (id) =>
+      Array.from(
+        (document.querySelector("#cfg-piece") as HTMLSelectElement | null)?.options ?? [],
+      ).some((o) => o.value === id),
+    pieceId,
+  );
+  if (hasOption) {
+    await page.selectOption("#cfg-piece", pieceId);
+  } else {
+    await page.evaluate(async (id) => {
+      await (
+        window as unknown as { __NUMBRANE_STUDIO__?: { setPiece?: (p: string) => Promise<void> } }
+      ).__NUMBRANE_STUDIO__?.setPiece?.(id);
+    }, pieceId);
+  }
   await page.waitForFunction(
     (id) => (window as unknown as { __NUMBRANE_STUDIO__?: { pieceId?: string } }).__NUMBRANE_STUDIO__?.pieceId === id,
     pieceId,

@@ -158,4 +158,16 @@ Set orchestrator, Rehearse/Perform UX redesign, branching sets, song timeline, D
 - **Set handoff:** snapshot into `scene_catalog` (existing 0.2.0 semantics).
 - **Docs:** `docs/studio-scene-authoring.md`
 - **Tests:** `tests/scene_authoring.test.ts`, `tests/e2e/studio-scene-authoring.spec.ts`
-- **Deferred:** behavior macros, rich preset browser, full piece-discovery redesign.
+- **Deferred (at increment 1):** behavior macros, rich preset browser, full piece-discovery redesign.
+
+## Follow-on (increment 2 @ feat/autonomous-scene-behaviors)
+
+- **Behavior presets:** `engines/web/src/studio/scene/behaviorPresets.ts` (8 presets, family compatibility).
+- **Creative macros:** Energy, Density, Motion, Chaos — `creativeMacros.ts`.
+- **Variation:** deterministic `sceneVariation.ts` (seed-derived; no uncontrolled RNG).
+- **Persistence:** optional `authoring` on `PersistedSceneRecipeV1` (behavior + macros + variation index).
+- **CREATE UI:** Behavior select, macro sliders, Randomize variation (`createScenePanel.ts`).
+- **Piece discovery:** CREATE visual library browser + family filter (`pieceDiscovery.ts`, `renderBrowser` create path).
+- **Design:** `docs/autonomous-scene-behavior-design.md`
+- **Tests:** `tests/scene_behavior.test.ts`, `tests/e2e/studio-scene-behavior.spec.ts`
+- **Still deferred:** cloud sync, song timeline, full preset marketplace, manual macro override pinning.
