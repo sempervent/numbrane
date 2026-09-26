@@ -1,0 +1,92 @@
+{
+  "protocol_version": "0.2.0",
+  "set_id": "set-performance-fixture",
+  "name": "Set performance integration fixture",
+  "bpm": 120,
+  "default_transition": { "type": "crossfade", "duration_beats": 2 },
+  "scene_catalog": {
+    "scene-a": {
+      "id": "scene-a",
+      "name": "A — automatic dwell",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "geometry/seed-of-life",
+          "opacity": 1,
+          "seed": 11,
+          "parameters": { "density": 0.4, "chaos": 0.1 }
+        }
+      ],
+      "post": { "exposure": 0.9, "feedback": 0.08 }
+    },
+    "scene-b": {
+      "id": "scene-b",
+      "name": "B — manual advance",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fields/flow-hatching",
+          "opacity": 1,
+          "seed": 22,
+          "parameters": { "density": 0.65, "chaos": 0.25 }
+        }
+      ],
+      "post": { "exposure": 1, "bloom": 0.12 }
+    },
+    "scene-c": {
+      "id": "scene-c",
+      "name": "C — automatic dwell",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "particles/noodles",
+          "opacity": 1,
+          "seed": 33,
+          "parameters": { "density": 0.7 }
+        }
+      ],
+      "post": { "exposure": 1.05, "feedback": 0.12 }
+    },
+    "scene-d": {
+      "id": "scene-d",
+      "name": "D — finale",
+      "layers": [
+        {
+          "id": "L0",
+          "piece": "fractals/strange-attractors",
+          "opacity": 1,
+          "seed": 44,
+          "parameters": { "chaos": 0.35, "density": 0.55 }
+        }
+      ],
+      "post": { "exposure": 1, "saturation": 1.1 }
+    }
+  },
+  "sequence": ["scene-a", "scene-b", "scene-c", "scene-d"],
+  "edges": [
+    {
+      "to_scene_id": "scene-b",
+      "advancement": { "mode": "automatic", "dwell_bars": 8 },
+      "morph": { "type": "crossfade", "duration_bars": 8 },
+      "minimum_dwell_bars": 1,
+      "launch_quantization_bars": 0,
+      "time_mode": "musical"
+    },
+    {
+      "to_scene_id": "scene-c",
+      "advancement": { "mode": "manual" },
+      "morph": { "type": "crossfade", "duration_beats": 4 },
+      "minimum_dwell_bars": 1,
+      "launch_quantization_bars": 1,
+      "time_mode": "musical"
+    },
+    {
+      "to_scene_id": "scene-d",
+      "advancement": { "mode": "automatic", "dwell_bars": 4 },
+      "morph": { "type": "crossfade", "duration_bars": 16 },
+      "minimum_dwell_bars": 1,
+      "launch_quantization_bars": 0,
+      "time_mode": "musical"
+    }
+  ]
+}

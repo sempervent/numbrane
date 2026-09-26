@@ -49,6 +49,11 @@ import {
   VisualLivenessWatchdog,
   type VisualLivenessSnapshot,
 } from "./visualLiveness";
+import { morphScenes } from "./sceneMorph";
+import { captureSceneCandidate, type CaptureContext } from "./sceneCapture";
+import { orderedScenes, resolveSetModel, singleSceneSet } from "./setModel";
+import type { AdvanceResult } from "./setOrchestrator";
+import type { RehearsalEntry, SetExecutionMode } from "./types";
 
 export type HudStats = {
   fps: number;
@@ -225,6 +230,12 @@ export class LiveSession {
   private longestMainThreadBlockMs = 0;
   private recentLongTaskCount = 0;
   private lastReadPixelsMs = 0;
+  private morphToPrepared: PreparedScene | null = null;
+  private morphToPieces = new Map<string, import("./piece").LivePiece>();
+  private morphFromSceneId: string | null = null;
+  private setPerformanceMode: SetExecutionMode = "perform";
+  private capturedCandidates: SceneDef[] = [];
+  private midiClockMissCount = 0;
 
   constructor(opts: LiveSessionOptions) {
     this.canvas = opts.canvas;
@@ -367,11 +378,10 @@ export class LiveSession {
     liveMode: "animate" | "react",
     token: number,
   ): Promise<PreparedScene> {
+    const scenes = orderedScenes(set);
     const sceneIndex =
-      set.scenes.length === 1
-        ? 0
-        : Math.min(this.runtime.getSceneIndex(), set.scenes.length - 1);
-    const scene = set.scenes[sceneIndex] ?? set.scenes[0];
+      scenes.length === 1 ? 0 : Math.min(this.runtime.getSceneIndex(), scenes.length - 1);
+    const scene = scenes[sceneIndex] ?? scenes[0];
     if (!scene) {
       throw new Error("Set has no scenes");
     }
@@ -473,10 +483,9 @@ export class LiveSession {
     this.compositor.resize(prepared.w, prepared.h);
     this.canvas.width = prepared.w;
     this.canvas.height = prepared.h;
+    const scenes = orderedScenes(set);
     const sceneIndex =
-      set.scenes.length === 1
-        ? 0
-        : Math.min(this.runtime.getSceneIndex(), set.scenes.length - 1);
+      scenes.length === 1 ? 0 : Math.min(this.runtime.getSceneIndex(), scenes.length - 1);
     this.runtime.loadSet(set, sceneIndex);
     const previous = this.runtime.replacePieces(prepared.pieces);
     this.baseParams = prepared.baseParams;
@@ -698,6 +707,8 @@ export class LiveSession {
         transport.estimateBpmFromClockInterval(dt);
       }
       this.lastMidiClockMs = now;
+      this.midiClockMissCount = 0;
+      this.runtime.setMidiClockHealthy(true);
       transport.onMidiClock();
       return;
     }
@@ -741,7 +752,7 @@ export class LiveSession {
       return;
     }
     if (target === "action.next_scene" || (kind === "scene" && target === "next")) {
-      this.gotoRelative(1);
+      void this.advanceSet();
       return;
     }
     if (target === "action.prev_scene") {
@@ -786,19 +797,130 @@ export class LiveSession {
     void this.gotoScene(idx);
   }
 
+  setSetExecutionMode(mode: SetExecutionMode): void {
+    this.setPerformanceMode = mode;
+    this.runtime.orchestrator.setExecutionMode(mode);
+  }
+
+  getSetExecutionMode(): SetExecutionMode {
+    return this.setPerformanceMode;
+  }
+
+  async seekRehearsal(entry: RehearsalEntry): Promise<void> {
+    this.runtime.orchestrator.seekRehearsal(entry);
+    await this.rebuildScenePieces();
+  }
+
+  async advanceSet(): Promise<void> {
+    const result = this.runtime.advanceSet();
+    await this.handleAdvanceResult(result);
+  }
+
   async gotoScene(indexOrId: number | string): Promise<void> {
-    const before = this.runtime.getScene()?.id;
-    this.runtime.gotoScene(indexOrId);
-    const after = this.runtime.getScene()?.id;
-    if (after && after !== before) {
+    const result = this.runtime.gotoScene(indexOrId);
+    await this.handleAdvanceResult(result);
+  }
+
+  getCapturedSceneCandidates(): SceneDef[] {
+    return [...this.capturedCandidates];
+  }
+
+  captureMorphScene(name: string, id?: string): SceneDef | null {
+    const tr = this.runtime.getOrchestratorTransition();
+    const from = tr
+      ? this.runtime.getSceneById(tr.fromSceneId)
+      : this.runtime.getScene();
+    const to = tr ? this.runtime.getSceneById(tr.toSceneId) : null;
+    if (!from) return null;
+    const ctx: CaptureContext = {
+      fromScene: from,
+      toScene: to,
+      morphProgress: tr?.progress ?? null,
+      performanceTimeSec: this.animationRuntime.animationTimeSec,
+      globalSeed: this.runtime.getSeed(),
+    };
+    const captured = captureSceneCandidate(
+      ctx,
+      id ?? `capture-${this.capturedCandidates.length + 1}`,
+      name,
+    );
+    this.capturedCandidates.push(captured);
+    return captured;
+  }
+
+  getSetOrchestratorSnapshot() {
+    return this.runtime.orchestrator.snapshot();
+  }
+
+  private async handleAdvanceResult(result: AdvanceResult): Promise<void> {
+    if (result.action === "queue") return;
+    if (result.action === "prepare_transition") {
+      await this.prepareMorphDestination(result.toSceneId);
+      this.runtime.orchestrator.markDestinationPrepared(result.toSceneId);
+      this.morphFromSceneId = result.fromSceneId;
+      return;
+    }
+    if (result.action === "complete_transition") {
+      await this.commitMorphDestination(result.toSceneId);
       const snap = this.runtime.transport.getSnapshot();
       this.recorder.pushEvent({
         type: "scene",
         t: this.runtime.getFrame() / 60,
         beat: snap.beat,
-        scene_id: after,
+        scene_id: result.toSceneId,
       });
+    }
+  }
+
+  private async prepareMorphDestination(toSceneId: string): Promise<void> {
+    const scene = this.runtime.getSceneById(toSceneId);
+    const set = this.runtime.getSet();
+    if (!scene || !set) return;
+    const token = this.beginSceneLoad();
+    try {
+      const prepared = await this.prepareScenePieces(singleSceneSet(scene), "animate", token);
+      if (!this.isLoadCurrent(token)) {
+        this.disposePreparedScene(prepared);
+        return;
+      }
+      if (this.morphToPrepared) this.disposePreparedScene(this.morphToPrepared);
+      this.morphToPrepared = prepared;
+      this.morphToPieces = new Map(prepared.pieces);
+    } catch {
+      if (this.morphToPrepared) this.disposePreparedScene(this.morphToPrepared);
+      this.morphToPrepared = null;
+      this.morphToPieces.clear();
+    }
+  }
+
+  private async commitMorphDestination(toSceneId: string): Promise<void> {
+    if (!this.morphToPrepared) {
       await this.rebuildScenePieces();
+      return;
+    }
+    const prepared = this.morphToPrepared;
+    this.morphToPrepared = null;
+    this.morphToPieces.clear();
+    this.morphFromSceneId = null;
+    const set = this.runtime.getSet();
+    if (!set) return;
+    this.compositor.resize(prepared.w, prepared.h);
+    const previous = this.runtime.replacePieces(prepared.pieces);
+    this.baseParams = prepared.baseParams;
+    this.layerOpacity = prepared.layerOpacity;
+    this.layerBlend = prepared.layerBlend;
+    this.layerEnabled = prepared.layerEnabled;
+    this.layerRenderOrder = prepared.layerRenderOrder;
+    this.basePost = prepared.basePost;
+    this.postFrame = { ...this.basePost };
+    this.modulation.setMappings(prepared.mappings);
+    for (const p of previous) p.dispose();
+    void toSceneId;
+  }
+
+  private async processOrchestratorTickResults(): Promise<void> {
+    for (const result of this.runtime.consumeOrchestratorResults()) {
+      await this.handleAdvanceResult(result);
     }
   }
 
@@ -1097,6 +1219,22 @@ export class LiveSession {
     const u0 = performance.now();
     const frame = this.runtime.tick(wallNowMs);
     this.lastUpdateMs = performance.now() - u0;
+    if (
+      this.runtime.transport.getSnapshot().source === "midi-clock" &&
+      this.lastMidiClockMs != null &&
+      wallNowMs - this.lastMidiClockMs > 500
+    ) {
+      this.midiClockMissCount += 1;
+      if (this.midiClockMissCount > 3) {
+        this.runtime.setMidiClockHealthy(false);
+      }
+    }
+    void this.processOrchestratorTickResults();
+    if (this.morphToPieces.size > 0 && !this.runtime.isSimulationPaused()) {
+      for (const piece of this.morphToPieces.values()) {
+        piece.update(frame);
+      }
+    }
 
     // On beat edges trigger subtle envelope
     if (frame.beatPhase < 0.05 && snap.playing) {
@@ -1254,10 +1392,11 @@ export class LiveSession {
     if (!this.compositor.isReady()) return;
     const scene = this.runtime.getScene();
     if (!scene) return;
-    const post = this.postFrame.exposure != null || Object.keys(this.postFrame).length
+    let post = this.postFrame.exposure != null || Object.keys(this.postFrame).length
       ? this.postFrame
       : this.basePost;
     const tr = this.runtime.getTransition();
+    const orchTr = this.runtime.getOrchestratorTransition();
     const animSt = this.animationRuntime.evaluate();
     const spec = this.animationRuntime.spec;
     const cameraActive = hasComponent(spec, "camera");
@@ -1265,25 +1404,55 @@ export class LiveSession {
 
     if (!animSt.useSourceSnapshot) {
       this.compositor.beginFrame();
-      for (const layer of this.orderedLayers(scene)) {
-        const piece = this.runtime.getPiece(layer.id);
-        if (!piece) continue;
-        if (this.layerEnabled.get(layer.id) === false) continue;
-        const target = this.compositor.getLayerTarget();
-        piece.render({
-          framebuffer: target.framebuffer,
-          width: target.width,
-          height: target.height,
-          transparent: this.compositor.transparent,
-        });
-        let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
-        if (tr.active && tr.type === "crossfade") {
-          opacity *= tr.progress;
+      const morphActive =
+        orchTr &&
+        orchTr.progress < 1 &&
+        this.morphToPieces.size > 0 &&
+        this.morphFromSceneId;
+      if (morphActive) {
+        const fromScene = this.runtime.getSceneById(this.morphFromSceneId!);
+        const toScene = this.runtime.getSceneById(orchTr.toSceneId);
+        if (fromScene && toScene) {
+          const morphed = morphScenes(fromScene, toScene, orchTr.progress);
+          post = { ...morphed.post };
+          for (const ml of morphed.layers) {
+            if (ml.presence <= 0.001) continue;
+            const fromPiece = this.runtime.getPiece(ml.id);
+            const toPiece = this.morphToPieces.get(ml.id);
+            const piece = toPiece ?? fromPiece;
+            if (!piece) continue;
+            if (this.layerEnabled.get(ml.id) === false && !toPiece) continue;
+            const target = this.compositor.getLayerTarget();
+            piece.render({
+              framebuffer: target.framebuffer,
+              width: target.width,
+              height: target.height,
+              transparent: this.compositor.transparent,
+            });
+            this.compositor.compositeLayer(ml.blend ?? "normal", ml.opacity * ml.presence);
+          }
         }
-        this.compositor.compositeLayer(
-          this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
-          opacity,
-        );
+      } else {
+        for (const layer of this.orderedLayers(scene)) {
+          const piece = this.runtime.getPiece(layer.id);
+          if (!piece) continue;
+          if (this.layerEnabled.get(layer.id) === false) continue;
+          const target = this.compositor.getLayerTarget();
+          piece.render({
+            framebuffer: target.framebuffer,
+            width: target.width,
+            height: target.height,
+            transparent: this.compositor.transparent,
+          });
+          let opacity = this.layerOpacity.get(layer.id) ?? layer.opacity ?? 1;
+          if (tr.active && tr.type === "crossfade") {
+            opacity *= 1 - tr.progress;
+          }
+          this.compositor.compositeLayer(
+            this.layerBlend.get(layer.id) ?? layer.blend ?? "normal",
+            opacity,
+          );
+        }
       }
     }
     // Transition overlays via post exposure for fade-through-black
