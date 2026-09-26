@@ -6,7 +6,7 @@ import { SetOrchestrator } from "../src/live/setOrchestrator";
 import { resolveSetModel } from "../src/live/setModel";
 import type { SetDef, SetDefV2 } from "../src/live/types";
 import { SetScoreController } from "../src/studio/setScore/controller";
-import { renderSetComposerHtml, renderSetPerformChromeHtml } from "../src/studio/setScore/render";
+import { renderPerformWorkspaceHtml, renderSetScoreRailHtml } from "../src/studio/setScore/workspacesRender";
 import { buildSetStatusView } from "../src/studio/setScore/statusView";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -28,15 +28,15 @@ describe("Set score UI", () => {
     expect(body.slice(stageClose, chromeIdx)).not.toContain("set-score-chrome");
   });
 
-  it("composer render includes ordered sequence from fixture", () => {
+  it("Set rail render includes ordered score chain from fixture", () => {
     const ctrl = new SetScoreController(() => null);
     ctrl.loadDocument(fixture);
-    const html = renderSetComposerHtml(ctrl);
+    const html = renderSetScoreRailHtml(ctrl, false);
     expect(html).toContain("A — automatic dwell");
     expect(html).toContain("B — manual advance");
-    expect(html).toContain("AUTO");
-    expect(html).toContain("MANUAL");
-    expect(html).toContain("set-rehearse-start");
+    expect(html).toContain("set-score-chain");
+    expect(html).toContain("Rehearse this Set");
+    expect(html).not.toContain("set-load-fixture");
   });
 
   it("perform chrome reflects queued replacement from runtime", () => {
@@ -52,25 +52,19 @@ describe("Set score UI", () => {
     or.requestAdvance(c);
     expect(or.snapshot()?.queuedSceneId).toBe(c);
 
-    const ctrl = new SetScoreController(() => null);
+    const sessionStub = {
+      getSetOrchestratorSnapshot: () => or.snapshot(),
+      runtime: { transport: { getSnapshot: () => ({ beat: 0, source: "internal" }) } },
+      getSetExecutionMode: () => "perform" as const,
+    } as import("../src/live/session").LiveSession;
+    const ctrl = new SetScoreController(() => sessionStub);
     ctrl.loadDocument(fixture);
     ctrl.surface = "perform";
-    const st = buildSetStatusView(
-      {
-        getSetOrchestratorSnapshot: () => or.snapshot(),
-        runtime: { transport: { getSnapshot: () => ({ beat: 0, source: "internal" }) } },
-      } as import("../src/live/session").LiveSession,
-      ctrl.getDocument(),
-      "perform",
-      false,
-    );
-    expect(st.queuedSceneName).toContain("C");
-    const html = renderSetPerformChromeHtml({
-      status: () => st,
-    } as SetScoreController);
-    expect(html).toContain("Queued:");
-    expect(html).toContain("set-advance");
-    expect(html).not.toContain("set-sequence");
+    expect(ctrl.status().queuedSceneName).toContain("C");
+    const html = renderPerformWorkspaceHtml(ctrl);
+    expect(html).toContain("Advance");
+    expect(html).toContain("C");
+    expect(html).not.toContain("set-score-chain");
   });
 
   it("controller save/load round-trips fixture via localStorage", () => {

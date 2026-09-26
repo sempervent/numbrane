@@ -118,15 +118,17 @@ SceneRuntime
 
 ## Studio UI (implemented)
 
-| Surface | Location | Role |
-|---------|----------|------|
-| **Visual Set** composer | `#config` panel (`setScore/render.ts`) | Create/load/save Sets, sequence, per-edge editor, rehearse entry, perform entry, captured candidates |
-| **Perform / rehearse chrome** | `#set-score-chrome` under `#chrome` (not `#stage-wrap`) | Set name, position, phase, Advance, Capture This, Stop, Output full-screen |
-| **Status view-model** | `setScore/statusView.ts` | Canonical `SetStatusView` from orchestrator snapshot + persisted SetDef |
+| Layer | Navigation | Workspace |
+|-------|------------|-----------|
+| **Create** | `#workflow-nav` → Create; `#create-subbar` → Generate / Animate / React | `#config` (visual authoring) |
+| **Set** | `#workflow-nav` → Set | `#set-score-rail` (score chain) + `#set-inspector` (contextual transition/scene) |
+| **Rehearse** | `#workflow-nav` → Rehearse | `#rehearse-panel` — primary **Rehearse** control above the fold |
+| **Perform** | `#workflow-nav` → Perform | `#perform-panel` — primary **Advance** when running |
 
-- Serialized **SetDefV2** remains authoritative (`SetScoreController` + `setPerformance.ts` localStorage).
-- `]` / `Shift+]` advance the Set when rehearse/perform is active; otherwise `]` cycles pieces.
-- Tab / `controls-hidden` hides composer and perform chrome; `#stage-wrap` stays artwork-only.
+- **Status view-model:** `setScore/statusView.ts`
+- **Persistence:** `SetScoreController` + `setPerformance.ts` localStorage
+- **Dev-only:** fixture load when `import.meta.env.DEV` or `?dev` (`studio/workflow.ts`)
+- Tab / `controls-hidden` hides all workflow chrome; `#stage-wrap` stays artwork-only
 
 ## Persistence
 

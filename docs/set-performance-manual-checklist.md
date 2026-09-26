@@ -15,13 +15,13 @@
 
 ### Studio UI walkthrough (manual in browser when convenient)
 
-1. Open Studio → **Visual Set** → **Load fixture**.
-2. Confirm ordered sequence A → B → C → D and per-row transition summaries.
-3. Reorder with Move up/down; save, reload page, confirm order and edge settings.
-4. **From start** rehearse → Advance → observe perform chrome (QUEUED / TRANSITIONING / DWELL).
-5. **Capture This** during morph → save candidate → **Add to Set**.
-6. **Enter Perform** → Advance through manual edge; wait through automatic edge.
-7. Tab to hide chrome; confirm no Set HUD on canvas.
+1. Open Studio — confirm top nav **Create | Set | Rehearse | Perform** (Rehearse visible without scrolling).
+2. **Create** → Generate/Animate/React sub-bar; author a visual as before.
+3. **Set** → open/load Set (`?dev` for fixture in development); confirm horizontal score chain A → B → C → D.
+4. Select **→** between scenes; configure Advance (Manual/Automatic), quantization dropdown, single morph duration + unit.
+5. **Rehearse** tab → **Rehearse** button visible immediately → start → **Advance** / **Capture This** when morphing.
+6. **Perform** tab → **Enter Perform** → **Advance** dominant; Tab hides all chrome on canvas.
+7. Optional: capture screenshots at 1440×900 for Create / Set / Rehearse / Perform.
 
 ## Deferred hardware verification
 

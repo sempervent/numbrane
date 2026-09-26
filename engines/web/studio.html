@@ -138,15 +138,103 @@
         border-radius: 12px;
         box-shadow: 0 12px 40px rgba(0,0,0,0.45);
       }
-      #modebar {
+      #workflow-nav {
         position: absolute; top: 1rem; left: 50%; transform: translateX(-50%);
-        display: flex; gap: 0.35rem; padding: 0.35rem;
+        display: flex; gap: 0.2rem; padding: 0.35rem;
         pointer-events: auto;
         background: var(--panel);
         border: 1px solid var(--line);
         border-radius: 999px;
         backdrop-filter: blur(12px);
+        z-index: 6;
       }
+      #workflow-nav button {
+        border: 0; background: transparent; color: var(--mute);
+        font-family: Syne, sans-serif; font-size: 11px; font-weight: 600;
+        letter-spacing: 0.06em; padding: 0.45rem 0.85rem;
+        border-radius: 999px; cursor: pointer; text-transform: uppercase;
+      }
+      #workflow-nav button.active { background: rgba(125,211,252,0.18); color: var(--accent); }
+      #create-subbar {
+        position: absolute; top: 3.55rem; left: 50%; transform: translateX(-50%);
+        display: none; gap: 0.25rem; padding: 0.25rem;
+        pointer-events: auto;
+        background: rgba(8, 10, 16, 0.65);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+      }
+      body.workflow-create #create-subbar { display: flex; }
+      #create-subbar button {
+        border: 0; background: transparent; color: var(--mute);
+        font: inherit; font-size: 10px; letter-spacing: 0.08em; padding: 0.35rem 0.75rem;
+        border-radius: 999px; cursor: pointer; text-transform: uppercase;
+      }
+      #create-subbar button.active { background: rgba(125,211,252,0.12); color: var(--accent); }
+      #modebar { display: none; }
+      .workflow-panel {
+        display: none; padding: 0.85rem 1rem;
+        overflow: auto;
+      }
+      body.workflow-set.controls-visible #set-score-rail,
+      body.workflow-set.controls-visible #set-inspector { display: block; }
+      body.workflow-rehearse.controls-visible #rehearse-panel,
+      body.workflow-perform.controls-visible #perform-panel { display: block; }
+      body.workflow-create.controls-visible #config.visible { display: block; }
+      body:not(.workflow-create) #config { display: none !important; }
+      #set-score-rail {
+        position: absolute; left: 1rem; top: 4.35rem; bottom: 1rem;
+        width: min(340px, calc(100vw - 2rem - min(360px, 32vw)));
+        max-height: none;
+      }
+      #set-inspector {
+        position: absolute; right: 1rem; top: 4.35rem; bottom: 1rem;
+        width: min(360px, 32vw);
+        max-height: none;
+      }
+      #rehearse-panel, #perform-panel {
+        position: absolute; left: 1rem; top: 4.35rem;
+        width: min(420px, 36vw);
+        max-height: calc(100vh - 5.5rem);
+      }
+      .wf-title { font-family: Syne, sans-serif; font-size: 1.15rem; margin: 0; letter-spacing: 0.04em; }
+      .wf-sub { color: var(--mute); margin: 0.25rem 0 0.75rem; font-size: 11px; }
+      .wf-header { margin-bottom: 0.5rem; }
+      .wf-section { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--mute); margin: 0.75rem 0 0.35rem; }
+      .wf-hero { width: 100%; padding: 0.65rem 1rem !important; font-size: 13px !important; margin: 0.5rem 0 !important; }
+      .wf-block { width: 100%; margin: 0.35rem 0 !important; }
+      .wf-empty { color: var(--mute); line-height: 1.45; margin: 0.5rem 0 1rem; }
+      .wf-error { color: #f87171; margin: 0.35rem 0; }
+      .wf-dev { opacity: 0.65; font-size: 10px !important; }
+      .set-score-chain { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; margin: 0.5rem 0; }
+      .set-chain-scene, .set-chain-edge {
+        border: 1px solid var(--line); background: rgba(18, 22, 32, 0.9); color: var(--ink);
+        border-radius: 8px; padding: 0.35rem 0.5rem; cursor: pointer; font: inherit; text-align: left;
+      }
+      .set-chain-scene.selected, .set-chain-edge.selected { border-color: var(--accent); box-shadow: 0 0 0 1px rgba(125,211,252,0.25); }
+      .set-chain-idx { color: var(--mute); margin-right: 0.35rem; font-size: 10px; }
+      .set-chain-edge { padding: 0.35rem 0.55rem; color: var(--accent); }
+      .wf-segment { display: flex; gap: 0.25rem; margin-bottom: 0.5rem; }
+      .wf-seg {
+        flex: 1; border: 1px solid var(--line); background: transparent; color: var(--mute);
+        border-radius: 6px; padding: 0.35rem; cursor: pointer; font: inherit;
+      }
+      .wf-seg.on { border-color: var(--accent); color: var(--accent); }
+      .wf-inline { display: flex; gap: 0.35rem; align-items: center; margin-bottom: 0.4rem; }
+      .wf-inline input { flex: 1; margin: 0 !important; }
+      .wf-inline select { width: auto !important; min-width: 5rem; margin: 0 !important; }
+      .wf-unit { color: var(--mute); font-size: 11px; }
+      .wf-status-card { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; margin: 0.5rem 0 0.75rem; padding: 0.5rem; border: 1px solid var(--line); border-radius: 8px; }
+      .wf-draft { color: var(--accent); margin: 0.75rem 0 0.35rem; }
+      .hidden { display: none !important; }
+      .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
+      .workflow-panel input, .workflow-panel select, .workflow-panel button {
+        width: 100%; margin: 0 0 0.4rem; padding: 0.4rem 0.5rem;
+        background: rgba(18, 22, 32, 0.9); color: var(--ink);
+        border: 1px solid var(--line); border-radius: 6px; font: inherit;
+      }
+      .workflow-panel button.primary { border-color: var(--accent); color: var(--accent); }
+      .workflow-panel .row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+      .workflow-panel .row > * { width: 100%; }
       #modebar button {
         border: 0; background: transparent; color: var(--mute);
         font: inherit; letter-spacing: 0.08em; padding: 0.45rem 0.9rem;
@@ -154,8 +242,8 @@
       }
       #modebar button.active { background: rgba(125,211,252,0.15); color: var(--accent); }
       #config {
-        position: absolute; top: 4.2rem; right: 1rem; width: min(360px, calc(100vw - 2rem));
-        max-height: calc(100vh - 5.5rem); overflow: auto; padding: 0.9rem 1rem 1.1rem;
+        position: absolute; top: 4.85rem; right: 1rem; width: min(360px, calc(100vw - 2rem));
+        max-height: calc(100vh - 6rem); overflow: auto; padding: 0.9rem 1rem 1.1rem;
         display: none;
       }
       #config.visible { display: block; }
@@ -226,11 +314,14 @@
         font-size: 10px; letter-spacing: 0.04em; pointer-events: none;
         text-shadow: 0 1px 4px #000;
       }
+      body.controls-hidden #workflow-nav,
+      body.controls-hidden #create-subbar,
       body.controls-hidden #modebar,
       body.controls-hidden #config,
       body.controls-hidden #browser,
       body.controls-hidden #meta-strip,
-      body.controls-hidden #performance-strip { display: none !important; pointer-events: none !important; }
+      body.controls-hidden #performance-strip,
+      body.controls-hidden .workflow-panel { display: none !important; pointer-events: none !important; }
       body.fullscreen-art #modebar { opacity: 0; pointer-events: none; }
       #variants {
         display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.35rem; margin-top: 0.4rem;
@@ -293,11 +384,26 @@
       </div>
     </div>
     <div id="chrome">
-      <div id="modebar">
+      <nav id="workflow-nav" aria-label="Workflow">
+        <button type="button" data-workflow="create">Create</button>
+        <button type="button" data-workflow="set">Set</button>
+        <button type="button" data-workflow="rehearse">Rehearse</button>
+        <button type="button" data-workflow="perform">Perform</button>
+      </nav>
+      <div id="create-subbar" aria-label="Create mode">
         <button type="button" data-mode="generate">Generate</button>
         <button type="button" data-mode="animate">Animate</button>
         <button type="button" data-mode="react">React</button>
       </div>
+      <div id="modebar" hidden aria-hidden="true">
+        <button type="button" data-mode="generate">Generate</button>
+        <button type="button" data-mode="animate">Animate</button>
+        <button type="button" data-mode="react">React</button>
+      </div>
+      <aside id="set-score-rail" class="panel workflow-panel" aria-label="Set score"></aside>
+      <aside id="set-inspector" class="panel workflow-panel" aria-label="Set inspector"></aside>
+      <aside id="rehearse-panel" class="panel workflow-panel" aria-label="Rehearse"></aside>
+      <aside id="perform-panel" class="panel workflow-panel" aria-label="Perform"></aside>
       <aside id="config" class="panel visible"></aside>
       <aside id="browser" class="panel">
         <div id="browser-header"></div>

@@ -44,13 +44,20 @@ export function newSetId(): string {
   return `studio-set-${Date.now().toString(36)}`;
 }
 
+export type SetSelectionFocus = "overview" | "scene" | "edge";
+
+export type RehearseEntryChoice = "start" | "scene" | "before_transition";
+
 export class SetScoreController {
   private document: SetDefV2 = emptySetV2("studio-set-draft", "Untitled Set");
   private persist: PersistedPerformanceSets = loadPersistedSets();
   private selectedIndex = 0;
+  selectionFocus: SetSelectionFocus = "overview";
+  rehearseEntry: RehearseEntryChoice = "start";
   surface: SetScoreSurface = "idle";
   private sessionRuntime = false;
   validationErrors: string[] = [];
+  private savedDocumentJson = JSON.stringify(emptySetV2("studio-set-draft", "Untitled Set"));
 
   constructor(private getSession: () => LiveSession | null) {}
 
@@ -68,6 +75,41 @@ export class SetScoreController {
 
   selectScene(index: number): void {
     this.selectedIndex = Math.max(0, Math.min(index, this.document.sequence.length - 1));
+    this.selectionFocus = "scene";
+  }
+
+  selectEdge(index: number): void {
+    this.selectedIndex = Math.max(0, Math.min(index, this.document.sequence.length - 1));
+    this.selectionFocus = "edge";
+  }
+
+  selectOverview(): void {
+    this.selectionFocus = "overview";
+  }
+
+  isDocumentDirty(): boolean {
+    return JSON.stringify(this.document) !== this.savedDocumentJson;
+  }
+
+  hasViableSet(): boolean {
+    this.refreshValidation();
+    return this.document.sequence.length > 0 && this.validationErrors.length === 0;
+  }
+
+  resolveRehearsalEntry(): RehearsalEntry {
+    if (this.rehearseEntry === "start") return { kind: "start" };
+    if (this.rehearseEntry === "scene") {
+      const id = this.document.sequence[this.selectedIndex];
+      if (id) return { kind: "scene", scene_id: id };
+      return { kind: "start" };
+    }
+    const to = this.document.sequence[this.selectedIndex + 1];
+    if (to) return { kind: "before_transition", to_scene_id: to };
+    return { kind: "start" };
+  }
+
+  private markSavedSnapshot(): void {
+    this.savedDocumentJson = JSON.stringify(this.document);
   }
 
   status(): SetStatusView {
@@ -97,7 +139,9 @@ export class SetScoreController {
     const model = resolveSetModel(set);
     this.document = toSetDefV2(model);
     this.selectedIndex = 0;
+    this.selectionFocus = "overview";
     this.refreshValidation();
+    this.markSavedSnapshot();
   }
 
   loadFixtureJson(set: SetDef): void {
@@ -110,7 +154,9 @@ export class SetScoreController {
   createNew(name: string): void {
     this.document = emptySetV2(newSetId(), name);
     this.selectedIndex = 0;
+    this.selectionFocus = "overview";
     this.refreshValidation();
+    this.markSavedSnapshot();
   }
 
   save(): void {
@@ -119,6 +165,7 @@ export class SetScoreController {
     this.persist = upsertSet(this.persist, this.document);
     this.persist.activeSetId = this.document.set_id;
     savePersistedSets(this.persist);
+    this.markSavedSnapshot();
   }
 
   duplicate(): void {
@@ -131,6 +178,7 @@ export class SetScoreController {
     this.persist = upsertSet(this.persist, this.document);
     this.persist.activeSetId = copy.set_id;
     savePersistedSets(this.persist);
+    this.markSavedSnapshot();
   }
 
   setName(name: string): void {
@@ -215,6 +263,10 @@ export class SetScoreController {
       ),
     };
     savePersistedSets(this.persist);
+  }
+
+  async startRehearseFromUi(): Promise<void> {
+    await this.startRehearse(this.resolveRehearsalEntry());
   }
 
   async startRehearse(entry: RehearsalEntry): Promise<void> {
