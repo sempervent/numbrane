@@ -115,6 +115,39 @@ export type SetAnimationSpecOptions = {
   performanceMode?: boolean;
 };
 
+/** Scene load superseded by a newer request — not an operator-visible failure. */
+export class StaleSceneLoadError extends Error {
+  constructor() {
+    super("stale scene load");
+    this.name = "StaleSceneLoadError";
+  }
+}
+
+type PreparedScene = {
+  pieces: Map<string, import("./piece").LivePiece>;
+  baseParams: Map<string, Record<string, number>>;
+  layerOpacity: Map<string, number>;
+  layerBlend: Map<string, BlendMode>;
+  layerEnabled: Map<string, boolean>;
+  layerRenderOrder: string[];
+  basePost: PostDef;
+  w: number;
+  h: number;
+  mappings: ModMapping[];
+};
+
+export type LiveSessionTimingDiagnostics = {
+  lastScenePrepareMs: number;
+  lastSceneCommitMs: number;
+  longestMainThreadBlockMs: number;
+  recentLongTaskCount: number;
+  lastPieceUpdateMs: number;
+  lastPieceRenderMs: number;
+  lastReadPixelsMs: number;
+  loadGeneration: number;
+  digestSampleIntervalMs: number;
+};
+
 export class LiveSession {
   readonly runtime: LiveRuntime;
   readonly audio = new LiveAudioInput();
@@ -185,6 +218,13 @@ export class LiveSession {
   showHud = true;
   onHud: ((h: HudStats) => void) | null = null;
   onStatus: ((s: Record<string, unknown>) => void) | null = null;
+  private loadGeneration = 0;
+  private digestSampleIntervalMs = 250;
+  private lastScenePrepareMs = 0;
+  private lastSceneCommitMs = 0;
+  private longestMainThreadBlockMs = 0;
+  private recentLongTaskCount = 0;
+  private lastReadPixelsMs = 0;
 
   constructor(opts: LiveSessionOptions) {
     this.canvas = opts.canvas;
@@ -232,23 +272,79 @@ export class LiveSession {
     return midi;
   }
 
-  async loadSet(set: SetDef, liveMode: "animate" | "react" = "animate"): Promise<void> {
-    this.runtime.clearPieces();
-    this.runtime.loadSet(set);
-    await this.rebuildScenePieces(liveMode);
-    this.emitStatus();
+  /** Begin or join a scene load generation (latest token wins at commit). */
+  beginSceneLoad(): number {
+    this.loadGeneration += 1;
+    return this.loadGeneration;
+  }
+
+  getLoadGeneration(): number {
+    return this.loadGeneration;
+  }
+
+  isLoadCurrent(token: number): boolean {
+    return token === this.loadGeneration;
+  }
+
+  setProductionCaptureMode(enabled: boolean): void {
+    this.digestSampleIntervalMs = enabled ? 1200 : 250;
+  }
+
+  getSessionTimingDiagnostics(): LiveSessionTimingDiagnostics {
+    return {
+      lastScenePrepareMs: this.lastScenePrepareMs,
+      lastSceneCommitMs: this.lastSceneCommitMs,
+      longestMainThreadBlockMs: this.longestMainThreadBlockMs,
+      recentLongTaskCount: this.recentLongTaskCount,
+      lastPieceUpdateMs: this.lastUpdateMs,
+      lastPieceRenderMs: this.hud.glMs,
+      lastReadPixelsMs: this.lastReadPixelsMs,
+      loadGeneration: this.loadGeneration,
+      digestSampleIntervalMs: this.digestSampleIntervalMs,
+    };
+  }
+
+  noteMainThreadBlock(ms: number): void {
+    if (ms > this.longestMainThreadBlockMs) this.longestMainThreadBlockMs = ms;
+    if (ms >= 50) this.recentLongTaskCount += 1;
+  }
+
+  async loadSet(
+    set: SetDef,
+    liveMode: "animate" | "react" = "animate",
+    loadToken?: number,
+  ): Promise<void> {
+    const token = loadToken ?? this.beginSceneLoad();
+    if (!this.isLoadCurrent(token)) {
+      throw new StaleSceneLoadError();
+    }
+    const t0 = performance.now();
+    let prepared: PreparedScene | null = null;
+    try {
+      prepared = await this.prepareScenePieces(set, liveMode, token);
+      this.lastScenePrepareMs = performance.now() - t0;
+      if (!this.isLoadCurrent(token)) {
+        this.disposePreparedScene(prepared);
+        throw new StaleSceneLoadError();
+      }
+      const c0 = performance.now();
+      this.commitPreparedScene(set, prepared);
+      this.lastSceneCommitMs = performance.now() - c0;
+      this.emitStatus();
+    } catch (err) {
+      if (prepared) this.disposePreparedScene(prepared);
+      if (err instanceof StaleSceneLoadError) throw err;
+      throw err;
+    }
   }
 
   private async rebuildScenePieces(liveMode: "animate" | "react" = "animate"): Promise<void> {
-    const scene = this.runtime.getScene();
-    if (!scene) return;
-    this.runtime.clearPieces();
-    this.baseParams.clear();
-    this.layerOpacity.clear();
-    this.layerBlend.clear();
-    this.layerEnabled.clear();
-    this.layerRenderOrder = [];
-    const gl = this.compositor.gl;
+    const set = this.runtime.getSet();
+    if (!set) return;
+    await this.loadSet(set, liveMode);
+  }
+
+  private renderDimensions(): { w: number; h: number } {
     let w: number;
     let h: number;
     if (this.stageViewportFit) {
@@ -263,46 +359,146 @@ export class LiveSession {
       w = Math.max(1, Math.floor(width * Math.min(1, scale)));
       h = Math.max(1, Math.floor(height * Math.min(1, scale)));
     }
-    this.compositor.resize(w, h);
-    this.canvas.width = w;
-    this.canvas.height = h;
+    return { w, h };
+  }
 
-    let loaded = 0;
+  private async prepareScenePieces(
+    set: SetDef,
+    liveMode: "animate" | "react",
+    token: number,
+  ): Promise<PreparedScene> {
+    const sceneIndex =
+      set.scenes.length === 1
+        ? 0
+        : Math.min(this.runtime.getSceneIndex(), set.scenes.length - 1);
+    const scene = set.scenes[sceneIndex] ?? set.scenes[0];
+    if (!scene) {
+      throw new Error("Set has no scenes");
+    }
+    const { w, h } = this.renderDimensions();
+    const gl = this.compositor.gl;
+    const pieces = new Map<string, import("./piece").LivePiece>();
+    const baseParams = new Map<string, Record<string, number>>();
+    const layerOpacity = new Map<string, number>();
+    const layerBlend = new Map<string, BlendMode>();
+    const layerEnabled = new Map<string, boolean>();
+    const layerRenderOrder: string[] = [];
+
     for (const layer of scene.layers) {
+      if (!this.isLoadCurrent(token)) {
+        this.disposePreparedScene({
+          pieces,
+          baseParams,
+          layerOpacity,
+          layerBlend,
+          layerEnabled,
+          layerRenderOrder,
+          basePost: {},
+          w,
+          h,
+          mappings: [],
+        });
+        throw new StaleSceneLoadError();
+      }
       let piece;
       try {
         piece = await createLivePiece(gl, layer.piece, liveMode);
       } catch (err) {
+        this.disposePreparedScene({
+          pieces,
+          baseParams,
+          layerOpacity,
+          layerBlend,
+          layerEnabled,
+          layerRenderOrder,
+          basePost: {},
+          w,
+          h,
+          mappings: [],
+        });
         if (err instanceof UnsupportedLivePieceError) {
           throw new Error(`${layer.piece}: ${err.message}`);
         }
         throw err;
       }
-      loaded += 1;
       const seed = layer.seed ?? this.runtime.getSeed();
       await piece.initialize({ piece: layer.piece }, seed);
+      if (!this.isLoadCurrent(token)) {
+        piece.dispose();
+        this.disposePreparedScene({
+          pieces,
+          baseParams,
+          layerOpacity,
+          layerBlend,
+          layerEnabled,
+          layerRenderOrder,
+          basePost: {},
+          w,
+          h,
+          mappings: [],
+        });
+        throw new StaleSceneLoadError();
+      }
       piece.resize(w, h);
       if (layer.parameters) {
         for (const [k, v] of Object.entries(layer.parameters)) {
           piece.setParameter(k, v);
         }
       }
-      this.runtime.registerPiece(layer.id, piece);
-      this.baseParams.set(layer.id, { ...piece.getBaseParameters() });
-      this.layerOpacity.set(layer.id, layer.opacity ?? 1);
-      this.layerBlend.set(layer.id, layer.blend ?? "normal");
-      this.layerEnabled.set(layer.id, true);
-      this.layerRenderOrder.push(layer.id);
+      pieces.set(layer.id, piece);
+      baseParams.set(layer.id, { ...piece.getBaseParameters() });
+      layerOpacity.set(layer.id, layer.opacity ?? 1);
+      layerBlend.set(layer.id, layer.blend ?? "normal");
+      layerEnabled.set(layer.id, true);
+      layerRenderOrder.push(layer.id);
     }
-    this.basePost = { ...(scene.post ?? {}) };
-    this.postFrame = { ...this.basePost };
-    this.modulation.setMappings(this.sceneMappings(scene));
-    this.compositor.resetFeedback();
-    if (loaded === 0) {
+    if (pieces.size === 0) {
       throw new Error("No live runtimes loaded for scene");
+    }
+    return {
+      pieces,
+      baseParams,
+      layerOpacity,
+      layerBlend,
+      layerEnabled,
+      layerRenderOrder,
+      basePost: { ...(scene.post ?? {}) },
+      w,
+      h,
+      mappings: this.sceneMappings(scene),
+    };
+  }
+
+  private commitPreparedScene(set: SetDef, prepared: PreparedScene): void {
+    this.compositor.resize(prepared.w, prepared.h);
+    this.canvas.width = prepared.w;
+    this.canvas.height = prepared.h;
+    const sceneIndex =
+      set.scenes.length === 1
+        ? 0
+        : Math.min(this.runtime.getSceneIndex(), set.scenes.length - 1);
+    this.runtime.loadSet(set, sceneIndex);
+    const previous = this.runtime.replacePieces(prepared.pieces);
+    this.baseParams = prepared.baseParams;
+    this.layerOpacity = prepared.layerOpacity;
+    this.layerBlend = prepared.layerBlend;
+    this.layerEnabled = prepared.layerEnabled;
+    this.layerRenderOrder = prepared.layerRenderOrder;
+    this.basePost = prepared.basePost;
+    this.postFrame = { ...this.basePost };
+    this.modulation.setMappings(prepared.mappings);
+    this.compositor.resetFeedback();
+    for (const p of previous) {
+      p.dispose();
     }
     this.sessionStartedPerfMs = performance.now();
     this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
+  }
+
+  private disposePreparedScene(prepared: PreparedScene): void {
+    for (const p of prepared.pieces.values()) {
+      p.dispose();
+    }
   }
 
   /** Paint one or more logical frames immediately (Studio first-frame guarantee). */
@@ -811,12 +1007,15 @@ export class LiveSession {
 
   /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
+    const rp0 = performance.now();
     const gl = this.compositor.gl;
     const cw = this.canvas.width;
     const ch = this.canvas.height;
     const raw = new Uint8Array(Math.max(1, cw * ch * 4));
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    this.lastReadPixelsMs = performance.now() - rp0;
+    this.noteMainThreadBlock(this.lastReadPixelsMs);
     const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
     const prior =
       trackForComparison && this.lastPresentedGrid
@@ -955,7 +1154,7 @@ export class LiveSession {
     this.hud.glMs = performance.now() - g0;
     this.renderCount += 1;
     this.lastSuccessfulDrawMs = performance.now();
-    if (wallNowMs - this.lastDigestSampleMs > 250) {
+    if (wallNowMs - this.lastDigestSampleMs > this.digestSampleIntervalMs) {
       this.lastDigestSampleMs = wallNowMs;
       try {
         // Digest-only — do not advance the comparison chain used by tests/diagnostics.

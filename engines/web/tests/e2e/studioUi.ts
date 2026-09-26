@@ -61,6 +61,17 @@ export async function selectPieceInBrowser(page: Page, pieceId: string): Promise
   );
 }
 
+/** Config header piece `<select>` — reliable for catalog ids not in performance browser filters. */
+export async function selectPieceInConfig(page: Page, pieceId: string): Promise<void> {
+  await page.selectOption("#cfg-piece", pieceId);
+  await page.waitForFunction(
+    (id) => (window as unknown as { __NUMBRANE_STUDIO__?: { pieceId?: string } }).__NUMBRANE_STUDIO__?.pieceId === id,
+    pieceId,
+    { timeout: 30_000 },
+  );
+  await waitForStudioSceneSettled(page);
+}
+
 export async function clickStudioMode(page: Page, mode: "generate" | "animate" | "react"): Promise<void> {
   const btn = page.locator(`#modebar button[data-mode="${mode}"]`);
   await btn.click();
@@ -93,6 +104,38 @@ export async function unsupportedBannerText(page: Page): Promise<string | null> 
   const visible = await page.locator("#unsupported-banner.visible").count();
   if (!visible) return null;
   return page.locator("#unsupported-banner").textContent();
+}
+
+export async function waitForStudioSceneSettled(page: Page, timeoutMs = 30_000): Promise<void> {
+  await page.waitForFunction(
+    () => {
+      const app = (
+        window as unknown as {
+          __NUMBRANE_STUDIO__?: {
+            getStudioConsistencySnapshot?: () => {
+              consistency?: { ok?: boolean };
+              sceneGeneration?: number;
+              committedSceneGeneration?: number;
+            };
+          };
+        }
+      ).__NUMBRANE_STUDIO__;
+      const snap = app?.getStudioConsistencySnapshot?.();
+      if (!snap?.consistency?.ok) return false;
+      return snap.committedSceneGeneration === snap.sceneGeneration;
+    },
+    null,
+    { timeout: timeoutMs },
+  );
+}
+
+export async function studioConsistency(page: Page): Promise<Record<string, unknown>> {
+  return page.evaluate(() => {
+    const app = (
+      window as unknown as { __NUMBRANE_STUDIO__?: { getStudioConsistencySnapshot?: () => unknown } }
+    ).__NUMBRANE_STUDIO__;
+    return app?.getStudioConsistencySnapshot?.() ?? {};
+  });
 }
 
 export async function studioPieceState(page: Page): Promise<Record<string, unknown>> {

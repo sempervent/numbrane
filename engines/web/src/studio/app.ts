@@ -2,7 +2,7 @@
  * NUMBRANE Studio — Generate / Animate / React visual instrument.
  */
 
-import { LiveSession } from "../live/session";
+import { LiveSession, StaleSceneLoadError } from "../live/session";
 import type { BlendMode, SetDef, QualityProfile, ResolutionPreset as LiveRes } from "../live/types";
 import { createLivePiece } from "../live/pieces/registry";
 import {
@@ -48,6 +48,7 @@ import {
   animationMethodsForPiece,
   applyAnimationMethod,
   defaultAnimationMethodId,
+  getAnimationMethod,
 } from "./animation/methods";
 import { RandomAnimationSequencer } from "./animation/randomSequencer";
 import {
@@ -135,6 +136,12 @@ import {
   rendererKindFor,
   studioSurface,
 } from "./runtime/surface";
+import {
+  buildStudioSetDef,
+  normalizeAnimationMethodForPiece,
+  type StudioDesiredState,
+} from "./desiredState";
+import { collectStudioConsistency } from "./consistency";
 
 declare global {
   interface Window {
@@ -285,6 +292,11 @@ export class StudioApp {
   };
   /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
   studioBootComplete = false;
+  /** Monotonic scene apply generation — latest request wins at commit. */
+  private sceneGeneration = 0;
+  private committedSceneGeneration = 0;
+  private sceneApplyChain: Promise<void> = Promise.resolve();
+  private longTaskObserver: PerformanceObserver | null = null;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -348,10 +360,78 @@ export class StudioApp {
     this.syncUrl(false);
     this.pushHistory();
 
+    this.installLongTaskObserver();
     this.loop();
     this.studioBootComplete = true;
     window.__NUMBRANE_STUDIO__ = this;
     toast("NUMBRANE Studio — press ? for keys");
+  }
+
+  private installLongTaskObserver(): void {
+    if (typeof PerformanceObserver === "undefined") return;
+    try {
+      this.longTaskObserver = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          this.session?.noteMainThreadBlock(entry.duration);
+        }
+      });
+      this.longTaskObserver.observe({ entryTypes: ["longtask"] });
+    } catch {
+      this.longTaskObserver = null;
+    }
+  }
+
+  private snapshotDesiredState(): StudioDesiredState {
+    const norm = normalizeAnimationMethodForPiece(
+      this.pieceId,
+      this.animationMethodId,
+      this.activeAnimationMethodId,
+    );
+    return {
+      mode: this.mode,
+      pieceId: this.pieceId,
+      seed: this.seed,
+      compositionId: this.compositionId,
+      params: { ...this.params },
+      color: this.color,
+      animationMethodId: norm.animationMethodId,
+      activeAnimationMethodId: norm.activeAnimationMethodId,
+      playing: this.playing,
+      reactSensitivity: this.reactSensitivity,
+    };
+  }
+
+  getStudioConsistencySnapshot() {
+    return collectStudioConsistency({
+      pieceId: this.pieceId,
+      mode: this.mode,
+      compositionId: this.compositionId,
+      animationMethodId: this.animationMethodId,
+      activeAnimationMethodId: this.activeAnimationMethodId,
+      sceneGeneration: this.sceneGeneration,
+      committedSceneGeneration: this.committedSceneGeneration,
+      session: this.session,
+    });
+  }
+
+  /** Serialize scene applies; each call bumps generation (latest wins). */
+  enqueueApplyPieceScene(): Promise<void> {
+    this.sceneGeneration += 1;
+    const gen = this.sceneGeneration;
+    this.sceneApplyChain = this.sceneApplyChain
+      .catch(() => undefined)
+      .then(() => this.runApplyPieceScene(gen));
+    return this.sceneApplyChain;
+  }
+
+  scheduleApplyPieceScene(): void {
+    void this.enqueueApplyPieceScene();
+  }
+
+  private markSceneCommitted(requestGen: number): void {
+    if (requestGen === this.sceneGeneration) {
+      this.committedSceneGeneration = requestGen;
+    }
   }
 
   getAnimationDiagnostics(): Record<string, unknown> {
@@ -422,6 +502,8 @@ export class StudioApp {
       primaryLiveSessionCount: this.getPrimaryLiveSessionCount(),
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
+      consistency: this.getStudioConsistencySnapshot().consistency,
+      sessionTiming: this.session?.getSessionTimingDiagnostics() ?? null,
     };
   }
 
@@ -657,7 +739,7 @@ export class StudioApp {
   private applyLiveColor(reloadScene = false): void {
     this.syncColorToParams();
     if (reloadScene || studioSurface(this.pieceId, this.mode) !== "live" || !this.session) {
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
       return;
     }
     const scene = this.session.runtime.getScene();
@@ -676,10 +758,19 @@ export class StudioApp {
   }
 
   private async applyPieceScene(): Promise<void> {
+    await this.enqueueApplyPieceScene();
+  }
+
+  private async runApplyPieceScene(requestGen: number): Promise<void> {
+    if (requestGen !== this.sceneGeneration) return;
     this.hideBrowserMotionPane();
     await this.browserPreview?.teardown();
+    if (requestGen !== this.sceneGeneration) return;
     this.stopApiAnim();
-    const surface = studioSurface(this.pieceId, this.mode);
+    const desired = this.snapshotDesiredState();
+    this.animationMethodId = desired.animationMethodId;
+    this.activeAnimationMethodId = desired.activeAnimationMethodId;
+    const surface = studioSurface(desired.pieceId, desired.mode);
     const previewEl = document.getElementById("generate-preview") as HTMLImageElement | null;
     const statusEl = document.getElementById("gen-status");
     if (surface === "unsupported") {
@@ -690,6 +781,7 @@ export class StudioApp {
       this.showModeUnsupported(this.mode);
       this.syncChrome();
       this.syncModebarState();
+      this.markSceneCommitted(requestGen);
       return;
     }
     this.clearFailureBanner();
@@ -707,6 +799,7 @@ export class StudioApp {
         this.scheduleGeneratePreview();
       }
       this.syncChrome();
+      this.markSceneCommitted(requestGen);
       return;
     }
 
@@ -716,67 +809,28 @@ export class StudioApp {
     this.canvas.classList.remove("hidden-live");
     previewEl?.classList.remove("visible");
     statusEl?.classList.remove("visible");
-    this.animBackend = String(rendererKindFor(this.pieceId, this.mode) ?? "live");
+    this.animBackend = String(rendererKindFor(desired.pieceId, desired.mode) ?? "live");
     if (!this.session) return;
 
-    const mappings =
-      this.mode === "react"
-        ? defaultMappingsForPiece(this.pieceId, this.reactSensitivity).map((m, i) => ({
-            id: `studio-${i}`,
-            source: m.source.startsWith("audio.") ? m.source : `audio.${m.source}`,
-            destination: `layer.L0.${m.target}`,
-            amount: m.amount,
-            min: 0,
-            max: 2,
-          }))
-        : [];
-    const composition = this.compositionId ? compositionById(this.compositionId) : undefined;
-    const liveMode = this.mode === "react" ? "react" : "animate";
-    const apiParams = paramsForApi(this.params, this.color);
-    const mashupSet = buildMashupSet(this.pieceId, this.seed, apiParams);
-    const set: SetDef = composition
-      ? composition.build(this.seed, this.params)
-      : mashupSet ?? {
-          protocol_version: "0.1.0",
-          set_id: "studio-session",
-          name: "Studio",
-          scenes: [
-            {
-              id: "main",
-              name: this.pieceId,
-              layers: [
-                {
-                  id: "L0",
-                  piece: this.pieceId,
-                  opacity: 1,
-                  blend: "normal",
-                  seed: this.seed,
-                  parameters: apiParams,
-                },
-              ],
-              modulation: mappings,
-              post: { bloom: 0.2, feedback: 0.05 },
-            },
-          ],
-          cues: [],
-        };
-    if (set.scenes[0] && (!set.scenes[0].modulation || set.scenes[0].modulation.length === 0)) {
-      set.scenes[0].modulation = mappings;
-    }
+    const liveMode = desired.mode === "react" ? "react" : "animate";
+    const set = buildStudioSetDef(desired);
+    const loadToken = this.session.beginSceneLoad();
     try {
-      await this.session.loadSet(set, liveMode);
+      await this.session.loadSet(set, liveMode, loadToken);
     } catch (err) {
-      const backend = String(rendererKindFor(this.pieceId, this.mode) ?? "unknown");
-      if (this.mode === "animate" || this.mode === "react") {
+      if (err instanceof StaleSceneLoadError || requestGen !== this.sceneGeneration) return;
+      const backend = String(rendererKindFor(desired.pieceId, desired.mode) ?? "unknown");
+      if (desired.mode === "animate" || desired.mode === "react") {
         this.showAnimationFailed(err, backend);
       } else {
         this.showFailureBanner(
           "Scene load failed",
-          `Piece: ${this.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
+          `Piece: ${desired.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
       return;
     }
+    if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
     for (const layer of set.scenes[0]?.layers ?? []) {
       for (const [k, v] of Object.entries(this.params)) {
@@ -821,10 +875,15 @@ export class StudioApp {
       this.session.runtime.setSimulationPaused(true);
       this.session.runtime.transport.stop();
     }
+    if (requestGen !== this.sceneGeneration) return;
     if (this.mode === "animate") {
+      const methodForSpec =
+        this.animationMethodId === RANDOM_METHOD_ID
+          ? this.activeAnimationMethodId
+          : this.animationMethodId;
       this.animationSpec = resolveLivePerformanceMethodSpec(
         this.pieceId,
-        this.animationMethodId,
+        methodForSpec,
         this.mode,
       );
       this.anim.durationSec = this.animationSpec.durationSec;
@@ -840,6 +899,30 @@ export class StudioApp {
     }
     this.session.fitStageViewport();
     this.syncCompositionLayerAnimations();
+    if (!this.compositionId) {
+      const norm = normalizeAnimationMethodForPiece(
+        this.pieceId,
+        this.animationMethodId,
+        this.activeAnimationMethodId,
+      );
+      this.animationMethodId = norm.animationMethodId;
+      this.activeAnimationMethodId = norm.activeAnimationMethodId;
+      if (this.mode === "animate") {
+        const methodForSpec =
+          this.animationMethodId === RANDOM_METHOD_ID
+            ? this.activeAnimationMethodId
+            : this.animationMethodId;
+        this.animationSpec = resolveLivePerformanceMethodSpec(
+          this.pieceId,
+          methodForSpec,
+          this.mode,
+        );
+        this.session.setAnimationSpec(this.animationSpec, {
+          preserveTime: false,
+          performanceMode: true,
+        });
+      }
+    }
     this.kickLiveSurface();
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
@@ -847,6 +930,7 @@ export class StudioApp {
     this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
     this.syncChrome();
+    this.markSceneCommitted(requestGen);
   }
 
   private scheduleGeneratePreview(immediate = false): void {
@@ -1401,6 +1485,9 @@ export class StudioApp {
       this.renderConfig();
       return;
     }
+    if (!getAnimationMethod(this.pieceId, methodId)) {
+      methodId = defaultAnimationMethodId(this.pieceId);
+    }
     this.animationMethodId = methodId;
     this.activeAnimationMethodId = methodId;
     this.randomSequencer = null;
@@ -1812,7 +1899,7 @@ export class StudioApp {
         }
         this.seed = v.seed;
         this.params = { ...this.params, ...v.parameters };
-        void this.applyPieceScene().then(() => {
+        void this.enqueueApplyPieceScene().then(() => {
           this.pushHistory();
           this.renderConfig();
           toast(`selected ${v.seed}`);
@@ -2514,6 +2601,9 @@ export class StudioApp {
         this.generating ? " · generating…" : ""
       }`;
     }
+    this.session?.setProductionCaptureMode(
+      this.mode === "animate" && !this.controlsVisible && !this.browserVisible,
+    );
   }
 
   renderHelp(): void {
@@ -3175,7 +3265,7 @@ export class StudioApp {
     });
     el.querySelector("#cfg-seed")?.addEventListener("change", (e) => {
       this.seed = Number((e.target as HTMLInputElement).value) >>> 0;
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
       this.pushHistory();
     });
     el.querySelector("#cfg-rand")?.addEventListener("click", () => void this.randomizeSeed());
@@ -3255,12 +3345,12 @@ export class StudioApp {
           /* style lock keeps future mutations from replacing style keys */
         }
       }
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
       toast(id ? `style ${id}` : "style cleared");
     });
     el.querySelector("#cfg-sensitivity")?.addEventListener("change", (e) => {
       this.reactSensitivity = (e.target as HTMLSelectElement).value as ReactSensitivity;
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
       toast(`sensitivity ${this.reactSensitivity}`);
     });
     el.querySelector("#cfg-export-kind")?.addEventListener("change", (e) => {
@@ -3269,7 +3359,7 @@ export class StudioApp {
     el.querySelector("#cfg-comp")?.addEventListener("change", (e) => {
       const v = (e.target as HTMLSelectElement).value;
       this.compositionId = v || null;
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
     });
     el.querySelector("#cfg-preset")?.addEventListener("change", (e) => {
       const id = (e.target as HTMLSelectElement).value;
@@ -3281,7 +3371,7 @@ export class StudioApp {
           this.session?.runtime.getPiece("L0")?.setParameter(k, v);
         }
       }
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
       toast(`preset ${preset.label}`);
     });
     el.querySelector("#cfg-play")?.addEventListener("click", () => {
@@ -3419,7 +3509,7 @@ export class StudioApp {
     });
     el.querySelector("#cfg-frame")?.addEventListener("change", (e) => {
       this.frame = Number((e.target as HTMLInputElement).value) | 0;
-      void this.applyPieceScene();
+      this.scheduleApplyPieceScene();
     });
     el.querySelector("#cfg-fps")?.addEventListener("change", (e) => {
       this.anim.fps = Number((e.target as HTMLInputElement).value) || 30;
