@@ -49,7 +49,8 @@ import {
   VisualLivenessWatchdog,
   type VisualLivenessSnapshot,
 } from "./visualLiveness";
-import { morphScenes } from "./sceneMorph";
+import { morphScenes, type MorphLayerState } from "./sceneMorph";
+import type { LivePiece } from "./piece";
 import { captureSceneCandidate, type CaptureContext } from "./sceneCapture";
 import { orderedScenes, resolveSetModel, singleSceneSet } from "./setModel";
 import type { AdvanceResult } from "./setOrchestrator";
@@ -529,10 +530,12 @@ export class LiveSession {
 
   setAnimationSpec(spec: AnimationSpec, opts?: SetAnimationSpecOptions): void {
     const prevTime = this.animationRuntime.animationTimeSec;
+    const prevPerf = this.animationRuntime.performanceMode;
     this.animationRuntime.setSpec(spec);
-    const perf =
-      opts?.performanceMode ??
-      (spec.endBehavior === "continuous" && spec.durationSec <= 0);
+    let perf = opts?.performanceMode ?? prevPerf;
+    if (perf == null) {
+      perf = spec.endBehavior === "continuous" && spec.durationSec <= 0;
+    }
     this.animationRuntime.performanceMode = perf;
     if (opts?.preserveTime) {
       this.animationRuntime.seekTime(prevTime);
@@ -574,9 +577,10 @@ export class LiveSession {
       this.animationRuntime.spec,
       liveMode,
     );
+    const prevTime = this.animationRuntime.animationTimeSec;
     this.animationRuntime.setSpec(normalized);
     this.animationRuntime.performanceMode = true;
-    this.animationRuntime.seekTime(this.animationRuntime.animationTimeSec);
+    this.animationRuntime.seekTime(prevTime);
     this.runtime.setFreezePieceUpdates(false);
     this.runtime.setSimulationPaused(false);
     this.visualLiveness.markRecovering(performance.now());
@@ -1198,6 +1202,11 @@ export class LiveSession {
         : 0;
     this.lastAnimWallMs = wallNowMs;
     this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    this.visualLiveness.noteAnimationAdvance(
+      this.animationRuntime.animationTimeSec,
+      wallNowMs,
+      snap.playing && !simPaused,
+    );
     for (const rt of this.overlayAnimationRuntimes.values()) {
       rt.tick(animWallDt, snap.playing && !simPaused);
     }
@@ -1342,6 +1351,33 @@ export class LiveSession {
     return frame;
   }
 
+  private pushMorphParameters(
+    piece: LivePiece,
+    params: Record<string, number | string | boolean>,
+  ): void {
+    for (const [k, v] of Object.entries(params)) {
+      piece.setParameter(k, v);
+    }
+  }
+
+  private renderMorphLayerPass(ml: MorphLayerState, fromRuntime: boolean): void {
+    if (ml.presence <= 0.001) return;
+    const fromPiece = this.runtime.getPiece(ml.id);
+    const toPiece = this.morphToPieces.get(ml.id);
+    const piece = fromRuntime ? fromPiece : toPiece;
+    if (!piece) return;
+    if (this.layerEnabled.get(ml.id) === false && fromRuntime) return;
+    this.pushMorphParameters(piece, ml.parameters);
+    const target = this.compositor.getLayerTarget();
+    piece.render({
+      framebuffer: target.framebuffer,
+      width: target.width,
+      height: target.height,
+      transparent: this.compositor.transparent,
+    });
+    this.compositor.compositeLayer(ml.blend ?? "normal", ml.opacity * ml.presence);
+  }
+
   private applyReplayEvent(ev: PerfEvent): void {
     if (ev.type === "scene") void this.gotoScene(ev.scene_id);
     if (ev.type === "blackout") this.runtime.setBlackout(ev.on);
@@ -1416,20 +1452,10 @@ export class LiveSession {
           const morphed = morphScenes(fromScene, toScene, orchTr.progress);
           post = { ...morphed.post };
           for (const ml of morphed.layers) {
-            if (ml.presence <= 0.001) continue;
-            const fromPiece = this.runtime.getPiece(ml.id);
-            const toPiece = this.morphToPieces.get(ml.id);
-            const piece = toPiece ?? fromPiece;
-            if (!piece) continue;
-            if (this.layerEnabled.get(ml.id) === false && !toPiece) continue;
-            const target = this.compositor.getLayerTarget();
-            piece.render({
-              framebuffer: target.framebuffer,
-              width: target.width,
-              height: target.height,
-              transparent: this.compositor.transparent,
-            });
-            this.compositor.compositeLayer(ml.blend ?? "normal", ml.opacity * ml.presence);
+            this.renderMorphLayerPass(ml, true);
+            if (ml.morphDest) {
+              this.renderMorphLayerPass({ id: ml.id, ...ml.morphDest }, false);
+            }
           }
         }
       } else {

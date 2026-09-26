@@ -14,6 +14,8 @@ export type MorphLayerState = {
   seed?: number;
   /** 1 = fully contributing, 0 = absent */
   presence: number;
+  /** When source/destination piece ids differ, render destination separately. */
+  morphDest?: Omit<MorphLayerState, "id" | "morphDest">;
 };
 
 export type MorphedScene = {
@@ -79,15 +81,32 @@ export function morphScenes(from: SceneDef, to: SceneDef, progress: number): Mor
     const a = fromMap.get(id);
     const b = toMap.get(id);
     if (a && b) {
+      const samePiece = a.piece === b.piece;
       layers.push({
         id,
-        piece: p < 0.5 ? a.piece : b.piece,
-        opacity: lerp(a.opacity ?? 1, b.opacity ?? 1, p),
-        blend: p < 0.5 ? (a.blend ?? "normal") : (b.blend ?? "normal"),
-        transform: p < 0.5 ? a.transform : b.transform,
-        parameters: lerpParams(a.parameters ?? {}, b.parameters ?? {}, p),
-        seed: p < 0.5 ? a.seed : b.seed,
-        presence: 1,
+        piece: samePiece ? a.piece : a.piece,
+        opacity: samePiece
+          ? lerp(a.opacity ?? 1, b.opacity ?? 1, p)
+          : (a.opacity ?? 1) * (1 - p),
+        blend: a.blend ?? "normal",
+        transform: a.transform,
+        parameters: samePiece
+          ? lerpParams(a.parameters ?? {}, b.parameters ?? {}, p)
+          : { ...(a.parameters ?? {}) },
+        seed: a.seed,
+        presence: samePiece ? 1 : 1 - p,
+        morphDest:
+          samePiece
+            ? undefined
+            : {
+                piece: b.piece,
+                opacity: (b.opacity ?? 1) * p,
+                blend: b.blend ?? "normal",
+                transform: b.transform,
+                parameters: { ...(b.parameters ?? {}) },
+                seed: b.seed,
+                presence: p,
+              },
       });
     } else if (a && !b) {
       layers.push({
