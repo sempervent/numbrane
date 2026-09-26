@@ -6,6 +6,7 @@ import { normalizeSpecForLivePerformance } from "../animation/performance";
 import { normalizeAnimationMethodForPiece } from "../desiredState";
 import {
   captureSceneRecipe,
+  defaultSceneAuthoringSemantics,
   stableRecipeJson,
   type PersistedSceneRecipeV1,
   type SceneRecipeCapture,
@@ -120,6 +121,13 @@ export function applyRecipeToCapture(recipe: PersistedSceneRecipeV1): {
       generateFrame: recipe.generateFrame,
       meta: { ...recipe.meta },
       pflStyleId: recipe.pflStyleId,
+      authoring: recipe.authoring
+        ? {
+            behaviorPresetId: recipe.authoring.behaviorPresetId,
+            creativeMacros: { ...recipe.authoring.creativeMacros },
+            variationIndex: recipe.authoring.variationIndex,
+          }
+        : defaultSceneAuthoringSemantics(),
     },
     session: markSceneSaved(
       { activeSceneId: recipe.id, sceneName: recipe.name, savedSnapshot: null },

@@ -12,8 +12,16 @@ import type { MetaAxis } from "../explore/variants";
 import type { ReactSensitivity } from "../audio/profiles";
 import type { StudioMode } from "../keyboard/registry";
 import { defaultColorConfig } from "../color/model";
+import type { BehaviorPresetId } from "./behaviorPresets";
+import { DEFAULT_MACRO_VALUES, type CreativeMacroValues } from "./creativeMacros";
 
 export const SCENE_RECIPE_VERSION = 1 as const;
+
+export type SceneAuthoringSemantics = {
+  behaviorPresetId: BehaviorPresetId | "";
+  creativeMacros: CreativeMacroValues;
+  variationIndex: number;
+};
 
 /** Authoring snapshot stored in the Scene library (not live transport state). */
 export type PersistedSceneRecipeV1 = {
@@ -25,6 +33,7 @@ export type PersistedSceneRecipeV1 = {
   generateFrame: number;
   meta: Record<MetaAxis, number>;
   pflStyleId: string;
+  authoring?: SceneAuthoringSemantics;
 };
 
 export type SceneRecipeCapture = {
@@ -41,7 +50,16 @@ export type SceneRecipeCapture = {
   generateFrame: number;
   meta: Record<MetaAxis, number>;
   pflStyleId: string;
+  authoring: SceneAuthoringSemantics;
 };
+
+export function defaultSceneAuthoringSemantics(): SceneAuthoringSemantics {
+  return {
+    behaviorPresetId: "",
+    creativeMacros: { ...DEFAULT_MACRO_VALUES },
+    variationIndex: 0,
+  };
+}
 
 export type SceneRecipeValidation =
   | { ok: true; recipe: PersistedSceneRecipeV1 }
@@ -80,6 +98,11 @@ export function captureSceneRecipe(
     generateFrame: capture.generateFrame,
     meta: { ...capture.meta },
     pflStyleId: capture.pflStyleId,
+    authoring: {
+      behaviorPresetId: capture.authoring.behaviorPresetId,
+      creativeMacros: { ...capture.authoring.creativeMacros },
+      variationIndex: capture.authoring.variationIndex,
+    },
   };
 }
 
@@ -178,6 +201,7 @@ export function recipeFromLegacySceneDef(scene: SceneDef, mode: StudioMode = "an
         massive: 0.5,
       },
       pflStyleId: "",
+      authoring: defaultSceneAuthoringSemantics(),
     },
     scene.id,
     scene.name,
