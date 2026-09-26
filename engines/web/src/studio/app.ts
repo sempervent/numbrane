@@ -1669,6 +1669,12 @@ export class StudioApp {
     );
   }
 
+  /** Construction arcs need a fresh timeline; camera/parameter methods preserve live clock. */
+  private animationMethodChangeResetsClock(methodId: string, spec: AnimationSpec): boolean {
+    if (methodId === "construction" || methodId === "deconstruction") return true;
+    return hasComponent(spec, "construction");
+  }
+
   applyAnimationMethodId(methodId: string): void {
     if (methodId === RANDOM_METHOD_ID) {
       this.animationMethodId = RANDOM_METHOD_ID;
@@ -1686,7 +1692,9 @@ export class StudioApp {
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
-      this.syncAnimationSpecToSession(true, { resetTime: true });
+      this.syncAnimationSpecToSession(true, {
+        resetTime: this.animationMethodChangeResetsClock(methodId, this.animationSpec),
+      });
     }
     this.renderConfig();
   }
@@ -2062,6 +2070,25 @@ export class StudioApp {
     });
   }
 
+  /** Push numeric params to live pieces without rebuilding the whole scene graph. */
+  private syncLiveParamsFromAuthoring(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id);
+      if (!piece) continue;
+      for (const [k, v] of Object.entries(this.params)) {
+        if (typeof v === "number") piece.setParameter(k, v);
+        else if (typeof v === "string" || typeof v === "boolean") piece.setParameter(k, v);
+      }
+      const lp = piece as { setColorConfig?: (c: ColorConfig) => void };
+      lp.setColorConfig?.(this.color);
+    }
+    this.session.refreshAnimationBaseParams();
+    this.kickLiveSurface();
+  }
+
   private async applyCreativeMacroAuthoring(reloadScene = true): Promise<void> {
     const applied = applyCreativeMacros(
       this.pieceId,
@@ -2071,7 +2098,11 @@ export class StudioApp {
     );
     this.params = applied.params;
     this.meta = applied.meta;
-    if (reloadScene) await this.applyPieceScene();
+    if (reloadScene) {
+      await this.applyPieceScene();
+    } else {
+      this.syncLiveParamsFromAuthoring();
+    }
     this.renderConfig();
   }
 
