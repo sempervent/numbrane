@@ -2,7 +2,17 @@
  * CREATE scene authoring chrome — primary Save / Load / Preview actions.
  */
 
+import type { BehaviorPresetId } from "./behaviorPresets";
+import type { CreativeMacroId, CreativeMacroValues } from "./creativeMacros";
 import type { PersistedSceneRecipeV1 } from "./sceneRecipe";
+
+export type BehaviorOption = {
+  id: BehaviorPresetId;
+  label: string;
+  disabled: boolean;
+  reason?: string;
+  selected: boolean;
+};
 
 export type CreateScenePanelModel = {
   sceneName: string;
@@ -14,6 +24,16 @@ export type CreateScenePanelModel = {
   activeSceneId: string | null;
   canAddToSet: boolean;
   addToSetHint: string;
+  behaviorOptions: BehaviorOption[];
+  macros: CreativeMacroValues;
+  showCreativeControls: boolean;
+};
+
+const MACRO_LABELS: Record<CreativeMacroId, string> = {
+  energy: "Energy",
+  density: "Density",
+  motion: "Motion",
+  chaos: "Chaos",
 };
 
 function escapeHtml(s: string): string {
@@ -53,6 +73,35 @@ export function renderCreateScenePanel(model: CreateScenePanelModel): string {
         <button type="button" id="cfg-restart-scene">Restart</button>
       </div>
       <p class="muted">Live preview uses the same runtime path as Rehearse and Perform.</p>
+      ${
+        model.showCreativeControls
+          ? `
+      <h2>Behavior</h2>
+      <label for="scene-behavior">Autonomous behavior</label>
+      <select id="scene-behavior">
+        <option value="">(piece default)</option>
+        ${model.behaviorOptions
+          .map(
+            (b) =>
+              `<option value="${b.id}" ${b.selected ? "selected" : ""} ${b.disabled ? "disabled" : ""} title="${escapeHtml(b.reason ?? "")}">${escapeHtml(b.label)}</option>`,
+          )
+          .join("")}
+      </select>
+      <h2>Creative controls</h2>
+      ${(Object.keys(MACRO_LABELS) as CreativeMacroId[])
+        .map(
+          (id) => `
+        <label for="scene-macro-${id}">${MACRO_LABELS[id]} ${Math.round(model.macros[id] * 100)}%</label>
+        <input id="scene-macro-${id}" type="range" min="0" max="1" step="0.01" value="${model.macros[id].toFixed(2)}" data-macro="${id}" />`,
+        )
+        .join("")}
+      <div class="row">
+        <button type="button" id="scene-variation">Randomize variation</button>
+      </div>
+      <p class="muted">Variation changes seed and subtle params; Save to keep a version.</p>
+      `
+          : ""
+      }
     </section>
     <h2>Visual</h2>
   `;

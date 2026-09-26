@@ -177,11 +177,32 @@ import {
   type SceneLibraryState,
 } from "./scene/sceneLibrary";
 import {
+  behaviorCompatibility,
+  listCompatibleBehaviors,
+  type BehaviorPresetId,
+} from "./scene/behaviorPresets";
+import {
+  compatibleBehaviorCount,
+  createCatalogFamilyOptions,
+  filterCreateCatalogPieces,
+  pieceDisplayLabel,
+  pieceFamilyLabel,
+} from "./scene/pieceDiscovery";
+import {
+  applyCreativeMacros,
+  DEFAULT_MACRO_VALUES,
+  type CreativeMacroId,
+  type CreativeMacroValues,
+} from "./scene/creativeMacros";
+import {
+  defaultSceneAuthoringSemantics,
   defaultSceneName,
   newSceneId,
   sceneDefFromRecipe,
   type PersistedSceneRecipeV1,
+  type SceneAuthoringSemantics,
 } from "./scene/sceneRecipe";
+import { applyVariationToParams, variationSeed } from "./scene/sceneVariation";
 import { loadPersistedSets } from "./setPerformance";
 
 declare global {
@@ -279,6 +300,8 @@ export class StudioApp {
   performanceFavorites: string[] = [];
   performanceCycleFavoritesOnly = false;
   performanceCyclePackOrder = false;
+  /** CREATE visual browser — shallow family filter (not performance catalog). */
+  createCatalogFamilyFilter = "all";
   private browserPreview: BrowserPreviewSession | null = null;
   private browserMotionTimer: number | null = null;
   private browserMotionPieceId: string | null = null;
@@ -336,6 +359,7 @@ export class StudioApp {
   readonly setScore = new SetScoreController(() => this.session);
   sceneLibrary: SceneLibraryState = loadSceneLibrary();
   sceneAuthoring: SceneAuthoringSession = newAuthoringSession("Untitled Scene");
+  sceneAuthoringSemantics: SceneAuthoringSemantics = defaultSceneAuthoringSemantics();
   private setPerformStatusKey = "";
   workflow: StudioWorkflow = "create";
   private workflowPanelKey = "";
@@ -1998,13 +2022,16 @@ export class StudioApp {
             this.togglePlay();
             this.renderConfig();
             break;
-          case "cfg-restart-scene":
-            void this.restartScenePreview();
-            break;
-          default:
-            break;
-        }
-      },
+        case "cfg-restart-scene":
+          void this.restartScenePreview();
+          break;
+        case "scene-variation":
+          void this.randomizeSceneVariation();
+          break;
+        default:
+          break;
+      }
+    },
       true,
     );
     document.addEventListener("change", (ev) => {
@@ -2012,13 +2039,73 @@ export class StudioApp {
       if (sel.id === "scene-load" && sel.value && document.getElementById("config")?.contains(sel)) {
         void this.loadSceneRecipeById(sel.value);
       }
+      if (sel.id === "scene-behavior" && document.getElementById("config")?.contains(sel)) {
+        void this.applySceneBehaviorPreset((sel.value || "") as BehaviorPresetId | "");
+      }
     });
     document.addEventListener("input", (ev) => {
       const input = ev.target as HTMLInputElement;
       if (input.id === "scene-name" && document.getElementById("config")?.contains(input)) {
         this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: input.value };
       }
+      const macro = input.getAttribute("data-macro") as CreativeMacroId | null;
+      if (macro && document.getElementById("config")?.contains(input)) {
+        this.sceneAuthoringSemantics = {
+          ...this.sceneAuthoringSemantics,
+          creativeMacros: {
+            ...this.sceneAuthoringSemantics.creativeMacros,
+            [macro]: Number(input.value),
+          },
+        };
+        void this.applyCreativeMacroAuthoring(false);
+      }
     });
+  }
+
+  private async applyCreativeMacroAuthoring(reloadScene = true): Promise<void> {
+    const applied = applyCreativeMacros(
+      this.pieceId,
+      this.params,
+      this.meta,
+      this.sceneAuthoringSemantics.creativeMacros,
+    );
+    this.params = applied.params;
+    this.meta = applied.meta;
+    if (reloadScene) await this.applyPieceScene();
+    this.renderConfig();
+  }
+
+  async applySceneBehaviorPreset(presetId: BehaviorPresetId | ""): Promise<void> {
+    this.sceneAuthoringSemantics = { ...this.sceneAuthoringSemantics, behaviorPresetId: presetId };
+    if (!presetId) {
+      this.renderConfig();
+      return;
+    }
+    const compat = behaviorCompatibility(this.pieceId, presetId);
+    if (!compat.ok) {
+      toast(compat.reason);
+      this.renderConfig();
+      return;
+    }
+    if (compat.preset.paramDelta) {
+      for (const [k, v] of Object.entries(compat.preset.paramDelta)) {
+        if (typeof this.params[k] === "number") {
+          this.params[k] = Number(this.params[k]) + v;
+        }
+      }
+    }
+    await this.applyCreativeMacroAuthoring(false);
+    this.applyAnimationMethodId(compat.methodId);
+    toast(`Behavior · ${compat.preset.label}`);
+  }
+
+  async randomizeSceneVariation(): Promise<void> {
+    const next = this.sceneAuthoringSemantics.variationIndex + 1;
+    this.sceneAuthoringSemantics = { ...this.sceneAuthoringSemantics, variationIndex: next };
+    this.seed = variationSeed(this.seed, next);
+    this.params = applyVariationToParams(this.params, this.pieceId, this.seed, next);
+    await this.applyCreativeMacroAuthoring(true);
+    toast(`Variation · seed ${this.seed}`);
   }
 
   private sceneRecipeCapture() {
@@ -2036,6 +2123,11 @@ export class StudioApp {
       generateFrame: this.mode === "generate" ? this.frame : 0,
       meta: { ...this.meta },
       pflStyleId: this.pflStyleId,
+      authoring: {
+        behaviorPresetId: this.sceneAuthoringSemantics.behaviorPresetId,
+        creativeMacros: { ...this.sceneAuthoringSemantics.creativeMacros },
+        variationIndex: this.sceneAuthoringSemantics.variationIndex,
+      },
     };
   }
 
@@ -2123,6 +2215,7 @@ export class StudioApp {
     this.frame = capture.generateFrame;
     this.meta = { ...capture.meta };
     this.pflStyleId = capture.pflStyleId;
+    this.sceneAuthoringSemantics = { ...capture.authoring };
     this.playing = true;
     this.syncModebarState();
     this.syncWorkflowNavState();
@@ -3088,60 +3181,90 @@ export class StudioApp {
     const header = document.getElementById("browser-header");
     const host = document.getElementById("browser-list-host");
     if (!header || !host) return;
-    const filters: { id: PerformanceBrowserFilter; label: string }[] = [
-      { id: "curated", label: "curated" },
-      { id: "shortlist", label: "★ shortlist" },
-      { id: "midnight", label: "midnight" },
-      { id: "intense", label: "intense" },
-      { id: "calm", label: "calm" },
-      { id: "dense", label: "dense" },
-      { id: "geometry", label: "geometry" },
-      { id: "all-animated", label: "all animate" },
-    ];
-    const list = filterPerformanceCatalog(
-      this.pieces,
-      this.performanceFilter,
-      this.performanceFavorites,
-    );
-    const cycleLabel = this.performanceCycleFavoritesOnly ? "cycle ★ only" : "cycle curated";
-    const packCycleLabel = this.performanceCyclePackOrder ? "pack order ON" : "cycle pack order";
-    header.innerHTML = `
+    const inCreateCatalog = this.workflow === "create";
+    type BrowserRow = PieceInfo & { piece_id: string };
+    let list: BrowserRow[];
+    if (inCreateCatalog) {
+      list = filterCreateCatalogPieces(
+        this.pieces,
+        this.mode,
+        this.createCatalogFamilyFilter,
+      ) as BrowserRow[];
+      const families = createCatalogFamilyOptions(this.pieces);
+      header.innerHTML = `
+      <h1 style="font-family:Syne,sans-serif;margin:0 0 0.25rem">Visual library</h1>
+      <p class="browser-lede">Pick a foundation · hover for motion preview (one at a time).</p>
+      <div class="chips" id="filters"></div>
+    `;
+      host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
+      const chips = header.querySelector("#filters")!;
+      for (const f of families) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = f === "all" ? "all families" : f;
+        if (f === this.createCatalogFamilyFilter) b.classList.add("on");
+        b.addEventListener("click", () => {
+          this.createCatalogFamilyFilter = f;
+          this.renderBrowser();
+        });
+        chips.appendChild(b);
+      }
+    } else {
+      const filters: { id: PerformanceBrowserFilter; label: string }[] = [
+        { id: "curated", label: "curated" },
+        { id: "shortlist", label: "★ shortlist" },
+        { id: "midnight", label: "midnight" },
+        { id: "intense", label: "intense" },
+        { id: "calm", label: "calm" },
+        { id: "dense", label: "dense" },
+        { id: "geometry", label: "geometry" },
+        { id: "all-animated", label: "all animate" },
+      ];
+      list = filterPerformanceCatalog(
+        this.pieces,
+        this.performanceFilter,
+        this.performanceFavorites,
+      ) as BrowserRow[];
+      const cycleLabel = this.performanceCycleFavoritesOnly ? "cycle ★ only" : "cycle curated";
+      const packCycleLabel = this.performanceCyclePackOrder ? "pack order ON" : "cycle pack order";
+      header.innerHTML = `
       <h1 style="font-family:Syne,sans-serif;margin:0 0 0.25rem">Performance catalog</h1>
       <p class="browser-lede">Poster + hover motion preview (one at a time). Shortlist · Animate · Pack.</p>
       <div class="chips" id="filters"></div>
       <button type="button" id="browser-cycle-toggle" class="browser-mini">${cycleLabel}</button>
       <button type="button" id="browser-pack-cycle-toggle" class="browser-mini">${packCycleLabel}</button>
     `;
-    host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
-    const chips = header.querySelector("#filters")!;
-    for (const f of filters) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = f.label;
-      if (f.id === this.performanceFilter) b.classList.add("on");
-      b.addEventListener("click", () => {
-        this.performanceFilter = f.id;
+      host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
+      const chips = header.querySelector("#filters")!;
+      for (const f of filters) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = f.label;
+        if (f.id === this.performanceFilter) b.classList.add("on");
+        b.addEventListener("click", () => {
+          this.performanceFilter = f.id;
+          this.renderBrowser();
+        });
+        chips.appendChild(b);
+      }
+      header.querySelector("#browser-cycle-toggle")?.addEventListener("click", () => {
+        this.performanceCycleFavoritesOnly = !this.performanceCycleFavoritesOnly;
+        if (this.performanceCycleFavoritesOnly) this.performanceCyclePackOrder = false;
+        this.persist();
+        this.initVisualSequencer();
         this.renderBrowser();
       });
-      chips.appendChild(b);
+      header.querySelector("#browser-pack-cycle-toggle")?.addEventListener("click", () => {
+        this.performanceCyclePackOrder = !this.performanceCyclePackOrder;
+        if (this.performanceCyclePackOrder) this.performanceCycleFavoritesOnly = false;
+        this.persist();
+        this.initVisualSequencer();
+        this.renderBrowser();
+      });
     }
-    header.querySelector("#browser-cycle-toggle")?.addEventListener("click", () => {
-      this.performanceCycleFavoritesOnly = !this.performanceCycleFavoritesOnly;
-      if (this.performanceCycleFavoritesOnly) this.performanceCyclePackOrder = false;
-      this.persist();
-      this.initVisualSequencer();
-      this.renderBrowser();
-    });
-    header.querySelector("#browser-pack-cycle-toggle")?.addEventListener("click", () => {
-      this.performanceCyclePackOrder = !this.performanceCyclePackOrder;
-      if (this.performanceCyclePackOrder) this.performanceCycleFavoritesOnly = false;
-      this.persist();
-      this.initVisualSequencer();
-      this.renderBrowser();
-    });
     const listHost = host.querySelector("#piece-list")!;
     for (const p of list) {
-      const meta = performanceMeta(p.piece_id);
+      const meta = inCreateCatalog ? null : performanceMeta(p.piece_id);
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
       div.dataset.pieceId = p.piece_id;
@@ -3157,14 +3280,25 @@ export class StudioApp {
           : !thumb
             ? "preview…"
             : "";
-      const badges = [
-        meta?.density,
-        meta?.motion,
-        ...(meta?.roles.filter((r) => r === "midnight" || r === "peak").slice(0, 2) ?? []),
-      ]
-        .filter(Boolean)
-        .map((b) => `<span class="badge">${b}</span>`)
-        .join("");
+      const badges = inCreateCatalog
+        ? [
+            pieceFamilyLabel(p.piece_id),
+            `${compatibleBehaviorCount(p.piece_id)} behaviors`,
+          ]
+            .map((b) => `<span class="badge">${b}</span>`)
+            .join("")
+        : [
+            meta?.density,
+            meta?.motion,
+            ...(meta?.roles.filter((r) => r === "midnight" || r === "peak").slice(0, 2) ?? []),
+          ]
+            .filter(Boolean)
+            .map((b) => `<span class="badge">${b}</span>`)
+            .join("");
+      const displayName = pieceDisplayLabel(p);
+      const packBtn = inCreateCatalog
+        ? ""
+        : `<button type="button" data-pack="${p.piece_id}">+ Pack</button>`;
       div.innerHTML = `
         <div class="thumb-wrap">
           <img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
@@ -3172,14 +3306,14 @@ export class StudioApp {
         </div>
         <div class="piece-body">
           <div class="name-row">
-            <span class="name">${p.title || p.name || p.piece_id.split("/").pop()}</span>
+            <span class="name">${displayName}</span>
             <button type="button" class="star ${starred ? "on" : ""}" data-star="${p.piece_id}" title="Performance shortlist">★</button>
           </div>
           <div class="badges">${badges}</div>
-          <div class="meta">${meta?.character ?? p.description ?? p.piece_id}</div>
+          <div class="meta">${inCreateCatalog ? (p.description ?? p.piece_id) : (meta?.character ?? p.description ?? p.piece_id)}</div>
           <div class="piece-actions">
             <button type="button" data-animate="${p.piece_id}">Animate</button>
-            <button type="button" data-pack="${p.piece_id}">+ Pack</button>
+            ${packBtn}
           </div>
         </div>`;
       div.querySelector(`[data-star="${p.piece_id}"]`)?.addEventListener("click", (ev) => {
@@ -3194,7 +3328,6 @@ export class StudioApp {
         ev.stopPropagation();
         void this.setPiece(p.piece_id).then(() => this.addCurrentToPack("animation"));
       });
-      const displayName = p.title || p.name || p.piece_id.split("/").pop() || p.piece_id;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       div.addEventListener("mouseenter", () => this.scheduleBrowserMotion(p.piece_id, displayName));
       div.addEventListener("mouseleave", () => {
@@ -3335,10 +3468,27 @@ export class StudioApp {
   renderConfig(): void {
     const el = document.getElementById("config");
     if (!el) return;
-    const pieceOptions = this.pieces
+    let catalogPieces = filterCreateCatalogPieces(
+      this.pieces,
+      this.mode,
+      this.createCatalogFamilyFilter,
+    );
+    if (!catalogPieces.some((p) => p.piece_id === this.pieceId)) {
+      const current = this.pieces.find((p) => p.piece_id === this.pieceId);
+      if (current) catalogPieces = [current, ...catalogPieces];
+    }
+    const familyFilterOptions = createCatalogFamilyOptions(this.pieces)
+      .map(
+        (f) =>
+          `<option value="${f}" ${f === this.createCatalogFamilyFilter ? "selected" : ""}>${
+            f === "all" ? "All families" : f.charAt(0).toUpperCase() + f.slice(1)
+          }</option>`,
+      )
+      .join("");
+    const pieceOptions = catalogPieces
       .map(
         (p) =>
-          `<option value="${p.piece_id}" ${p.piece_id === this.pieceId ? "selected" : ""}>${p.piece_id}</option>`,
+          `<option value="${p.piece_id}" ${p.piece_id === this.pieceId ? "selected" : ""}>${pieceDisplayLabel(p)} · ${pieceFamilyLabel(p.piece_id)}</option>`,
       )
       .join("");
     const resOptions = RESOLUTION_PRESETS.map(
@@ -3346,6 +3496,13 @@ export class StudioApp {
         `<option value="${r.id}" ${r.id === this.exportPreset ? "selected" : ""}>${r.label}</option>`,
     ).join("");
 
+    const behaviorOptions = listCompatibleBehaviors(this.pieceId).map((b) => ({
+      id: b.id,
+      label: b.label,
+      disabled: b.disabled,
+      reason: b.reason,
+      selected: this.sceneAuthoringSemantics.behaviorPresetId === b.id,
+    }));
     const scenePanel = renderCreateScenePanel({
       sceneName: this.sceneAuthoring.sceneName,
       dirty: this.isSceneAuthoringDirty(),
@@ -3356,12 +3513,17 @@ export class StudioApp {
       activeSceneId: this.sceneAuthoring.activeSceneId,
       canAddToSet: this.canAddSceneToSet(),
       addToSetHint: this.addToSetHint(),
+      behaviorOptions,
+      macros: this.sceneAuthoringSemantics.creativeMacros,
+      showCreativeControls: this.mode === "animate" || this.mode === "react",
     });
 
     el.innerHTML = `
       ${scenePanel}
       <label>Piece</label>
+      <select id="cfg-piece-family">${familyFilterOptions}</select>
       <select id="cfg-piece">${pieceOptions}</select>
+      <p class="muted">Open <strong>Pieces</strong> below for thumbnails and motion preview.</p>
       <details class="advanced" id="create-advanced">
       <summary>Advanced</summary>
       <label>Seed</label>
@@ -3728,6 +3890,11 @@ export class StudioApp {
 
     el.querySelector("#scene-name")?.addEventListener("change", () => this.renderConfig());
 
+    el.querySelector("#cfg-piece-family")?.addEventListener("change", (e) => {
+      this.createCatalogFamilyFilter = (e.target as HTMLSelectElement).value;
+      this.renderConfig();
+      if (this.browserVisible) this.renderBrowser();
+    });
     el.querySelector("#cfg-piece")?.addEventListener("change", (e) => {
       void this.setPiece((e.target as HTMLSelectElement).value);
     });
