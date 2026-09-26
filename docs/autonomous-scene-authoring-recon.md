@@ -149,3 +149,13 @@ Set orchestrator, Rehearse/Perform UX redesign, branching sets, song timeline, D
 - Single shared **Scene library** localStorage vs only Set catalog?
 - Whether Generate-mode saves are stills-only Scenes or require “promote to Animate”
 - Minimum macro set that maps across ≥80% of curated catalog without per-piece special cases
+
+## Implementation outcome (increment 1 @ feat/autonomous-scene-authoring)
+
+- **Canonical type:** `PersistedSceneRecipeV1` (`engines/web/src/studio/scene/sceneRecipe.ts`) — extends `StudioDesiredState` (+ animation spec, frame, meta, style). Emitted `SceneDef` via `sceneDefFromRecipe`.
+- **Library:** `numbrane.studio.sceneLibrary.v1` + legacy `capturedScenes` import on boot.
+- **CREATE UI:** Scene name, Save / Save As / Load, Preview (Play / Restart), Add to Set; piece select on normal path; **Advanced** `<details>` wraps prior expert controls.
+- **Set handoff:** snapshot into `scene_catalog` (existing 0.2.0 semantics).
+- **Docs:** `docs/studio-scene-authoring.md`
+- **Tests:** `tests/scene_authoring.test.ts`, `tests/e2e/studio-scene-authoring.spec.ts`
+- **Deferred:** behavior macros, rich preset browser, full piece-discovery redesign.
