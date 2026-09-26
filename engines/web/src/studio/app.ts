@@ -344,6 +344,7 @@ export class StudioApp {
   private committedSceneGeneration = 0;
   private sceneApplyChain: Promise<void> = Promise.resolve();
   private longTaskObserver: PerformanceObserver | null = null;
+  private sceneAuthoringDelegationInstalled = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -402,6 +403,7 @@ export class StudioApp {
     this.wirePerformanceStrip();
     this.wirePointerIdle();
     this.renderConfig();
+    this.installSceneAuthoringDelegation();
     this.renderHelp();
     this.renderBrowser();
     document.body.classList.add("workflow-create");
@@ -1972,6 +1974,53 @@ export class StudioApp {
     };
   }
 
+  /** Stable delegation — scene chrome survives renderConfig innerHTML replacement. */
+  private installSceneAuthoringDelegation(): void {
+    if (this.sceneAuthoringDelegationInstalled) return;
+    this.sceneAuthoringDelegationInstalled = true;
+    document.addEventListener(
+      "click",
+      (ev) => {
+        if (!(ev.target as HTMLElement).closest("#config")) return;
+        const btn = (ev.target as HTMLElement).closest("button");
+        if (!btn?.id) return;
+        switch (btn.id) {
+          case "scene-save":
+            void this.saveSceneRecipe(false);
+            break;
+          case "scene-save-as":
+            void this.saveSceneAs();
+            break;
+          case "scene-add-set":
+            this.addAuthoringSceneToSet();
+            break;
+          case "cfg-preview-play":
+            this.togglePlay();
+            this.renderConfig();
+            break;
+          case "cfg-restart-scene":
+            void this.restartScenePreview();
+            break;
+          default:
+            break;
+        }
+      },
+      true,
+    );
+    document.addEventListener("change", (ev) => {
+      const sel = ev.target as HTMLSelectElement;
+      if (sel.id === "scene-load" && sel.value && document.getElementById("config")?.contains(sel)) {
+        void this.loadSceneRecipeById(sel.value);
+      }
+    });
+    document.addEventListener("input", (ev) => {
+      const input = ev.target as HTMLInputElement;
+      if (input.id === "scene-name" && document.getElementById("config")?.contains(input)) {
+        this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: input.value };
+      }
+    });
+  }
+
   private sceneRecipeCapture() {
     return {
       mode: this.mode,
@@ -1984,7 +2033,7 @@ export class StudioApp {
       activeAnimationMethodId: this.activeAnimationMethodId,
       reactSensitivity: this.reactSensitivity,
       animationSpec: this.animationSpec,
-      generateFrame: this.frame,
+      generateFrame: this.mode === "generate" ? this.frame : 0,
       meta: { ...this.meta },
       pflStyleId: this.pflStyleId,
     };
@@ -1995,7 +2044,10 @@ export class StudioApp {
   }
 
   async saveSceneRecipe(forceNewId = false): Promise<void> {
-    const name = this.sceneAuthoring.sceneName.trim() || defaultSceneName(this.pieceId);
+    const nameInput = document.getElementById("scene-name") as HTMLInputElement | null;
+    const name =
+      (nameInput?.value ?? this.sceneAuthoring.sceneName).trim() || defaultSceneName(this.pieceId);
+    this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: name };
     let id = forceNewId || !this.sceneAuthoring.activeSceneId ? newSceneId() : this.sceneAuthoring.activeSceneId;
     if (!forceNewId && this.sceneAuthoring.activeSceneId) {
       const conflict = findSceneNameConflict(this.sceneLibrary, name, id);
@@ -3674,22 +3726,7 @@ export class StudioApp {
       </div>
     `;
 
-    el.querySelector("#scene-name")?.addEventListener("input", (e) => {
-      this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: (e.target as HTMLInputElement).value };
-    });
     el.querySelector("#scene-name")?.addEventListener("change", () => this.renderConfig());
-    el.querySelector("#scene-save")?.addEventListener("click", () => void this.saveSceneRecipe(false));
-    el.querySelector("#scene-save-as")?.addEventListener("click", () => void this.saveSceneAs());
-    el.querySelector("#scene-add-set")?.addEventListener("click", () => this.addAuthoringSceneToSet());
-    el.querySelector("#scene-load")?.addEventListener("change", (e) => {
-      const id = (e.target as HTMLSelectElement).value;
-      if (id) void this.loadSceneRecipeById(id);
-    });
-    el.querySelector("#cfg-preview-play")?.addEventListener("click", () => {
-      this.togglePlay();
-      this.renderConfig();
-    });
-    el.querySelector("#cfg-restart-scene")?.addEventListener("click", () => void this.restartScenePreview());
 
     el.querySelector("#cfg-piece")?.addEventListener("change", (e) => {
       void this.setPiece((e.target as HTMLSelectElement).value);

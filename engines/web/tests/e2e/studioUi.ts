@@ -73,8 +73,16 @@ export async function selectPieceInConfig(page: Page, pieceId: string): Promise<
 }
 
 export async function clickStudioMode(page: Page, mode: "generate" | "animate" | "react"): Promise<void> {
-  const btn = page.locator(`#modebar button[data-mode="${mode}"]`);
-  await btn.click();
+  const subbar = page.locator(`#create-subbar button[data-mode="${mode}"]`);
+  if ((await subbar.count()) > 0 && (await subbar.isVisible())) {
+    await subbar.click();
+  } else {
+    await page.evaluate(async (m) => {
+      await (
+        window as unknown as { __NUMBRANE_STUDIO__?: { setMode?: (mode: string) => Promise<void> } }
+      ).__NUMBRANE_STUDIO__?.setMode?.(m);
+    }, mode);
+  }
   await page.waitForFunction(
     (m) => (window as unknown as { __NUMBRANE_STUDIO__?: { mode?: string } }).__NUMBRANE_STUDIO__?.mode === m,
     mode,
