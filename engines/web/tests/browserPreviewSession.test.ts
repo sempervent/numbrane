@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { orderedScenes } from "../src/live/setModel";
 import {
   singlePieceAnimateSet,
   usesLiveBrowserPreview,
@@ -16,7 +17,7 @@ describe("browser preview session helpers", () => {
 
   it("singlePieceAnimateSet builds mashup or simple layer", () => {
     const set = singlePieceAnimateSet("geometry/metatron", 42, { density: 0.7 });
-    expect(set.scenes[0]?.layers[0]?.piece).toBe("geometry/metatron");
+    expect(orderedScenes(set)[0]?.layers[0]?.piece).toBe("geometry/metatron");
   });
 });
 

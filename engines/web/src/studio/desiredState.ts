@@ -2,7 +2,7 @@
  * Authoritative Studio configuration snapshot — all scene loads commit against this shape.
  */
 
-import type { SetDef } from "../live/types";
+import type { SetDef, SetDefV1 } from "../live/types";
 import type { StudioMode } from "./keyboard/registry";
 import type { ColorConfig } from "./color/model";
 import type { AnimationSpec } from "./animation/spec";
@@ -51,7 +51,7 @@ export function normalizeAnimationMethodForPiece(
   return { animationMethodId: fallback, activeAnimationMethodId: fallback };
 }
 
-export function buildStudioSetDef(desired: StudioDesiredState): SetDef {
+export function buildStudioSetDef(desired: StudioDesiredState): SetDefV1 {
   const mappings =
     desired.mode === "react"
       ? defaultMappingsForPiece(desired.pieceId, desired.reactSensitivity).map((m, i) => ({
@@ -66,9 +66,9 @@ export function buildStudioSetDef(desired: StudioDesiredState): SetDef {
   const composition = desired.compositionId ? compositionById(desired.compositionId) : undefined;
   const apiParams = paramsForApi(desired.params, desired.color);
   const mashupSet = buildMashupSet(desired.pieceId, desired.seed, apiParams);
-  const set: SetDef = composition
-    ? composition.build(desired.seed, desired.params)
-    : mashupSet ?? {
+  const builtComposition = composition?.build(desired.seed, desired.params);
+  const set: SetDefV1 = builtComposition ??
+    mashupSet ?? {
         protocol_version: "0.1.0",
         set_id: "studio-session",
         name: "Studio",

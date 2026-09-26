@@ -81,12 +81,19 @@ describe("LiveRuntime scenes", () => {
   it("loads set and navigates scenes", () => {
     const rt = new LiveRuntime();
     rt.loadSet(set);
+    rt.transport.start();
     expect(rt.getScene()?.id).toBe("a");
     rt.nextScene();
+    rt.transport.seekBeat(2);
+    rt.tick(1000);
     expect(rt.getScene()?.id).toBe("b");
     rt.prevScene();
+    rt.transport.seekBeat(4);
+    rt.tick(2000);
     expect(rt.getScene()?.id).toBe("a");
     rt.gotoScene("b");
+    rt.transport.seekBeat(6);
+    rt.tick(3000);
     expect(rt.getScene()?.id).toBe("b");
   });
 
@@ -117,9 +124,14 @@ describe("LiveRuntime scenes", () => {
   it("applies cues", () => {
     const rt = new LiveRuntime();
     rt.loadSet(set);
+    rt.transport.start();
     rt.applyCue({ id: "n", action: "next_scene" });
+    rt.transport.seekBeat(2);
+    rt.tick(1000);
     expect(rt.getScene()?.id).toBe("b");
     rt.applyCue({ id: "g", action: "goto_scene", scene_id: "a" });
+    rt.transport.seekBeat(4);
+    rt.tick(2000);
     expect(rt.getScene()?.id).toBe("a");
   });
 });

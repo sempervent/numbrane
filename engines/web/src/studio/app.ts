@@ -832,7 +832,7 @@ export class StudioApp {
     }
     if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
-    for (const layer of set.scenes[0]?.layers ?? []) {
+    for (const layer of (set.protocol_version === "0.1.0" ? set.scenes[0]?.layers : []) ?? []) {
       for (const [k, v] of Object.entries(this.params)) {
         if (typeof v === "number") {
           this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
@@ -2474,7 +2474,8 @@ export class StudioApp {
     if (compositionId) {
       const recipe = compositionById(compositionId);
       const preview = recipe?.build(this.seed, this.params);
-      const basePiece = preview?.scenes[0]?.layers[0]?.piece;
+      const { orderedScenes } = await import("../live/setModel");
+      const basePiece = preview ? orderedScenes(preview)[0]?.layers[0]?.piece : undefined;
       if (basePiece) this.pieceId = basePiece;
     }
     await this.applyPieceScene();

@@ -3,6 +3,7 @@
  */
 
 import { describe, expect, it } from "vitest";
+import { orderedScenes } from "../src/live/setModel";
 import {
   moreLikeThis,
   generateSeries,
@@ -133,7 +134,7 @@ describe("compositions", () => {
       ]),
     );
     const set = COMPOSITIONS[0]!.build(42, { density: 0.7 });
-    expect(set.scenes[0]!.layers.length).toBeGreaterThanOrEqual(1);
+    expect(orderedScenes(set)[0]!.layers.length).toBeGreaterThanOrEqual(1);
   });
 });
 

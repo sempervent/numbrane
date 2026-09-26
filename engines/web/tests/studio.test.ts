@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { orderedScenes } from "../src/live/setModel";
 import {
   KeyboardRegistry,
   keyboardChordFromEvent,
@@ -228,8 +229,8 @@ describe("studio presets and compositions", () => {
 
   it("composition recipes expose multi-layer sets", () => {
     const set = COMPOSITIONS.find((c) => c.id === "slime-sdf")!.build(42, { density: 0.7 });
-    expect(set.scenes[0]!.layers.length).toBe(2);
-    expect(set.scenes[0]!.layers[0]!.piece).toBe("growth/slime-mold");
+    expect(orderedScenes(set)[0]!.layers.length).toBe(2);
+    expect(orderedScenes(set)[0]!.layers[0]!.piece).toBe("growth/slime-mold");
   });
 
   it("variant promotion keeps exact seed/params (no regen)", () => {

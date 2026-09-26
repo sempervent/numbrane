@@ -2,13 +2,13 @@
  * Mashup catalog pieces — multi-layer live sets composing authentic runtimes.
  */
 
-import type { SetDef } from "../live/types";
+import type { SceneDef, SetDefV1 } from "../live/types";
 
 function mashupSet(
   pieceId: string,
   name: string,
-  layers: SetDef["scenes"][0]["layers"],
-): SetDef {
+  layers: SceneDef["layers"],
+): SetDefV1 {
   return {
     protocol_version: "0.1.0",
     set_id: pieceId,
@@ -28,7 +28,7 @@ function mashupSet(
 
 const MASHUP_BUILDERS: Record<
   string,
-  (seed: number, params: Record<string, number | string | boolean>) => SetDef
+  (seed: number, params: Record<string, number | string | boolean>) => SetDefV1
 > = {
   "mashups/attractor-calligraphy": (seed, params) =>
     mashupSet("mashups/attractor-calligraphy", "Attractor calligraphy", [
@@ -154,7 +154,7 @@ export function buildMashupSet(
   pieceId: string,
   seed: number,
   params: Record<string, number | string | boolean>,
-): SetDef | null {
+): SetDefV1 | null {
   const build = MASHUP_BUILDERS[pieceId];
   return build ? build(seed, params) : null;
 }
