@@ -11,9 +11,9 @@ cli() {
   (cd "$ROOT/engines/python" && uv run python ../../tools/numbrane_cli.py "$@")
 }
 
-cli render reference/circle-lattice --seed 42 -o "$OUT/circle-lattice.json"
-cli render geometry/seed-of-life --seed 1 -o "$OUT/seed-of-life.json"
-cli render geometry/metatron --seed 1 -o "$OUT/metatron.json"
+cli render reference/circle-lattice --seed 42 -o "$OUT/circle-lattice.png"
+cli render geometry/seed-of-life --seed 1 -o "$OUT/seed-of-life.png"
+cli render geometry/metatron --seed 1 -o "$OUT/metatron.png"
 cli render landscape/noise-landscape --seed 42 -o "$OUT/noise-landscape.png"
 cli render fractals/strange-attractors --seed 42 -o "$OUT/strange-attractors.png"
 
@@ -30,7 +30,7 @@ if (nodes.length < 1) throw new Error("replay failed");
 console.log("web event replay smoke ok", nodes.length);
 ')
 
-test -f "$OUT/circle-lattice.json"
+test -f "$OUT/circle-lattice.png"
 test -f "$OUT/noise-landscape.png"
 test -f "$OUT/strange-attractors.png"
 echo "smoke ok -> $OUT"
