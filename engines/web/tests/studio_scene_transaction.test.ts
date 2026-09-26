@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { orderedScenes } from "../src/live/setModel";
 import {
   buildStudioSetDef,
   normalizeAnimationMethodForPiece,
@@ -35,7 +36,7 @@ describe("studio scene desired state", () => {
 
   it("builds a single-layer set for catalog piece", () => {
     const set = buildStudioSetDef(baseDesired("fractals/sdf-raymarch2d"));
-    expect(set.scenes[0]?.layers[0]?.piece).toBe("fractals/sdf-raymarch2d");
+    expect(orderedScenes(set)[0]?.layers[0]?.piece).toBe("fractals/sdf-raymarch2d");
   });
 
   it("flags selector/runtime mismatch in consistency snapshot", () => {

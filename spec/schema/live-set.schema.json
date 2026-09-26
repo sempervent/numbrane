@@ -2,29 +2,87 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://numbrane.dev/schema/live-set.schema.json",
   "title": "NAP Live Performance Set",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["protocol_version", "set_id", "name", "scenes"],
-  "properties": {
-    "protocol_version": { "type": "string", "const": "0.1.0" },
-    "set_id": {
-      "type": "string",
-      "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
-    },
-    "name": { "type": "string", "minLength": 1 },
-    "bpm": { "type": "number", "minimum": 1 },
-    "default_transition": { "$ref": "#/$defs/transition" },
-    "scenes": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/scene" }
-    },
-    "cues": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/cue" }
-    }
-  },
+  "oneOf": [
+    { "$ref": "#/$defs/set_v1" },
+    { "$ref": "#/$defs/set_v2" }
+  ],
   "$defs": {
+    "set_v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "set_id", "name", "scenes"],
+      "properties": {
+        "protocol_version": { "type": "string", "const": "0.1.0" },
+        "set_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "bpm": { "type": "number", "minimum": 1 },
+        "default_transition": { "$ref": "#/$defs/transition" },
+        "scenes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/scene" }
+        },
+        "cues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cue" }
+        }
+      }
+    },
+    "set_v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol_version", "set_id", "name", "scene_catalog", "sequence"],
+      "properties": {
+        "protocol_version": { "type": "string", "const": "0.2.0" },
+        "set_id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+([./-][a-z0-9]+)*$"
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "bpm": { "type": "number", "minimum": 1 },
+        "default_transition": { "$ref": "#/$defs/transition" },
+        "scene_catalog": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/scene" }
+        },
+        "sequence": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" }
+        },
+        "edges": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/set_edge" }
+        },
+        "cues": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/cue" }
+        }
+      }
+    },
+    "set_edge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["to_scene_id"],
+      "properties": {
+        "to_scene_id": { "type": "string" },
+        "advancement": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": { "type": "string", "enum": ["manual", "automatic"] },
+            "dwell_bars": { "type": "number", "minimum": 0 }
+          }
+        },
+        "launch_quantization_bars": { "type": "number", "minimum": 0 },
+        "minimum_dwell_bars": { "type": "number", "minimum": 0 },
+        "morph": { "$ref": "#/$defs/transition" },
+        "time_mode": { "type": "string", "enum": ["musical", "free"] }
+      }
+    },
     "transition": {
       "type": "object",
       "additionalProperties": false,

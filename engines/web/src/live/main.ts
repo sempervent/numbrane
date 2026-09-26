@@ -3,6 +3,7 @@
  */
 
 import { LiveSession, installSetMidiCues } from "./session";
+import { orderedScenes } from "./setModel";
 import type { SetDef, ResolutionPreset, QualityProfile } from "./types";
 import type { PerformanceRecording } from "./recording/performance";
 import { parseRecording, serializeRecording } from "./recording/performance";
@@ -278,7 +279,7 @@ function mountUi(
   const setSec = section("Set / Scene");
   setSec.appendChild(el("p", { class: "muted" }, `Set: ${set.name} (${set.set_id})`));
   const sceneList = el("div", { class: "scenes" });
-  set.scenes.forEach((s, i) => {
+  orderedScenes(set).forEach((s, i) => {
     const b = el("button", { type: "button", "data-scene": s.id }, `${i + 1}. ${s.name}`);
     b.addEventListener("click", () => void session.gotoScene(s.id));
     sceneList.appendChild(b);

@@ -142,6 +142,23 @@ import {
   type StudioDesiredState,
 } from "./desiredState";
 import { collectStudioConsistency } from "./consistency";
+import { orderedScenes } from "../live/setModel";
+import type { SceneDef } from "../live/types";
+import { SetScoreController } from "./setScore/controller";
+import type { SetScoreBindHost } from "./setScore/bind";
+import {
+  bindPerformPanel,
+  bindRehearsePanel,
+  bindSetWorkspacePanels,
+  type WorkflowBindHost,
+} from "./setScore/bindWorkspaces";
+import {
+  renderPerformWorkspaceHtml,
+  renderRehearseWorkspaceHtml,
+  renderSetInspectorHtml,
+  renderSetScoreRailHtml,
+} from "./setScore/workspacesRender";
+import { studioDevToolsEnabled, type StudioWorkflow } from "./workflow";
 
 declare global {
   interface Window {
@@ -292,6 +309,10 @@ export class StudioApp {
   };
   /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
   studioBootComplete = false;
+  readonly setScore = new SetScoreController(() => this.session);
+  private setPerformStatusKey = "";
+  workflow: StudioWorkflow = "create";
+  private workflowPanelKey = "";
   /** Monotonic scene apply generation — latest request wins at commit. */
   private sceneGeneration = 0;
   private committedSceneGeneration = 0;
@@ -347,15 +368,20 @@ export class StudioApp {
       this.mode,
     );
     await this.applyPieceScene();
+    this.setScore.loadPersisted();
 
     this.wireKeyboard();
+    this.wireWorkflowNav();
     this.wireModebar();
     this.wirePerformanceStrip();
     this.wirePointerIdle();
     this.renderConfig();
     this.renderHelp();
     this.renderBrowser();
+    document.body.classList.add("workflow-create");
     this.syncModebarState();
+    this.syncWorkflowNavState();
+    this.renderWorkflowPanels(true);
     this.syncChrome();
     this.syncUrl(false);
     this.pushHistory();
@@ -832,7 +858,7 @@ export class StudioApp {
     }
     if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
-    for (const layer of set.scenes[0]?.layers ?? []) {
+    for (const layer of (set.protocol_version === "0.1.0" ? set.scenes[0]?.layers : []) ?? []) {
       for (const [k, v] of Object.entries(this.params)) {
         if (typeof v === "number") {
           this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
@@ -1281,6 +1307,15 @@ export class StudioApp {
         handler: () => void this.cycleVisualization(1),
       },
       {
+        id: "set-advance",
+        keys: "Shift+]",
+        match: ["shift+]"],
+        label: "Advance Set (perform/rehearse)",
+        group: "animate",
+        modes: ["animate", "react"],
+        handler: () => void this.setScoreAdvance(),
+      },
+      {
         id: "blackout",
         keys: "B",
         match: ["b"],
@@ -1354,11 +1389,109 @@ export class StudioApp {
     });
   }
 
+  private wireWorkflowNav(): void {
+    document.querySelectorAll<HTMLButtonElement>("#workflow-nav button").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const w = btn.dataset.workflow as StudioWorkflow;
+        this.setWorkflow(w);
+      });
+    });
+  }
+
+  setWorkflow(workflow: StudioWorkflow): void {
+    if (workflow === "rehearse" && !this.setScore.hasViableSet()) {
+      toast("Add scenes to your Set first");
+      workflow = "set";
+    }
+    if (workflow === "perform" && !this.setScore.hasViableSet()) {
+      toast("Add scenes to your Set first");
+      workflow = "set";
+    }
+    if (this.workflow === "perform" && workflow !== "perform" && this.setScore.surface === "perform") {
+      this.setScore.stopRuntime();
+    }
+    this.workflow = workflow;
+    document.body.classList.remove(
+      "workflow-create",
+      "workflow-set",
+      "workflow-rehearse",
+      "workflow-perform",
+    );
+    document.body.classList.add(`workflow-${workflow}`);
+    this.syncWorkflowNavState();
+    this.renderWorkflowPanels(true);
+    this.syncChrome();
+  }
+
+  private syncWorkflowNavState(): void {
+    document.querySelectorAll<HTMLButtonElement>("#workflow-nav button").forEach((btn) => {
+      const w = btn.dataset.workflow as StudioWorkflow;
+      const active = w === this.workflow;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-current", active ? "page" : "false");
+    });
+  }
+
+  private renderWorkflowPanels(force = false): void {
+    const dev = studioDevToolsEnabled();
+    const st = this.setScore.status();
+    const key = [
+      this.workflow,
+      this.setScore.surface,
+      st.phaseLabel,
+      st.activeSceneId,
+      st.queuedSceneId,
+      st.transitionProgress.toFixed(2),
+      this.setScore.getSelectedIndex(),
+      this.setScore.selectionFocus,
+      this.setScore.isDocumentDirty(),
+      this.setScore.getDocument().sequence.join(","),
+    ].join("|");
+    if (!force && key === this.workflowPanelKey) return;
+    this.workflowPanelKey = key;
+
+    const rail = document.getElementById("set-score-rail");
+    const inspector = document.getElementById("set-inspector");
+    const rehearse = document.getElementById("rehearse-panel");
+    const perform = document.getElementById("perform-panel");
+    const host = this.workflowBindHost();
+
+    if (rail && this.workflow === "set") {
+      rail.innerHTML = renderSetScoreRailHtml(this.setScore, dev);
+      if (inspector) {
+        inspector.innerHTML = renderSetInspectorHtml(this.setScore);
+        bindSetWorkspacePanels(rail, inspector, this.setScore, host);
+      }
+    }
+    if (rehearse && this.workflow === "rehearse") {
+      rehearse.innerHTML = renderRehearseWorkspaceHtml(this.setScore);
+      bindRehearsePanel(rehearse, this.setScore, host);
+    }
+    if (perform && this.workflow === "perform") {
+      perform.innerHTML = renderPerformWorkspaceHtml(this.setScore);
+      bindPerformPanel(perform, this.setScore, host);
+    }
+  }
+
+  private workflowBindHost(): WorkflowBindHost {
+    return {
+      ...this.setScoreBindHost(),
+      gotoWorkflow: (w) => this.setWorkflow(w),
+      onRehearseStarted: () => {
+        this.setWorkflow("rehearse");
+      },
+      onPerformStarted: () => {
+        this.setWorkflow("perform");
+      },
+    };
+  }
+
   private wireModebar(): void {
-    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+    document.querySelectorAll<HTMLButtonElement>("#create-subbar button, #modebar button").forEach((btn) => {
       btn.addEventListener("click", () => {
         if (btn.disabled) return;
         const m = btn.dataset.mode as StudioMode;
+        if (this.workflow !== "create") this.setWorkflow("create");
         void this.setMode(m);
       });
     });
@@ -1395,18 +1528,19 @@ export class StudioApp {
 
   /** Authoritative mode bar — never rely on static HTML active classes. */
   syncModebarState(): void {
-    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+    document.querySelectorAll<HTMLButtonElement>("#create-subbar button, #modebar button").forEach((btn) => {
       const mode = btn.dataset.mode as StudioMode;
       const active = mode === this.mode;
       btn.classList.toggle("active", active);
       btn.setAttribute("aria-pressed", active ? "true" : "false");
     });
     this.syncModebarCapabilities();
+    this.syncWorkflowNavState();
   }
 
   syncModebarCapabilities(): void {
     const d = this.descriptorFor();
-    document.querySelectorAll<HTMLButtonElement>("#modebar button").forEach((btn) => {
+    document.querySelectorAll<HTMLButtonElement>("#create-subbar button, #modebar button").forEach((btn) => {
       const mode = btn.dataset.mode as StudioMode;
       const ok =
         mode === "generate"
@@ -1780,8 +1914,63 @@ export class StudioApp {
   async cycleVisualization(dir: number): Promise<void> {
     this.setBrowserVisible(false);
     this.helpVisible = false;
+    if (this.setScore.surface !== "idle" && dir > 0) {
+      await this.setScoreAdvance();
+      return;
+    }
     await this.cyclePiece(dir);
     this.syncChrome();
+  }
+
+  async setScoreAdvance(): Promise<void> {
+    await this.setScore.advance();
+    this.syncSetScoreChrome();
+  }
+
+  private setScoreBindHost(): SetScoreBindHost {
+    return {
+      toast,
+      buildCurrentSceneDef: () => this.buildCurrentSceneDefForSet(),
+      loadFixtureSet: () => this.fetchSetPerformanceFixture(),
+      toggleFullscreen: () => void this.toggleFullscreen(),
+      onSetRuntimeChange: () => {
+        this.renderWorkflowPanels(true);
+        this.syncSetScoreChrome();
+        this.syncChrome();
+      },
+    };
+  }
+
+  private async buildCurrentSceneDefForSet(): Promise<SceneDef> {
+    const set = buildStudioSetDef(this.snapshotDesiredState());
+    const base = orderedScenes(set)[0]!;
+    const slug = this.pieceId.replace(/\//g, "-");
+    const id = `scene-${slug}-${this.seed}-${Date.now().toString(36).slice(-4)}`;
+    return {
+      ...base,
+      id,
+      name: base.name || this.pieceId,
+    };
+  }
+
+  private async fetchSetPerformanceFixture(): Promise<SetDef> {
+    const res = await fetch("/sets/set-performance-fixture.json");
+    if (!res.ok) throw new Error(`fixture load ${res.status}`);
+    return (await res.json()) as SetDef;
+  }
+
+  private syncSetScoreChrome(): void {
+    document.body.classList.toggle("set-score-runtime", this.setScore.surface !== "idle");
+    const chrome = document.getElementById("set-score-chrome");
+    if (chrome) {
+      chrome.classList.remove("visible");
+      chrome.innerHTML = "";
+    }
+  }
+
+  private refreshSetPerformStatus(): void {
+    if (this.setScore.surface === "idle" && this.workflow !== "set") return;
+    this.renderWorkflowPanels(false);
   }
 
   async cycleRandomPiece(): Promise<void> {
@@ -2474,7 +2663,8 @@ export class StudioApp {
     if (compositionId) {
       const recipe = compositionById(compositionId);
       const preview = recipe?.build(this.seed, this.params);
-      const basePiece = preview?.scenes[0]?.layers[0]?.piece;
+      const { orderedScenes } = await import("../live/setModel");
+      const basePiece = preview ? orderedScenes(preview)[0]?.layers[0]?.piece : undefined;
       if (basePiece) this.pieceId = basePiece;
     }
     await this.applyPieceScene();
@@ -2585,15 +2775,35 @@ export class StudioApp {
     }
     const perf = document.getElementById("performance-strip");
     if (perf) {
-      perf.classList.toggle("visible", this.mode === "animate" && this.controlsVisible);
+      perf.classList.toggle(
+        "visible",
+        this.workflow === "create" &&
+          this.mode === "animate" &&
+          this.controlsVisible &&
+          this.setScore.surface === "idle",
+      );
       const label = document.getElementById("perf-piece");
       if (label) label.textContent = this.pieceId.split("/").pop() ?? this.pieceId;
       const pauseBtn = document.getElementById("perf-pause");
       if (pauseBtn) pauseBtn.textContent = this.playing ? "Pause" : "Play";
     }
-    for (const id of ["modebar", "config", "browser", "performance-strip"]) {
+    for (const id of [
+      "workflow-nav",
+      "create-subbar",
+      "modebar",
+      "config",
+      "browser",
+      "performance-strip",
+      "set-score-chrome",
+      "set-score-rail",
+      "set-inspector",
+      "rehearse-panel",
+      "perform-panel",
+    ]) {
       this.setControlTreeState(id, !this.controlsVisible);
     }
+    this.syncSetScoreChrome();
+    this.renderWorkflowPanels(this.workflow !== "create");
     const strip = document.getElementById("meta-strip");
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     if (strip) {
@@ -2612,16 +2822,24 @@ export class StudioApp {
     const { global, mode } = this.registry.helpCatalog(this.mode);
     const row = (c: { keys: string; label: string }) =>
       `<div class="cmd"><kbd>${c.keys}</kbd>${c.label}</div>`;
+    const workflowNote = `
+      <h2 style="color:var(--mute);letter-spacing:.1em;font-size:10px;margin-top:0.75rem">WORKFLOW</h2>
+      <p class="muted" style="margin:0.2rem 0 0.5rem;line-height:1.4">Create → Set → Rehearse → Perform (top navigation). Generate / Animate / React are Create submodes.</p>
+    `;
     el.innerHTML = `
       <h1>Keyboard</h1>
       <div class="grid">
         <div>
           <h2 style="color:var(--mute);letter-spacing:.1em;font-size:10px;">GLOBAL</h2>
           ${global.map(row).join("")}
+          ${workflowNote}
         </div>
         <div>
-          <h2 style="color:var(--mute);letter-spacing:.1em;font-size:10px;">${this.mode.toUpperCase()}</h2>
+          <h2 style="color:var(--mute);letter-spacing:.1em;font-size:10px;">CREATE · ${this.mode.toUpperCase()}</h2>
           ${mode.map(row).join("")}
+          <h2 style="color:var(--mute);letter-spacing:.1em;font-size:10px;margin-top:0.75rem">SET / REHEARSE / PERFORM</h2>
+          <div class="cmd"><kbd>]</kbd>Advance score (when rehearsing or performing)</div>
+          <div class="cmd"><kbd>Shift+]</kbd>Advance score</div>
         </div>
       </div>
       <p class="muted" style="margin-top:0.8rem">Press ? or Esc to close</p>
@@ -2894,8 +3112,8 @@ export class StudioApp {
     ).join("");
 
     el.innerHTML = `
-      <h1>NUMBRANE Studio</h1>
-      <p class="muted">${this.mode.toUpperCase()} · canvas-first · ? keys · Tab chrome</p>
+      <h1>Create</h1>
+      <p class="muted">${this.mode.toUpperCase()} · author visuals · Tab hides chrome · ? keys</p>
       <h2>Essential</h2>
       <label>Piece</label>
       <select id="cfg-piece">${pieceOptions}</select>
@@ -3734,6 +3952,8 @@ export class StudioApp {
       if (nextPiece && nextPiece !== this.pieceId) void this.setPiece(nextPiece);
       this.lastVisualSwitchMs = now;
     }
+
+    this.refreshSetPerformStatus();
 
     if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
       const diag = this.session.getDiagnostics();

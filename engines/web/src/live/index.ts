@@ -7,6 +7,9 @@ export type {
   RenderContext,
 } from "./piece";
 export { LiveRuntime, type TransitionState, type LiveRuntimeOptions } from "./runtime";
+export { SetOrchestrator, type SetOrchestratorSnapshot } from "./setOrchestrator";
+export { resolveSetModel, toSetDefV2 } from "./setModel";
+export { morphScenes } from "./sceneMorph";
 export type * from "./types";
 export { parseResolution } from "./types";
 export {

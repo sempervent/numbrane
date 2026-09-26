@@ -15,6 +15,7 @@ import {
   synthSilence,
 } from "../src/live/inputs/audioAnalysis";
 import { ModulationMatrix } from "../src/live/modulation";
+import { orderedScenes } from "../src/live/setModel";
 import type { SetDef } from "../src/live/types";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -25,7 +26,7 @@ describe("audio-first modulation path", () => {
   ) as SetDef;
 
   it("every pfl-default scene has at least one audio.* mapping", () => {
-    for (const scene of set.scenes) {
+    for (const scene of orderedScenes(set)) {
       const audioMods = (scene.modulation ?? []).filter((m) =>
         m.source.startsWith("audio."),
       );
@@ -35,7 +36,7 @@ describe("audio-first modulation path", () => {
 
   it("scenes use diverse audio sources (not only energy)", () => {
     const sources = new Set<string>();
-    for (const scene of set.scenes) {
+    for (const scene of orderedScenes(set)) {
       for (const m of scene.modulation ?? []) {
         if (m.source.startsWith("audio.")) sources.add(m.source);
       }
@@ -68,7 +69,7 @@ describe("audio-first modulation path", () => {
     }
     expect(loudF.energy).toBeGreaterThan(quietF.energy);
 
-    const scene = set.scenes.find((s) => s.id === "void")!;
+    const scene = orderedScenes(set).find((s) => s.id === "void")!;
     const mx = new ModulationMatrix();
     mx.setMappings(
       (scene.modulation ?? [])

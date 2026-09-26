@@ -1,11 +1,17 @@
 /**
  * NUMBRANE LIVE runtime — scene/set control and frame orchestration.
- * Compositor / modulation / I/O attach in later modules.
+ * Set navigation is owned by SetOrchestrator (queue, dwell, morph progress).
  */
 
 import type { LivePiece, FrameState } from "./piece";
-import { Transport, beatsFromTransition } from "./transport";
+import { Transport } from "./transport";
 import type { CueDef, SceneDef, SetDef, TransitionDef } from "./types";
+import { resolveSetModel, sceneIndex } from "./setModel";
+import {
+  SetOrchestrator,
+  type AdvanceResult,
+  type OrchestratorTransition,
+} from "./setOrchestrator";
 
 export type TransitionState = {
   active: boolean;
@@ -25,8 +31,8 @@ export type LiveRuntimeOptions = {
 
 export class LiveRuntime {
   readonly transport = new Transport();
+  readonly orchestrator = new SetOrchestrator();
   private set: SetDef | null = null;
-  private sceneIndex = 0;
   private pieces = new Map<string, LivePiece>();
   private fps: number;
   private seed: number;
@@ -36,15 +42,8 @@ export class LiveRuntime {
   /** When true, pieces still render but update() is skipped (Studio Pause). */
   private simulationPaused = false;
   private freezePieceUpdates = false;
-  private transition: TransitionState = {
-    active: false,
-    type: "cut",
-    progress: 1,
-    fromSceneId: null,
-    toSceneId: null,
-    startBeat: 0,
-    durationBeats: 0,
-  };
+  private midiClockHealthy = true;
+  private lastOrchestratorResults: AdvanceResult[] = [];
 
   constructor(opts: LiveRuntimeOptions = {}) {
     this.fps = opts.fps ?? 60;
@@ -53,9 +52,14 @@ export class LiveRuntime {
 
   loadSet(set: SetDef, sceneIndex = 0): void {
     this.set = set;
-    this.sceneIndex = Math.max(0, Math.min(sceneIndex, set.scenes.length - 1));
+    this.orchestrator.loadSet(set);
+    const model = resolveSetModel(set);
+    const idx = Math.max(0, Math.min(sceneIndex, model.scenes.length - 1));
+    const sceneId = model.scenes[idx]?.id;
+    if (sceneId && idx > 0) {
+      this.orchestrator.seekRehearsal({ kind: "scene", scene_id: sceneId });
+    }
     this.blackout = false;
-    this.transition.active = false;
     if (set.bpm) this.transport.setBpm(set.bpm);
   }
 
@@ -64,12 +68,22 @@ export class LiveRuntime {
   }
 
   getScene(): SceneDef | null {
-    if (!this.set) return null;
-    return this.set.scenes[this.sceneIndex] ?? null;
+    const model = this.orchestrator.getModel();
+    if (!model) return null;
+    const id = this.orchestrator.getActiveSceneId();
+    return model.scenes.find((s) => s.id === id) ?? null;
+  }
+
+  getSceneById(sceneId: string): SceneDef | null {
+    const model = this.orchestrator.getModel();
+    if (!model) return null;
+    return model.scenes.find((s) => s.id === sceneId) ?? null;
   }
 
   getSceneIndex(): number {
-    return this.sceneIndex;
+    const model = this.orchestrator.getModel();
+    if (!model) return 0;
+    return sceneIndex(model, this.orchestrator.getActiveSceneId());
   }
 
   registerPiece(layerId: string, piece: LivePiece): void {
@@ -95,72 +109,53 @@ export class LiveRuntime {
   replacePieces(next: Map<string, LivePiece>): LivePiece[] {
     const previous = [...this.pieces.values()];
     this.pieces = new Map(next);
-    this.frame = 0;
-    this.updateCount = 0;
     return previous;
   }
 
-  nextScene(): void {
-    if (!this.set) return;
-    const next = Math.min(this.set.scenes.length - 1, this.sceneIndex + 1);
-    if (next !== this.sceneIndex) this.gotoScene(next);
+  nextScene(): AdvanceResult {
+    return this.advanceSet();
   }
 
-  prevScene(): void {
-    const prev = Math.max(0, this.sceneIndex - 1);
-    if (prev !== this.sceneIndex) this.gotoScene(prev);
+  prevScene(): AdvanceResult {
+    const model = this.orchestrator.getModel();
+    if (!model) return { action: "none" };
+    const idx = this.getSceneIndex();
+    if (idx <= 0) return { action: "none" };
+    const dest = model.scenes[idx - 1]!.id;
+    return this.orchestrator.requestAdvance(dest);
   }
 
-  gotoScene(indexOrId: number | string): void {
-    if (!this.set) return;
-    let idx: number;
+  /** Legacy immediate navigation — prefer advanceSet for performance semantics. */
+  gotoScene(indexOrId: number | string): AdvanceResult {
+    const model = this.orchestrator.getModel();
+    if (!model) return { action: "none" };
+    let sceneId: string;
     if (typeof indexOrId === "string") {
-      idx = this.set.scenes.findIndex((s) => s.id === indexOrId);
-      if (idx < 0) return;
+      sceneId = indexOrId;
     } else {
-      idx = Math.max(0, Math.min(this.set.scenes.length - 1, indexOrId));
+      sceneId = model.scenes[indexOrId]?.id ?? "";
     }
-    if (idx === this.sceneIndex && !this.transition.active) return;
+    if (!sceneId) return { action: "none" };
+    return this.orchestrator.requestAdvance(sceneId);
+  }
 
-    const from = this.set.scenes[this.sceneIndex];
-    const to = this.set.scenes[idx];
-    if (!to) return;
+  advanceSet(): AdvanceResult {
+    return this.orchestrator.requestAdvance();
+  }
 
-    const tr: TransitionDef =
-      to.transition ?? this.set.default_transition ?? { type: "crossfade", duration_beats: 2 };
-    const snap = this.transport.getSnapshot();
-    const durationBeats = beatsFromTransition({
-      bpm: snap.bpm,
-      duration_beats: tr.duration_beats,
-      duration_bars: tr.duration_bars,
-      duration_seconds: tr.duration_seconds,
-      beatsPerBar: snap.beatsPerBar,
-    });
+  consumeOrchestratorResults(): AdvanceResult[] {
+    const r = this.lastOrchestratorResults;
+    this.lastOrchestratorResults = [];
+    return r;
+  }
 
-    if (tr.type === "cut" || durationBeats <= 0) {
-      this.sceneIndex = idx;
-      this.transition = {
-        active: false,
-        type: "cut",
-        progress: 1,
-        fromSceneId: from?.id ?? null,
-        toSceneId: to.id,
-        startBeat: snap.beat,
-        durationBeats: 0,
-      };
-      return;
-    }
+  getOrchestratorTransition(): OrchestratorTransition | null {
+    return this.orchestrator.getTransition();
+  }
 
-    this.transition = {
-      active: true,
-      type: tr.type,
-      progress: 0,
-      fromSceneId: from?.id ?? null,
-      toSceneId: to.id,
-      startBeat: snap.beat,
-      durationBeats,
-    };
-    this.sceneIndex = idx;
+  setMidiClockHealthy(healthy: boolean): void {
+    this.midiClockHealthy = healthy;
+    this.orchestrator.setMusicalTimingHealthy(healthy);
   }
 
   applyCue(cue: CueDef): void {
@@ -181,7 +176,7 @@ export class LiveRuntime {
         this.panic();
         break;
       case "reload":
-        this.gotoScene(this.sceneIndex);
+        this.orchestrator.seekRehearsal({ kind: "scene", scene_id: this.orchestrator.getActiveSceneId() });
         break;
       default:
         break;
@@ -212,28 +207,49 @@ export class LiveRuntime {
     return this.freezePieceUpdates;
   }
 
-  /** Safe reset: clear blackout, stop transition, reset feedback-ish flags. */
   panic(): void {
     this.blackout = false;
-    this.transition.active = false;
-    this.transition.progress = 1;
+    const id = this.orchestrator.getActiveSceneId();
+    if (id) this.orchestrator.seekRehearsal({ kind: "scene", scene_id: id });
   }
 
   getTransition(): TransitionState {
-    return { ...this.transition };
+    const tr = this.orchestrator.getTransition();
+    if (!tr) {
+      return {
+        active: false,
+        type: "cut",
+        progress: 1,
+        fromSceneId: null,
+        toSceneId: null,
+        startBeat: 0,
+        durationBeats: 0,
+      };
+    }
+    return {
+      active: tr.progress < 1,
+      type: (tr.morphType as TransitionDef["type"]) ?? "crossfade",
+      progress: tr.progress,
+      fromSceneId: tr.fromSceneId,
+      toSceneId: tr.toSceneId,
+      startBeat: tr.startBeat,
+      durationBeats: tr.durationBeats,
+    };
   }
 
   /** Advance one frame. `wallNowMs` used only for internal transport. */
   tick(wallNowMs: number): FrameState {
     this.transport.advanceWall(wallNowMs);
     const snap = this.transport.getSnapshot();
-
-    if (this.transition.active && this.transition.durationBeats > 0) {
-      const p =
-        (snap.beat - this.transition.startBeat) / this.transition.durationBeats;
-      this.transition.progress = Math.min(1, Math.max(0, p));
-      if (this.transition.progress >= 1) this.transition.active = false;
-    }
+    const musical =
+      snap.source !== "midi-clock" || this.midiClockHealthy;
+    this.lastOrchestratorResults = this.orchestrator.tick({
+      beat: snap.beat,
+      bpm: snap.bpm,
+      beatsPerBar: snap.beatsPerBar,
+      musicalTimingHealthy: musical,
+      dtSec: 1 / this.fps,
+    });
 
     const dt = this.simulationPaused ? 0 : 1 / this.fps;
     const frame: FrameState = {

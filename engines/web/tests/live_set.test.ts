@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { orderedScenes } from "../src/live/setModel";
 import { LiveRuntime } from "../src/live/runtime";
 import type { SetDef } from "../src/live/types";
 import {
@@ -21,25 +22,40 @@ describe("live set + recording", () => {
 
   it("loads midnight-pfl-pack scenes", () => {
     const raw = readFileSync(resolve(root, "pieces/live/midnight-pfl-pack/set.json"), "utf8");
-    const set = JSON.parse(raw) as { set_id: string; scenes: unknown[] };
+    const set = JSON.parse(raw) as SetDef;
     expect(set.set_id).toBe("pfl-packs-midnight-pfl-pack");
-    expect(set.scenes.length).toBeGreaterThanOrEqual(2);
+    expect(orderedScenes(set).length).toBeGreaterThanOrEqual(2);
   });
 
   it("loads pfl-default scenes", () => {
     const rt = new LiveRuntime();
     rt.loadSet(set);
     expect(rt.getScene()?.id).toBe("void");
-    expect(set.scenes.length).toBeGreaterThanOrEqual(6);
+    expect(orderedScenes(set).length).toBeGreaterThanOrEqual(6);
+    rt.transport.setBpm(120);
+    rt.transport.start();
     rt.nextScene();
-    // transition active may delay index — goto sets index immediately
+    expect(rt.getTransition().active).toBe(true);
+    expect(rt.getScene()?.id).toBe("void");
+    let now = 1000;
+    for (let i = 0; i < 300; i++) {
+      now += 1000 / 60;
+      rt.tick(now);
+    }
     expect(rt.getScene()?.id).toBe("signal");
   });
 
   it("cues drive navigation", () => {
     const rt = new LiveRuntime();
     rt.loadSet(set);
+    rt.transport.start();
     rt.applyCue({ id: "n", action: "next_scene" });
+    expect(rt.getTransition().active).toBe(true);
+    let now = 500;
+    for (let i = 0; i < 300; i++) {
+      now += 1000 / 60;
+      rt.tick(now);
+    }
     expect(rt.getSceneIndex()).toBe(1);
     rt.applyCue({ id: "b", action: "blackout" });
     expect(rt.isBlackout()).toBe(true);
@@ -70,7 +86,7 @@ describe("live set + recording", () => {
     rt.transport.setBpm(120);
     rt.transport.setSource("internal");
     rt.transport.start();
-    rt.gotoScene("bloom");
+    rt.gotoScene("signal");
     const tr = rt.getTransition();
     expect(tr.active).toBe(true);
     // advance ~4 seconds = 8 beats at 120bpm

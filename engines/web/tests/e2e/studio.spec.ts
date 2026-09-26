@@ -16,7 +16,7 @@ test.describe("NUMBRANE Studio", () => {
     await page.keyboard.press("Tab");
     await expect(page.locator("body")).toHaveClass(/controls-hidden/);
     const hiddenControls = await page.evaluate(() => {
-      const roots = ["modebar", "config", "browser", "performance-strip"]
+      const roots = ["workflow-nav", "create-subbar", "config", "browser", "performance-strip"]
         .map((id) => document.getElementById(id))
         .filter((node): node is HTMLElement => !!node);
       const controls = roots.flatMap((root) => [
@@ -48,11 +48,11 @@ test.describe("NUMBRANE Studio", () => {
     await expect(page.locator("body")).toHaveClass(/controls-visible/);
 
     await page.keyboard.press("1");
-    await expect(page.locator('#modebar button[data-mode="generate"]')).toHaveClass(/active/);
+    await expect(page.locator('#create-subbar button[data-mode="generate"]')).toHaveClass(/active/);
     await page.keyboard.press("2");
-    await expect(page.locator('#modebar button[data-mode="animate"]')).toHaveClass(/active/);
+    await expect(page.locator('#create-subbar button[data-mode="animate"]')).toHaveClass(/active/);
     await page.keyboard.press("3");
-    await expect(page.locator('#modebar button[data-mode="react"]')).toHaveClass(/active/);
+    await expect(page.locator('#create-subbar button[data-mode="react"]')).toHaveClass(/active/);
 
     const studio = await page.evaluate(() => {
       const s = (window as unknown as { __NUMBRANE_STUDIO__: { pieceId: string; seed: number } })
@@ -150,5 +150,28 @@ test.describe("NUMBRANE Studio", () => {
     });
     await page.waitForTimeout(200);
     await expect(page.locator("#stage")).toBeVisible();
+  });
+
+  test("workflow nav shows Rehearse workspace above the fold", async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto("/studio.html?dev=1&mode=animate&piece=geometry/metatron&seed=42");
+    await page.waitForFunction(
+      () => !!(window as unknown as { __NUMBRANE_STUDIO__?: { studioBootComplete?: boolean } }).__NUMBRANE_STUDIO__
+        ?.studioBootComplete,
+    );
+    const rehearseTab = page.locator('#workflow-nav button[data-workflow="rehearse"]');
+    await expect(rehearseTab).toBeVisible();
+    const box = await rehearseTab.boundingBox();
+    expect(box).toBeTruthy();
+    expect(box!.y).toBeLessThan(120);
+    await page.locator('#workflow-nav button[data-workflow="set"]').click();
+    await page.locator("#set-load-fixture").click();
+    await page.waitForTimeout(300);
+    await rehearseTab.click();
+    await expect(page.locator("body")).toHaveClass(/workflow-rehearse/);
+    await expect(page.locator("#rehearse-panel")).toBeVisible();
+    await expect(page.locator("#set-rehearse-go")).toBeVisible();
+    const goBox = await page.locator("#set-rehearse-go").boundingBox();
+    expect(goBox!.y).toBeLessThan(600);
   });
 });

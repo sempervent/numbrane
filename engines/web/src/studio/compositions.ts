@@ -2,7 +2,7 @@
  * Composition recipes — authentic multi-piece compositor scenes.
  */
 
-import type { BlendMode, SetDef } from "../live/types";
+import type { BlendMode, SceneDef, SetDef, SetDefV1 } from "../live/types";
 
 export type CompositionLayerDefaults = {
   opacity?: number;
@@ -15,15 +15,15 @@ export type CompositionRecipe = {
   description: string;
   /** Live Animate method id per layer (L0 follows Studio primary method when omitted). */
   layerMethods?: Partial<Record<string, string>>;
-  build: (seed: number, params: Record<string, number | string | boolean>) => SetDef;
+  build: (seed: number, params: Record<string, number | string | boolean>) => SetDefV1;
 };
 
 function setOf(
   id: string,
   name: string,
-  layers: SetDef["scenes"][0]["layers"],
-  modulation: SetDef["scenes"][0]["modulation"] = [],
-): SetDef {
+  layers: SceneDef["layers"],
+  modulation: SceneDef["modulation"] = [],
+): SetDefV1 {
   return {
     protocol_version: "0.1.0",
     set_id: id,
