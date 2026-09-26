@@ -192,11 +192,6 @@ export class SetOrchestrator {
       return { action: "queue", destinationSceneId: dest };
     }
 
-    if (this.currentBeat < this.dwellUntilBeat) {
-      this.queuedSceneId = dest;
-      return { action: "queue", destinationSceneId: dest };
-    }
-
     const destIdx = sceneIndex(model, dest);
     const activeIdx = sceneIndex(model, this.activeSceneId);
     if (destIdx >= 0 && destIdx < activeIdx) {
@@ -212,6 +207,11 @@ export class SetOrchestrator {
         morph.type ?? "cut",
         this.currentBeat,
       );
+    }
+
+    if (this.currentBeat < this.dwellUntilBeat) {
+      this.queuedSceneId = dest;
+      return { action: "queue", destinationSceneId: dest };
     }
 
     const edge = edgeAfter(model, this.activeSceneId);
