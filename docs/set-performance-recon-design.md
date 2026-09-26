@@ -116,6 +116,18 @@ SceneRuntime
 
 - Operational UI on control surface only; canvas/OBS path unchanged (`outputOnly`, no HUD on output page).
 
+## Studio UI (implemented)
+
+| Surface | Location | Role |
+|---------|----------|------|
+| **Visual Set** composer | `#config` panel (`setScore/render.ts`) | Create/load/save Sets, sequence, per-edge editor, rehearse entry, perform entry, captured candidates |
+| **Perform / rehearse chrome** | `#set-score-chrome` under `#chrome` (not `#stage-wrap`) | Set name, position, phase, Advance, Capture This, Stop, Output full-screen |
+| **Status view-model** | `setScore/statusView.ts` | Canonical `SetStatusView` from orchestrator snapshot + persisted SetDef |
+
+- Serialized **SetDefV2** remains authoritative (`SetScoreController` + `setPerformance.ts` localStorage).
+- `]` / `Shift+]` advance the Set when rehearse/perform is active; otherwise `]` cycles pieces.
+- Tab / `controls-hidden` hides composer and perform chrome; `#stage-wrap` stays artwork-only.
+
 ## Persistence
 
 - `protocol_version` **0.2.0**: optional `scene_catalog`, `sequence`, `edges[]`.

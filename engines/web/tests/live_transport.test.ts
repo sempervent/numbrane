@@ -92,8 +92,10 @@ describe("LiveRuntime scenes", () => {
     rt.tick(2000);
     expect(rt.getScene()?.id).toBe("a");
     rt.gotoScene("b");
-    rt.transport.seekBeat(6);
-    rt.tick(3000);
+    for (let beat = 6; beat <= 24; beat += 0.5) {
+      rt.transport.seekBeat(beat);
+      rt.tick(3000 + beat * 100);
+    }
     expect(rt.getScene()?.id).toBe("b");
   });
 

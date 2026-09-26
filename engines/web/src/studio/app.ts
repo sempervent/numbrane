@@ -142,6 +142,11 @@ import {
   type StudioDesiredState,
 } from "./desiredState";
 import { collectStudioConsistency } from "./consistency";
+import { orderedScenes } from "../live/setModel";
+import type { SceneDef } from "../live/types";
+import { SetScoreController } from "./setScore/controller";
+import { bindSetComposer, bindSetPerformChrome, type SetScoreBindHost } from "./setScore/bind";
+import { renderSetComposerHtml, renderSetPerformChromeHtml } from "./setScore/render";
 
 declare global {
   interface Window {
@@ -292,6 +297,8 @@ export class StudioApp {
   };
   /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
   studioBootComplete = false;
+  readonly setScore = new SetScoreController(() => this.session);
+  private setPerformStatusKey = "";
   /** Monotonic scene apply generation — latest request wins at commit. */
   private sceneGeneration = 0;
   private committedSceneGeneration = 0;
@@ -347,6 +354,7 @@ export class StudioApp {
       this.mode,
     );
     await this.applyPieceScene();
+    this.setScore.loadPersisted();
 
     this.wireKeyboard();
     this.wireModebar();
@@ -1281,6 +1289,15 @@ export class StudioApp {
         handler: () => void this.cycleVisualization(1),
       },
       {
+        id: "set-advance",
+        keys: "Shift+]",
+        match: ["shift+]"],
+        label: "Advance Set (perform/rehearse)",
+        group: "animate",
+        modes: ["animate", "react"],
+        handler: () => void this.setScoreAdvance(),
+      },
+      {
         id: "blackout",
         keys: "B",
         match: ["b"],
@@ -1780,8 +1797,81 @@ export class StudioApp {
   async cycleVisualization(dir: number): Promise<void> {
     this.setBrowserVisible(false);
     this.helpVisible = false;
+    if (this.setScore.surface !== "idle" && dir > 0) {
+      await this.setScoreAdvance();
+      return;
+    }
     await this.cyclePiece(dir);
     this.syncChrome();
+  }
+
+  async setScoreAdvance(): Promise<void> {
+    await this.setScore.advance();
+    this.syncSetScoreChrome();
+  }
+
+  private setScoreBindHost(): SetScoreBindHost {
+    return {
+      toast,
+      buildCurrentSceneDef: () => this.buildCurrentSceneDefForSet(),
+      loadFixtureSet: () => this.fetchSetPerformanceFixture(),
+      toggleFullscreen: () => void this.toggleFullscreen(),
+      onSetRuntimeChange: () => {
+        this.renderConfig();
+        this.syncSetScoreChrome(true);
+      },
+    };
+  }
+
+  private async buildCurrentSceneDefForSet(): Promise<SceneDef> {
+    const set = buildStudioSetDef(this.snapshotDesiredState());
+    const base = orderedScenes(set)[0]!;
+    const slug = this.pieceId.replace(/\//g, "-");
+    const id = `scene-${slug}-${this.seed}-${Date.now().toString(36).slice(-4)}`;
+    return {
+      ...base,
+      id,
+      name: base.name || this.pieceId,
+    };
+  }
+
+  private async fetchSetPerformanceFixture(): Promise<SetDef> {
+    const res = await fetch("/sets/set-performance-fixture.json");
+    if (!res.ok) throw new Error(`fixture load ${res.status}`);
+    return (await res.json()) as SetDef;
+  }
+
+  private syncSetScoreChrome(force = false): void {
+    const chrome = document.getElementById("set-score-chrome");
+    if (!chrome) return;
+    const active = this.setScore.surface !== "idle";
+    document.body.classList.toggle("set-score-runtime", active);
+    chrome.classList.toggle("visible", active && this.controlsVisible);
+    if (!active) {
+      chrome.innerHTML = "";
+      this.setPerformStatusKey = "";
+      return;
+    }
+    const st = this.setScore.status();
+    const key = [
+      st.phaseLabel,
+      st.activeSceneId,
+      st.queuedSceneId,
+      st.transitionProgress.toFixed(3),
+      st.position,
+      st.draftActive,
+    ].join("|");
+    if (!force && key === this.setPerformStatusKey && chrome.querySelector("#set-perform-inner")) {
+      return;
+    }
+    this.setPerformStatusKey = key;
+    chrome.innerHTML = renderSetPerformChromeHtml(this.setScore);
+    bindSetPerformChrome(chrome, this.setScore, this.setScoreBindHost());
+  }
+
+  private refreshSetPerformStatus(): void {
+    if (this.setScore.surface === "idle") return;
+    this.syncSetScoreChrome(false);
   }
 
   async cycleRandomPiece(): Promise<void> {
@@ -2586,15 +2676,19 @@ export class StudioApp {
     }
     const perf = document.getElementById("performance-strip");
     if (perf) {
-      perf.classList.toggle("visible", this.mode === "animate" && this.controlsVisible);
+      perf.classList.toggle(
+        "visible",
+        this.mode === "animate" && this.controlsVisible && this.setScore.surface === "idle",
+      );
       const label = document.getElementById("perf-piece");
       if (label) label.textContent = this.pieceId.split("/").pop() ?? this.pieceId;
       const pauseBtn = document.getElementById("perf-pause");
       if (pauseBtn) pauseBtn.textContent = this.playing ? "Pause" : "Play";
     }
-    for (const id of ["modebar", "config", "browser", "performance-strip"]) {
+    for (const id of ["modebar", "config", "browser", "performance-strip", "set-score-chrome"]) {
       this.setControlTreeState(id, !this.controlsVisible);
     }
+    this.syncSetScoreChrome();
     const strip = document.getElementById("meta-strip");
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     if (strip) {
@@ -2897,6 +2991,7 @@ export class StudioApp {
     el.innerHTML = `
       <h1>NUMBRANE Studio</h1>
       <p class="muted">${this.mode.toUpperCase()} · canvas-first · ? keys · Tab chrome</p>
+      ${renderSetComposerHtml(this.setScore)}
       <h2>Essential</h2>
       <label>Piece</label>
       <select id="cfg-piece">${pieceOptions}</select>
@@ -3637,6 +3732,7 @@ export class StudioApp {
     bindLock("#cfg-lock-comp", "composition");
     el.querySelector("#cfg-load-seeds")?.addEventListener("click", () => void this.refreshSeedList());
     void this.refreshSeedList();
+    bindSetComposer(el, this.setScore, this.setScoreBindHost());
   }
 
   private async refreshSeedList(): Promise<void> {
@@ -3735,6 +3831,8 @@ export class StudioApp {
       if (nextPiece && nextPiece !== this.pieceId) void this.setPiece(nextPiece);
       this.lastVisualSwitchMs = now;
     }
+
+    this.refreshSetPerformStatus();
 
     if (this.mode === "animate" && studioSurface(this.pieceId, this.mode) === "live" && this.session) {
       const diag = this.session.getDiagnostics();

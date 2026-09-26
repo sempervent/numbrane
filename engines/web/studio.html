@@ -261,6 +261,19 @@
         background: transparent; border: 1px solid var(--line); color: var(--ink);
         border-radius: 6px; padding: 0.2rem 0.45rem; cursor: pointer;
       }
+      #set-score-chrome {
+        display: none; position: fixed; left: 50%; bottom: 1rem; transform: translateX(-50%);
+        z-index: 5; max-width: min(960px, 96vw); background: rgba(0,0,0,0.72);
+        border: 1px solid var(--line); border-radius: 12px; padding: 0.5rem 0.75rem;
+        font-size: 11px; pointer-events: auto;
+      }
+      #set-score-chrome.visible { display: block; }
+      #set-perform-inner { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+      #set-perform-inner button.primary { font-weight: 600; }
+      .set-scene-row { cursor: pointer; padding: 0.25rem 0; border-bottom: 1px solid var(--line); }
+      .set-scene-selected { background: rgba(125,211,252,0.08); }
+      body.set-score-runtime #performance-strip { display: none !important; }
+      body.controls-hidden #set-score-chrome { display: none !important; }
     </style>
   </head>
   <body class="controls-visible">
@@ -297,6 +310,7 @@
       <div id="help" class="panel"></div>
       <div id="hud" class="panel"></div>
       <div id="meta-strip"></div>
+      <div id="set-score-chrome" aria-label="Set performance controls"></div>
       <div id="toast"></div>
     </div>
     <script type="module" src="/src/studio/main.ts"></script>
