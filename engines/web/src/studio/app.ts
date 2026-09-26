@@ -159,6 +159,30 @@ import {
   renderSetScoreRailHtml,
 } from "./setScore/workspacesRender";
 import { studioDevToolsEnabled, type StudioWorkflow } from "./workflow";
+import {
+  applyRecipeToCapture,
+  captureFromStudio,
+  isSceneDirty,
+  markSceneSaved,
+  newAuthoringSession,
+  type SceneAuthoringSession,
+} from "./scene/sceneAuthoring";
+import { renderCreateScenePanel } from "./scene/createScenePanel";
+import {
+  findSceneNameConflict,
+  listSceneRecipes,
+  loadSceneLibrary,
+  mergeLegacyCapturedScenes,
+  upsertSceneRecipe,
+  type SceneLibraryState,
+} from "./scene/sceneLibrary";
+import {
+  defaultSceneName,
+  newSceneId,
+  sceneDefFromRecipe,
+  type PersistedSceneRecipeV1,
+} from "./scene/sceneRecipe";
+import { loadPersistedSets } from "./setPerformance";
 
 declare global {
   interface Window {
@@ -310,6 +334,8 @@ export class StudioApp {
   /** True after `boot()` finishes (catalog, scene, chrome). E2E must wait before driving UI. */
   studioBootComplete = false;
   readonly setScore = new SetScoreController(() => this.session);
+  sceneLibrary: SceneLibraryState = loadSceneLibrary();
+  sceneAuthoring: SceneAuthoringSession = newAuthoringSession("Untitled Scene");
   private setPerformStatusKey = "";
   workflow: StudioWorkflow = "create";
   private workflowPanelKey = "";
@@ -318,6 +344,7 @@ export class StudioApp {
   private committedSceneGeneration = 0;
   private sceneApplyChain: Promise<void> = Promise.resolve();
   private longTaskObserver: PerformanceObserver | null = null;
+  private sceneAuthoringDelegationInstalled = false;
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -376,6 +403,7 @@ export class StudioApp {
     this.wirePerformanceStrip();
     this.wirePointerIdle();
     this.renderConfig();
+    this.installSceneAuthoringDelegation();
     this.renderHelp();
     this.renderBrowser();
     document.body.classList.add("workflow-create");
@@ -388,6 +416,11 @@ export class StudioApp {
 
     this.installLongTaskObserver();
     this.loop();
+    this.sceneLibrary = mergeLegacyCapturedScenes(
+      this.sceneLibrary,
+      loadPersistedSets().capturedScenes,
+    );
+    this.sceneAuthoring = newAuthoringSession(defaultSceneName(this.pieceId));
     this.studioBootComplete = true;
     window.__NUMBRANE_STUDIO__ = this;
     toast("NUMBRANE Studio — press ? for keys");
@@ -1941,7 +1974,209 @@ export class StudioApp {
     };
   }
 
+  /** Stable delegation — scene chrome survives renderConfig innerHTML replacement. */
+  private installSceneAuthoringDelegation(): void {
+    if (this.sceneAuthoringDelegationInstalled) return;
+    this.sceneAuthoringDelegationInstalled = true;
+    document.addEventListener(
+      "click",
+      (ev) => {
+        if (!(ev.target as HTMLElement).closest("#config")) return;
+        const btn = (ev.target as HTMLElement).closest("button");
+        if (!btn?.id) return;
+        switch (btn.id) {
+          case "scene-save":
+            void this.saveSceneRecipe(false);
+            break;
+          case "scene-save-as":
+            void this.saveSceneAs();
+            break;
+          case "scene-add-set":
+            this.addAuthoringSceneToSet();
+            break;
+          case "cfg-preview-play":
+            this.togglePlay();
+            this.renderConfig();
+            break;
+          case "cfg-restart-scene":
+            void this.restartScenePreview();
+            break;
+          default:
+            break;
+        }
+      },
+      true,
+    );
+    document.addEventListener("change", (ev) => {
+      const sel = ev.target as HTMLSelectElement;
+      if (sel.id === "scene-load" && sel.value && document.getElementById("config")?.contains(sel)) {
+        void this.loadSceneRecipeById(sel.value);
+      }
+    });
+    document.addEventListener("input", (ev) => {
+      const input = ev.target as HTMLInputElement;
+      if (input.id === "scene-name" && document.getElementById("config")?.contains(input)) {
+        this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: input.value };
+      }
+    });
+  }
+
+  private sceneRecipeCapture() {
+    return {
+      mode: this.mode,
+      pieceId: this.pieceId,
+      seed: this.seed,
+      compositionId: this.compositionId,
+      params: { ...this.params },
+      color: this.color,
+      animationMethodId: this.animationMethodId,
+      activeAnimationMethodId: this.activeAnimationMethodId,
+      reactSensitivity: this.reactSensitivity,
+      animationSpec: this.animationSpec,
+      generateFrame: this.mode === "generate" ? this.frame : 0,
+      meta: { ...this.meta },
+      pflStyleId: this.pflStyleId,
+    };
+  }
+
+  isSceneAuthoringDirty(): boolean {
+    return isSceneDirty(this.sceneAuthoring, this.sceneRecipeCapture());
+  }
+
+  async saveSceneRecipe(forceNewId = false): Promise<void> {
+    const nameInput = document.getElementById("scene-name") as HTMLInputElement | null;
+    const name =
+      (nameInput?.value ?? this.sceneAuthoring.sceneName).trim() || defaultSceneName(this.pieceId);
+    this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: name };
+    let id = forceNewId || !this.sceneAuthoring.activeSceneId ? newSceneId() : this.sceneAuthoring.activeSceneId;
+    if (!forceNewId && this.sceneAuthoring.activeSceneId) {
+      const conflict = findSceneNameConflict(this.sceneLibrary, name, id);
+      if (conflict && conflict.id !== id) {
+        toast(`Name "${name}" is used by another scene — Save As or rename`);
+        return;
+      }
+    } else {
+      const conflict = findSceneNameConflict(this.sceneLibrary, name);
+      if (conflict) {
+        toast(`Name "${name}" exists — choose Save As or a different name`);
+        return;
+      }
+    }
+    const recipe = captureFromStudio(this.sceneRecipeCapture(), {
+      ...this.sceneAuthoring,
+      sceneName: name,
+      activeSceneId: id,
+    });
+    recipe.id = id;
+    recipe.name = name;
+    this.sceneLibrary = upsertSceneRecipe(this.sceneLibrary, recipe);
+    this.sceneAuthoring = markSceneSaved(this.sceneAuthoring, recipe);
+    this.renderConfig();
+    toast(`Scene saved · ${name}`);
+  }
+
+  async saveSceneAs(): Promise<void> {
+    const base = this.sceneAuthoring.sceneName.trim() || defaultSceneName(this.pieceId);
+    this.sceneAuthoring = {
+      ...this.sceneAuthoring,
+      sceneName: `${base} (copy)`,
+      activeSceneId: null,
+      savedSnapshot: null,
+    };
+    await this.saveSceneRecipe(true);
+  }
+
+  async loadSceneRecipeById(id: string): Promise<void> {
+    if (!id) return;
+    const recipe = this.sceneLibrary.scenes[id];
+    if (!recipe) {
+      toast("Scene not found");
+      return;
+    }
+    if (this.isSceneAuthoringDirty()) {
+      const ok = window.confirm("Discard unsaved changes to the current Scene?");
+      if (!ok) {
+        this.renderConfig();
+        return;
+      }
+    }
+    await this.applyPersistedSceneRecipe(recipe);
+    this.sceneAuthoring = markSceneSaved(this.sceneAuthoring, recipe);
+    this.sceneLibrary = { ...this.sceneLibrary, activeSceneId: id };
+    this.renderConfig();
+    toast(`Loaded · ${recipe.name}`);
+  }
+
+  private async applyPersistedSceneRecipe(recipe: PersistedSceneRecipeV1): Promise<void> {
+    const { capture, session } = applyRecipeToCapture(recipe);
+    this.sceneAuthoring = session;
+    this.mode = capture.mode;
+    this.pieceId = capture.pieceId;
+    this.seed = capture.seed;
+    this.compositionId = capture.compositionId;
+    this.params = { ...capture.params };
+    this.color = capture.color;
+    this.animationMethodId = capture.animationMethodId;
+    this.activeAnimationMethodId = capture.activeAnimationMethodId;
+    this.reactSensitivity = capture.reactSensitivity;
+    this.animationSpec = capture.animationSpec;
+    this.frame = capture.generateFrame;
+    this.meta = { ...capture.meta };
+    this.pflStyleId = capture.pflStyleId;
+    this.playing = true;
+    this.syncModebarState();
+    this.syncWorkflowNavState();
+    await this.applyPieceScene();
+    if (this.mode === "animate") {
+      this.syncAnimationSpecToSession(true, { resetTime: true });
+    }
+  }
+
+  async restartScenePreview(): Promise<void> {
+    this.frame = 0;
+    if (this.mode === "animate" || this.mode === "react") {
+      this.session?.animationRuntime.seekTime(0);
+      this.syncAnimationSpecToSession(true, { resetTime: true });
+      if (this.playing) {
+        this.session?.runtime.setSimulationPaused(false);
+        this.session?.runtime.transport.start();
+      }
+      this.kickLiveSurface();
+    } else {
+      await this.applyPieceScene();
+    }
+    toast("Scene restarted");
+    this.renderConfig();
+  }
+
+  addAuthoringSceneToSet(): void {
+    const recipe = captureFromStudio(this.sceneRecipeCapture(), this.sceneAuthoring);
+    if (this.sceneAuthoring.activeSceneId) {
+      recipe.id = this.sceneAuthoring.activeSceneId;
+    } else {
+      recipe.id = newSceneId();
+    }
+    recipe.name = this.sceneAuthoring.sceneName.trim() || recipe.name;
+    const scene = sceneDefFromRecipe(recipe);
+    this.setScore.addScene(scene);
+    toast(`Added "${scene.name}" to Set (catalog snapshot)`);
+  }
+
+  canAddSceneToSet(): boolean {
+    return true;
+  }
+
+  addToSetHint(): string {
+    return "Adds a catalog snapshot to the Set draft — open SET to review the sequence";
+  }
+
   private async buildCurrentSceneDefForSet(): Promise<SceneDef> {
+    if (this.sceneAuthoring.activeSceneId && this.sceneLibrary.scenes[this.sceneAuthoring.activeSceneId]) {
+      const recipe = captureFromStudio(this.sceneRecipeCapture(), this.sceneAuthoring);
+      recipe.id = this.sceneAuthoring.activeSceneId;
+      recipe.name = this.sceneAuthoring.sceneName.trim() || recipe.name;
+      return sceneDefFromRecipe(recipe);
+    }
     const set = buildStudioSetDef(this.snapshotDesiredState());
     const base = orderedScenes(set)[0]!;
     const slug = this.pieceId.replace(/\//g, "-");
@@ -1949,7 +2184,7 @@ export class StudioApp {
     return {
       ...base,
       id,
-      name: base.name || this.pieceId,
+      name: this.sceneAuthoring.sceneName.trim() || base.name || this.pieceId,
     };
   }
 
@@ -3111,12 +3346,24 @@ export class StudioApp {
         `<option value="${r.id}" ${r.id === this.exportPreset ? "selected" : ""}>${r.label}</option>`,
     ).join("");
 
+    const scenePanel = renderCreateScenePanel({
+      sceneName: this.sceneAuthoring.sceneName,
+      dirty: this.isSceneAuthoringDirty(),
+      playing: this.playing,
+      pieceLabel: this.pieceId.split("/").pop() ?? this.pieceId,
+      mode: this.mode,
+      savedScenes: listSceneRecipes(this.sceneLibrary),
+      activeSceneId: this.sceneAuthoring.activeSceneId,
+      canAddToSet: this.canAddSceneToSet(),
+      addToSetHint: this.addToSetHint(),
+    });
+
     el.innerHTML = `
-      <h1>Create</h1>
-      <p class="muted">${this.mode.toUpperCase()} · author visuals · Tab hides chrome · ? keys</p>
-      <h2>Essential</h2>
+      ${scenePanel}
       <label>Piece</label>
       <select id="cfg-piece">${pieceOptions}</select>
+      <details class="advanced" id="create-advanced">
+      <summary>Advanced</summary>
       <label>Seed</label>
       <div class="row">
         <input id="cfg-seed" type="number" value="${this.seed}" />
@@ -3472,11 +3719,14 @@ export class StudioApp {
         <button type="button" id="cfg-load-seeds">Refresh saved seeds</button>
         <div id="seed-list" class="muted"></div>
       </details>
+      </details>
       <div class="row" style="margin-top:0.5rem">
         <button type="button" id="cfg-browser">Pieces</button>
         <button type="button" id="cfg-hide">Hide (Tab)</button>
       </div>
     `;
+
+    el.querySelector("#scene-name")?.addEventListener("change", () => this.renderConfig());
 
     el.querySelector("#cfg-piece")?.addEventListener("change", (e) => {
       void this.setPiece((e.target as HTMLSelectElement).value);
