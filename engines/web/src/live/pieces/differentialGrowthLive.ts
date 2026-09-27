@@ -58,8 +58,8 @@ export async function createDifferentialGrowthPiece(
     zoom: 1,
     rotation: 0,
     hue: 0.38,
-    exposure: 1,
-    growth_rate: 1,
+    growth_rate: 1.15,
+    exposure: 1.15,
   };
   const audio = { energy: 0, low: 0, mid: 0, high: 0, onset: 0 };
   const tex = gl.createTexture()!;
