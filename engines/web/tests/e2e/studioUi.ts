@@ -107,8 +107,8 @@ export async function clickStudioMode(page: Page, mode: "generate" | "animate" |
 
 export async function enterAnimateViaUi(page: Page, pieceId: string): Promise<void> {
   await openStudioHome(page);
-  await selectPieceInBrowser(page, pieceId);
   await clickStudioMode(page, "animate");
+  await selectPieceInConfig(page, pieceId);
 }
 
 export async function enterGenerateViaUi(page: Page, pieceId: string): Promise<void> {

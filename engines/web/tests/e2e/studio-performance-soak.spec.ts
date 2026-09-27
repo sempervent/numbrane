@@ -4,7 +4,7 @@
 
 import { test, expect } from "@playwright/test";
 import { enterAnimateViaUi } from "./studioUi";
-import { frameIsVisible, sampleStagePixels, studioDiag } from "./animationMetrics";
+import { frameIsVisible, sampleStagePixels, studioDiag, waitForLiveFrame } from "./animationMetrics";
 
 const SOAK_PIECES = [
   "audiovisual/nodes",
@@ -23,6 +23,7 @@ for (const piece of SOAK_PIECES) {
   test(`${piece} 60s performance soak`, async ({ page }) => {
     test.setTimeout(240_000);
     await enterAnimateViaUi(page, piece);
+    await waitForLiveFrame(page, 45_000);
 
     const digests: string[] = [];
     for (let i = 0; i < 12; i++) {
