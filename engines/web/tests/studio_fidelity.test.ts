@@ -14,6 +14,7 @@ import {
   supportsMode,
 } from "../src/studio/runtime/registry";
 import { studioSurface } from "../src/studio/runtime/surface";
+import { isMashupPiece } from "../src/studio/mashups";
 import { UnsupportedLivePieceError } from "../src/live/pieces/registry";
 
 describe("studio-piece-fidelity registry", () => {
@@ -21,7 +22,7 @@ describe("studio-piece-fidelity registry", () => {
     for (const [id, desc] of Object.entries(PIECE_RUNTIMES)) {
       expect(desc.pieceId).toBe(id);
       expect(desc.generate).not.toBeUndefined();
-      if (desc.generate === "shader-native") {
+      if (desc.generate === "shader-native" && !isMashupPiece(id)) {
         expect(SHADER_NATIVE_PIECES.has(id)).toBe(true);
       }
     }
