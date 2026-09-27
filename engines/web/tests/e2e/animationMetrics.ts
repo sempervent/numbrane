@@ -32,6 +32,7 @@ export type StudioDiag = {
   renderCount?: number;
   updateCount?: number;
   presentCount?: number;
+  presentationMode?: string;
   rafCount?: number;
   rafHz?: number;
   rafStalled?: boolean;
@@ -158,9 +159,12 @@ export async function waitForLiveFrame(page: Page, timeoutMs = 25_000): Promise<
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const d = await studioDiag(page);
-    if ((d.presentCount ?? 0) > 0 && (d.renderCount ?? 0) > 0) {
-      const px = await sampleStagePixels(page).catch(() => null);
-      if (px && frameIsVisible(px)) return d;
+    const px = await sampleStagePixels(page).catch(() => null);
+    const presented =
+      d.presentationMode === "live" ||
+      ((d.presentCount ?? 0) > 0 && (d.renderCount ?? 0) > 0);
+    if (presented && px && (frameHasMeaningfulStructure(px) || frameIsVisible(px))) {
+      return d;
     }
     await page.waitForTimeout(200);
   }

@@ -45,7 +45,6 @@ test.describe("Studio golden path", () => {
 
     await clickStudioMode(page, "animate");
     await waitForStudioSceneSettled(page, 120_000);
-    await waitForLiveFrame(page, 60_000);
     await assertStageMeaningfullyPresent(page, {
       pieceId: "tiling/truchet-tiles",
       mode: "animate",

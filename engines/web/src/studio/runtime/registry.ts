@@ -264,6 +264,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
   // Mashups: compositor scenes — GENERATE uses the same browser runtime as ANIMATE (frozen still).
   "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "shader-native", "shader-native", null, {
     generatePreviewClass: "interactive",
+    generatePolicy: { interactive: "warmup", warmupSteps: 120, warmupChunk: 15 },
   }),
   "mashups/bureaucratic-growth-forms": d(
     "mashups/bureaucratic-growth-forms",

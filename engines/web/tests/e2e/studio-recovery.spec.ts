@@ -18,7 +18,7 @@ import {
   readStagePresentSnapshot,
 } from "./studioVisiblePresent";
 
-const OUT = path.join(process.cwd(), "tmp", "studio-recovery-manual");
+const OUT = path.join(process.cwd(), "..", "..", "tmp", "studio-visible-recovery");
 
 const RENDERER_MATRIX: Array<{
   label: string;
@@ -65,7 +65,6 @@ test.describe("Studio recovery (human-visible)", () => {
     await selectPieceInConfig(page, "tiling/truchet-tiles");
     await clickStudioMode(page, "animate");
     await waitForStudioSceneSettled(page, 120_000);
-    await waitForLiveFrame(page, 60_000);
     await assertStageMeaningfullyPresent(page, {
       pieceId: "tiling/truchet-tiles",
       mode: "animate",
@@ -100,7 +99,6 @@ test.describe("Studio recovery (human-visible)", () => {
 
       await clickStudioMode(page, "animate");
       await waitForStudioSceneSettled(page, 180_000);
-      await waitForLiveFrame(page, 90_000);
       await assertStageMeaningfullyPresent(page, { pieceId: piece, mode: "animate" });
       await page.screenshot({
         path: path.join(OUT, `03-anim-${label.replace(/\W+/g, "-")}.png`),

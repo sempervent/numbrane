@@ -100,6 +100,8 @@ export type LiveDiagnostics = {
   /** Live GENERATE: sim paused but RAF keeps presenting frozen frame to the canvas. */
   generatePresentationFrozen: boolean;
   presentEpoch: number;
+  presentationMode: "none" | "live" | "frozen";
+  lastPresentedPresentEpoch: number;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -235,6 +237,8 @@ export class LiveSession {
   private generatePresentationFrozen = false;
   /** Wall time locked while GENERATE_FROZEN (no sim/animation advance on redraw). */
   private generateFrozenWallMs = 0;
+  private presentationMode: "none" | "live" | "frozen" = "none";
+  private lastPresentedPresentEpoch = 0;
   private digestSampleIntervalMs = 250;
   private lastScenePrepareMs = 0;
   private lastSceneCommitMs = 0;
@@ -512,6 +516,12 @@ export class LiveSession {
       p.dispose();
     }
     this.presentEpoch += 1;
+    this.lastPresentedGrid = null;
+    this.lastPresentedStats = null;
+    this.pixelDigest = "";
+    this.presentationMode = "none";
+    this.lastPresentedPresentEpoch = 0;
+    this.exitGeneratePresentationFreeze();
     this.sessionStartedPerfMs = performance.now();
     this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
   }
@@ -727,6 +737,8 @@ export class LiveSession {
         now - this.rafProgressMs > 1500,
       generatePresentationFrozen: this.generatePresentationFrozen,
       presentEpoch: this.presentEpoch,
+      presentationMode: this.presentationMode,
+      lastPresentedPresentEpoch: this.lastPresentedPresentEpoch,
       activeLayerCount: this.runtime.getScene()?.layers.length ?? 0,
       quality: this.quality,
       framePacing: this.getFramePacingSnapshot(),
@@ -1055,8 +1067,7 @@ export class LiveSession {
     const cssH = Math.max(1, parent?.height || rect.height || window.innerHeight);
     this.applyRenderSize(cssW, cssH, dpr);
     if (this.generatePresentationFrozen) {
-      this.redrawFrozenPresent();
-      void this.flushPresentToScreen();
+      void this.presentAndFreezeGenerate(0);
     }
   }
 
@@ -1148,6 +1159,9 @@ export class LiveSession {
   exitGeneratePresentationFreeze(): void {
     this.generatePresentationFrozen = false;
     this.generateFrozenWallMs = 0;
+    if (this.presentationMode === "frozen") {
+      this.presentationMode = "none";
+    }
   }
 
   isGeneratePresentationFrozen(): boolean {
@@ -1158,14 +1172,67 @@ export class LiveSession {
     return this.presentEpoch;
   }
 
-  /** Ensure WebGL present reaches the default framebuffer before tests/human paint. */
-  async flushPresentToScreen(): Promise<void> {
+  private drainGlErrors(): void {
+    const gl = this.compositor.gl;
+    while (gl.getError() !== gl.NO_ERROR) {
+      /* drain stale errors before readback */
+    }
+  }
+
+  private noteRenderGlError(): void {
+    const gl = this.compositor.gl;
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      this.webglError = `GL ${err}`;
+    }
+  }
+
+  /** Render one logical frame and composite to the visible default framebuffer. */
+  renderToVisibleSurface(wallNowMs = performance.now()): void {
+    this.runtime.setSimulationPaused(false);
+    this.frame(wallNowMs);
+    this.runtime.setSimulationPaused(true);
+    this.noteRenderGlError();
+    const gl = this.compositor.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** Browser presentation boundary — compositor output must reach the human-visible canvas. */
+  async presentToVisibleSurface(
+    wallNowMs = performance.now(),
+    modeAfter: "live" | "frozen" = "live",
+  ): Promise<void> {
+    this.renderToVisibleSurface(wallNowMs);
+    const gl = this.compositor.gl;
+    gl.finish?.();
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => {
-        this.frame(performance.now());
         requestAnimationFrame(() => resolve());
       });
     });
+    this.presentationMode = modeAfter;
+    this.lastPresentedPresentEpoch = this.presentEpoch;
+    this.presentCount += 1;
+  }
+
+  /** GENERATE: final viewport → render → present → freeze without clearing the visible frame. */
+  async presentAndFreezeGenerate(primeFrames = 24): Promise<void> {
+    this.exitGeneratePresentationFreeze();
+    this.primeGenerateStillFrame();
+    const wall = performance.now();
+    this.runtime.setSimulationPaused(false);
+    if (primeFrames > 0) {
+      this.paintFrames(primeFrames, wall);
+    }
+    this.runtime.setSimulationPaused(true);
+    await this.presentToVisibleSurface(wall, "frozen");
+    this.enterGeneratePresentationFreeze(wall);
+    this.stopLoop();
+  }
+
+  /** Ensure WebGL present reaches the default framebuffer before tests/human paint. */
+  async flushPresentToScreen(): Promise<void> {
+    await this.presentToVisibleSurface(performance.now());
   }
 
   /** Pin last presented grid as baseline for cross-cycle comparison. */
@@ -1254,11 +1321,13 @@ export class LiveSession {
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
     const rp0 = performance.now();
     const gl = this.compositor.gl;
+    this.drainGlErrors();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     const cw = Math.max(1, gl.drawingBufferWidth);
     const ch = Math.max(1, gl.drawingBufferHeight);
     const raw = new Uint8Array(cw * ch * 4);
     gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    this.drainGlErrors();
     this.lastReadPixelsMs = performance.now() - rp0;
     this.noteMainThreadBlock(this.lastReadPixelsMs);
     const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
@@ -1424,6 +1493,7 @@ export class LiveSession {
     this.renderFrame(frame);
     this.hud.glMs = performance.now() - g0;
     this.renderCount += 1;
+    this.noteRenderGlError();
     this.lastSuccessfulDrawMs = performance.now();
     if (wallNowMs - this.lastDigestSampleMs > this.digestSampleIntervalMs) {
       this.lastDigestSampleMs = wallNowMs;
@@ -1455,9 +1525,9 @@ export class LiveSession {
         /* readPixels may fail during resize; keep last digest */
       }
     }
-    const err = this.compositor.gl.getError();
-    if (err !== this.compositor.gl.NO_ERROR) {
-      this.webglError = `GL ${err}`;
+    if (!this.generatePresentationFrozen && snap.playing) {
+      this.presentationMode = "live";
+      this.lastPresentedPresentEpoch = this.presentEpoch;
     }
     this.hud.frameMs = performance.now() - t0;
     this.hud.layers = scene?.layers.length ?? 0;

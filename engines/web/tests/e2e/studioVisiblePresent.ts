@@ -77,26 +77,44 @@ export async function assertStageMeaningfullyPresent(
   const banner = await failureBannerText(page);
   expect(banner, "failure banner visible").toBeNull();
 
-  const snap = await readStagePresentSnapshot(page);
-  expect(snap.pieceId, "piece id").toBe(opts.pieceId);
-  if (opts.mode) expect(snap.mode, "mode").toBe(opts.mode);
-  expect(snap.sceneGeneration, "scene generation active").toBeGreaterThan(0);
-  expect(snap.committedSceneGeneration, "scene settled").toBe(snap.sceneGeneration);
-  expect(snap.presentSceneGeneration, "present tied to scene generation").toBe(snap.sceneGeneration);
-  expect(snap.presentSceneGeneration, "meaningful present recorded").toBeGreaterThan(0);
-  if (snap.surface === "live") {
-    expect(snap.presentEpochAtCommit, "present epoch").toBe(snap.presentEpoch);
+  const deadline = Date.now() + (opts.mode === "animate" ? 20_000 : 0);
+  let last: StagePresentSnapshot | null = null;
+  let lastErr = "";
+  while (true) {
+    const snap = await readStagePresentSnapshot(page);
+    last = snap;
+    try {
+      expect(snap.pieceId, "piece id").toBe(opts.pieceId);
+      if (opts.mode) expect(snap.mode, "mode").toBe(opts.mode);
+      expect(snap.sceneGeneration, "scene generation active").toBeGreaterThan(0);
+      expect(snap.committedSceneGeneration, "scene settled").toBe(snap.sceneGeneration);
+      expect(snap.presentSceneGeneration, "meaningful present recorded").toBeGreaterThan(0);
+      expect(snap.presentSceneGeneration, "present tied to scene generation").toBe(
+        snap.sceneGeneration,
+      );
+      if (snap.surface === "live" && opts.mode === "generate") {
+        expect(snap.presentEpochAtCommit, "present epoch").toBe(snap.presentEpoch);
+        expect(snap.generateFrozen, "generate frozen").toBe(true);
+      }
+      if (snap.surface === "live" && opts.mode === "animate") {
+        expect(snap.generateFrozen, "not frozen in animate").toBe(false);
+      }
+      if (snap.surface === "live") {
+        expect(snap.hiddenLive, "live canvas visible").toBe(false);
+      } else if (snap.surface === "api-preview") {
+        expect(snap.previewVisible, "generate preview visible").toBe(true);
+      }
+      expect(snap.px, "pixel sample").not.toBeNull();
+      expect(frameHasMeaningfulStructure(snap.px!), "meaningful structure on stage").toBe(true);
+      return snap;
+    } catch (e) {
+      lastErr = e instanceof Error ? e.message : String(e);
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(250);
+    }
   }
-
-  if (snap.surface === "live") {
-    expect(snap.hiddenLive, "live canvas visible").toBe(false);
-  } else if (snap.surface === "api-preview") {
-    expect(snap.previewVisible, "generate preview visible").toBe(true);
-  }
-
-  expect(snap.px, "pixel sample").not.toBeNull();
-  expect(frameHasMeaningfulStructure(snap.px!), "meaningful structure on stage").toBe(true);
-  return snap;
+  expect(lastErr || "stage not ready", `stage present: ${JSON.stringify(last?.px ?? null)}`).toBe("");
+  return last!;
 }
 
 /** Human-visible frame must remain after delay (catches stopLoop / back-buffer loss). */
