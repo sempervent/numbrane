@@ -1196,9 +1196,10 @@ export class LiveSession {
 
     const snap = this.runtime.transport.getSnapshot();
     const simPaused = this.runtime.isSimulationPaused();
+    const animDtCap = this.animationRuntime.performanceMode ? 2.0 : 0.25;
     const animWallDt =
       this.lastAnimWallMs > 0
-        ? Math.min(0.25, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
+        ? Math.min(animDtCap, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
         : 0;
     this.lastAnimWallMs = wallNowMs;
     this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);

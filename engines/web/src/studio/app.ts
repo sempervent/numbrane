@@ -285,6 +285,8 @@ export class StudioApp {
     thumbUrl: string | null;
   }> = [];
   animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
+  /** E2E export-semantics lab: finite envelope (hold/loop/stop) without live performance clock. */
+  exportEnvelopeLab = false;
   animationMethodId = "pan-left-right";
   /** Resolved method id when animationMethodId is random or composite. */
   activeAnimationMethodId = "pan-left-right";
@@ -715,6 +717,19 @@ export class StudioApp {
 
   syncAnimationSpecToSession(preview = true, opts?: { resetTime?: boolean }): void {
     if (!this.session || this.mode !== "animate") return;
+    if (this.exportEnvelopeLab) {
+      this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: opts?.resetTime !== true,
+        performanceMode: false,
+      });
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+        this.syncApiPreviewAnimate(preview);
+        return;
+      }
+      if (preview) this.kickLiveSurface();
+      return;
+    }
     this.animationSpec = normalizeSpecForLivePerformance(
       this.pieceId,
       this.animationSpec,
@@ -722,13 +737,14 @@ export class StudioApp {
     );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     const livePerf =
+      !this.exportEnvelopeLab &&
       studioSurface(this.pieceId, this.mode) === "live" &&
       (this.mode === "animate" || this.mode === "react");
     this.session.setAnimationSpec(this.animationSpec, {
       preserveTime: opts?.resetTime !== true,
       performanceMode: livePerf,
     });
-    this.applyStudioPerformanceClock();
+    if (!this.exportEnvelopeLab) this.applyStudioPerformanceClock();
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       this.syncApiPreviewAnimate(preview);
       return;
@@ -3370,7 +3386,7 @@ export class StudioApp {
       });
       listHost.appendChild(div);
     }
-    if (this.browserVisible) {
+    if (this.browserVisible && this.workflow === "create" && this.setScore.surface === "idle") {
       this.ensureBrowserPreview();
       const need = list
         .map((p) => p.piece_id)
