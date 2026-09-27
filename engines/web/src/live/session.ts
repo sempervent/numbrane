@@ -44,6 +44,7 @@ import { AnimationRuntime } from "./animationRuntime";
 import { FramePacingRing, type FramePacingSnapshot } from "./framePacing";
 import type { AnimationSpec } from "../studio/animation/spec";
 import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
+import { performanceCycleDurationSec } from "../studio/animation/livePerformanceTime";
 import { normalizeSpecForLivePerformance } from "../studio/animation/performance";
 import {
   VisualLivenessWatchdog,
@@ -96,6 +97,9 @@ export type LiveDiagnostics = {
   visualLiveness: VisualLivenessSnapshot;
   animationPhase: number;
   performanceMode: boolean;
+  /** Live GENERATE: sim paused but RAF keeps presenting frozen frame to the canvas. */
+  generatePresentationFrozen: boolean;
+  presentEpoch: number;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -225,6 +229,12 @@ export class LiveSession {
   onHud: ((h: HudStats) => void) | null = null;
   onStatus: ((s: Record<string, unknown>) => void) | null = null;
   private loadGeneration = 0;
+  /** Monotonic — bumps on each committed scene load (stale present detection). */
+  private presentEpoch = 0;
+  /** GENERATE_FROZEN: keep presenting without advancing simulation. */
+  private generatePresentationFrozen = false;
+  /** Wall time locked while GENERATE_FROZEN (no sim/animation advance on redraw). */
+  private generateFrozenWallMs = 0;
   private digestSampleIntervalMs = 250;
   private lastScenePrepareMs = 0;
   private lastSceneCommitMs = 0;
@@ -501,6 +511,7 @@ export class LiveSession {
     for (const p of previous) {
       p.dispose();
     }
+    this.presentEpoch += 1;
     this.sessionStartedPerfMs = performance.now();
     this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
   }
@@ -710,9 +721,12 @@ export class LiveSession {
       transportPlaying: snap.playing,
       visualFps: this.hud.fps,
       rafStalled:
+        !this.generatePresentationFrozen &&
         this.running &&
         this.rafCount > 20 &&
         now - this.rafProgressMs > 1500,
+      generatePresentationFrozen: this.generatePresentationFrozen,
+      presentEpoch: this.presentEpoch,
       activeLayerCount: this.runtime.getScene()?.layers.length ?? 0,
       quality: this.quality,
       framePacing: this.getFramePacingSnapshot(),
@@ -1040,6 +1054,10 @@ export class LiveSession {
     const cssW = Math.max(1, parent?.width || rect.width || window.innerWidth);
     const cssH = Math.max(1, parent?.height || rect.height || window.innerHeight);
     this.applyRenderSize(cssW, cssH, dpr);
+    if (this.generatePresentationFrozen) {
+      this.redrawFrozenPresent();
+      void this.flushPresentToScreen();
+    }
   }
 
   private applyRenderSize(cssWidth: number, cssHeight: number, dpr = 1): void {
@@ -1093,6 +1111,61 @@ export class LiveSession {
   stopLoop(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
+  }
+
+  /** GENERATE: jump construction/envelope to a complete still (transport stays stopped). */
+  primeGenerateStillFrame(): void {
+    const spec = this.animationRuntime.spec;
+    if (hasComponent(spec, "construction")) {
+      const cycleSec = performanceCycleDurationSec(spec);
+      const endSec = Math.max(spec.durationSec, cycleSec);
+      this.animationRuntime.seekTime(endSec);
+    } else if (hasComponent(spec, "generative")) {
+      const cycleSec = performanceCycleDurationSec(spec);
+      this.animationRuntime.seekTime(Math.max(0.5, cycleSec * 0.35));
+    }
+    this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
+  }
+
+  /** Live GENERATE: freeze sim and retain last presented frame (redraw on resize only). */
+  enterGeneratePresentationFreeze(wallNowMs = performance.now()): void {
+    this.generatePresentationFrozen = true;
+    this.generateFrozenWallMs = wallNowMs;
+    this.runtime.setSimulationPaused(true);
+    this.runtime.transport.stop();
+    this.redrawFrozenPresent();
+  }
+
+  /** Redraw frozen GENERATE frame (resize / chrome / explicit refresh). */
+  redrawFrozenPresent(wallNowMs?: number): void {
+    if (!this.generatePresentationFrozen) return;
+    const t = wallNowMs ?? this.generateFrozenWallMs;
+    this.runtime.setSimulationPaused(false);
+    this.frame(t);
+    this.runtime.setSimulationPaused(true);
+  }
+
+  exitGeneratePresentationFreeze(): void {
+    this.generatePresentationFrozen = false;
+    this.generateFrozenWallMs = 0;
+  }
+
+  isGeneratePresentationFrozen(): boolean {
+    return this.generatePresentationFrozen;
+  }
+
+  getPresentEpoch(): number {
+    return this.presentEpoch;
+  }
+
+  /** Ensure WebGL present reaches the default framebuffer before tests/human paint. */
+  async flushPresentToScreen(): Promise<void> {
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        this.frame(performance.now());
+        requestAnimationFrame(() => resolve());
+      });
+    });
   }
 
   /** Pin last presented grid as baseline for cross-cycle comparison. */
@@ -1181,10 +1254,10 @@ export class LiveSession {
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
     const rp0 = performance.now();
     const gl = this.compositor.gl;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const cw = Math.max(1, gl.drawingBufferWidth);
+    const ch = Math.max(1, gl.drawingBufferHeight);
+    const raw = new Uint8Array(cw * ch * 4);
     gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
     this.lastReadPixelsMs = performance.now() - rp0;
     this.noteMainThreadBlock(this.lastReadPixelsMs);
@@ -1204,6 +1277,9 @@ export class LiveSession {
 
   /** Single deterministic tick (tests / smoke). */
   frame(wallNowMs: number): FrameState {
+    if (this.generatePresentationFrozen) {
+      wallNowMs = this.generateFrozenWallMs;
+    }
     this.rafCount += 1;
     this.rafLastTimestamp = performance.now();
     this.rafProgressMs = this.rafLastTimestamp;
@@ -1248,7 +1324,8 @@ export class LiveSession {
         ? Math.min(animDtCap, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
         : 0;
     this.lastAnimWallMs = wallNowMs;
-    this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    const animAdvance = snap.playing && !simPaused && !this.generatePresentationFrozen;
+    this.animationRuntime.tick(animWallDt, animAdvance);
     this.visualLiveness.noteAnimationAdvance(
       this.animationRuntime.animationTimeSec,
       wallNowMs,

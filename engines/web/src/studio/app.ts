@@ -22,6 +22,7 @@ import {
   thumbCacheKey,
   type BrowserThumbQueueStats,
 } from "./performance/browserThumbs";
+import { frameHasMeaningfulStructure } from "../live/pixelMetrics";
 import { classifyVisualQuality, snapshotFromFrame } from "../live/visualQuality";
 import { BrowserPreviewSession } from "./performance/browserPreviewSession";
 import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
@@ -377,8 +378,12 @@ export class StudioApp {
   /** Monotonic scene apply generation — latest request wins at commit. */
   private sceneGeneration = 0;
   private committedSceneGeneration = 0;
-  /** Scene lifecycle — watchdog must ignore loading/warming. */
-  private sceneApplyPhase: "idle" | "loading" | "warming" | "live" = "idle";
+  /** Scene lifecycle — watchdog must ignore loading/warming/frozen generate. */
+  private sceneApplyPhase: "idle" | "loading" | "warming" | "presenting" | "frozen" | "live" =
+    "idle";
+  /** Scene generation tied to last meaningful visible present (tests + readiness). */
+  private presentSceneGeneration = 0;
+  private presentEpochAtCommit = 0;
   private sceneApplyChain: Promise<void> = Promise.resolve();
   private longTaskObserver: PerformanceObserver | null = null;
   private sceneAuthoringDelegationInstalled = false;
@@ -629,6 +634,10 @@ export class StudioApp {
       buildTime: BUILD_TIME,
       consistency: this.getStudioConsistencySnapshot().consistency,
       sceneApplyPhase: this.sceneApplyPhase,
+      presentSceneGeneration: this.presentSceneGeneration,
+      presentEpochAtCommit: this.presentEpochAtCommit,
+      generatePresentationFrozen: this.session?.isGeneratePresentationFrozen() ?? false,
+      presentEpoch: this.session?.getPresentEpoch() ?? 0,
       sessionTiming: this.session?.getSessionTimingDiagnostics() ?? null,
     };
   }
@@ -731,9 +740,11 @@ export class StudioApp {
 
   private ensureAnimateTransport(): void {
     if (this.mode !== "animate" && this.mode !== "react") return;
+    this.session?.exitGeneratePresentationFreeze();
     this.playing = true;
     this.session?.runtime.setSimulationPaused(false);
     this.session?.runtime.transport.start();
+    this.session?.ensureLoopRunning();
   }
 
   /** Studio Animate/React: unbounded live clock — never freeze generative sim for camera-only methods. */
@@ -746,8 +757,11 @@ export class StudioApp {
 
   private kickLiveSurface(): void {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
-    // Live GENERATE holds a paused snapshot; finishLiveGenerate already primed the canvas.
-    if (this.mode === "generate" && this.session.runtime.isSimulationPaused()) return;
+    if (this.mode === "generate" && this.session.isGeneratePresentationFrozen()) {
+      this.session.redrawFrozenPresent();
+      void this.session.flushPresentToScreen();
+      return;
+    }
     this.session.ensureLoopRunning();
     // One immediate present — ongoing motion must come from RAF, not repeated paintFrames().
     this.session.frame(performance.now());
@@ -939,12 +953,65 @@ export class StudioApp {
     }
   }
 
+  private recordMeaningfulPresentIfVisible(requestGen: number): boolean {
+    if (!this.session || requestGen !== this.sceneGeneration) return false;
+    const px = this.sampleIncomingPresentedPixels(64, 36);
+    if (!px || !frameHasMeaningfulStructure(px)) {
+      if (this.presentSceneGeneration === requestGen) this.presentSceneGeneration = 0;
+      return false;
+    }
+    this.presentSceneGeneration = requestGen;
+    this.presentEpochAtCommit = this.session.getPresentEpoch();
+    this.clearFailureBanner();
+    return true;
+  }
+
+  private async awaitMeaningfulLivePresent(requestGen: number): Promise<boolean> {
+    if (!this.session) return false;
+    if (this.recordMeaningfulPresentIfVisible(requestGen)) return true;
+    const epoch0 = this.session.getPresentEpoch();
+    const wall0 = performance.now();
+    for (let i = 0; i < 32; i++) {
+      if (requestGen !== this.sceneGeneration) return false;
+      if (this.session.getPresentEpoch() !== epoch0) return false;
+      this.session.runtime.setSimulationPaused(false);
+      this.session.frame(wall0 + i * (1000 / 60));
+      this.session.runtime.setSimulationPaused(true);
+      if (i % 4 === 3 && this.recordMeaningfulPresentIfVisible(requestGen)) return true;
+    }
+    await this.session.flushPresentToScreen();
+    return this.recordMeaningfulPresentIfVisible(requestGen);
+  }
+
+  private async finishApiGeneratePreview(requestGen: number): Promise<void> {
+    this.scheduleGeneratePreview(true);
+    const start = performance.now();
+    while (performance.now() - start < 120_000) {
+      if (requestGen !== this.sceneGeneration) return;
+      if (this.generating) {
+        await new Promise((r) => setTimeout(r, 80));
+        continue;
+      }
+      const px = this.sampleIncomingPresentedPixels(64, 36);
+      if (px && frameHasMeaningfulStructure(px)) {
+        this.presentSceneGeneration = requestGen;
+        this.presentEpochAtCommit = this.session?.getPresentEpoch() ?? 0;
+        return;
+      }
+      const banner = document.getElementById("unsupported-banner");
+      if (banner?.classList.contains("visible")) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
   private async finishLiveGenerate(requestGen: number, sceneKey: string): Promise<void> {
     if (!this.session || requestGen !== this.sceneGeneration) return;
     const policy = resolveGeneratePolicy(this.pieceId);
     const statusEl = document.getElementById("gen-status");
     const token = ++this.generateWarmupToken;
     this.pushStudioParamsToLivePieces();
+    this.sceneApplyPhase = "presenting";
+    this.session.primeGenerateStillFrame();
 
     const steps = policy.interactive === "warmup" ? (policy.warmupSteps ?? 0) : 0;
     if (steps > 0 && this.generateReadySceneKey !== sceneKey) {
@@ -974,12 +1041,33 @@ export class StudioApp {
       this.generateReadySceneKey = sceneKey;
     }
 
-    this.session.runtime.setSimulationPaused(false);
-    const primeFrames =
-      steps > 0 ? Math.max(4, this.animatePrimeFrameCount()) : Math.max(32, this.animatePrimeFrameCount());
-    this.session.paintFrames(primeFrames, performance.now());
-    this.session.runtime.setSimulationPaused(true);
-    this.session.stopLoop();
+    const primeWall = performance.now();
+    this.session.paintFrames(8, primeWall);
+    await this.awaitMeaningfulLivePresent(requestGen);
+  }
+
+  /** After stage viewport fit — freeze and commit visible GENERATE (resize must happen first). */
+  private async finalizeLiveGeneratePresent(requestGen: number): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    this.session.primeGenerateStillFrame();
+    const kind = rendererKindFor(this.pieceId, "generate");
+    if (kind === "shader-native" || kind === "wasm") {
+      const wall = performance.now();
+      this.session.runtime.setSimulationPaused(false);
+      this.session.paintFrames(24, wall);
+      this.session.runtime.setSimulationPaused(true);
+    }
+    const freezeWall = performance.now();
+    this.session.enterGeneratePresentationFreeze(freezeWall);
+    this.session.ensureLoopRunning();
+    await this.session.flushPresentToScreen();
+    const ok = this.recordMeaningfulPresentIfVisible(requestGen);
+    if (!ok && requestGen === this.sceneGeneration) {
+      this.showFailureBanner(
+        "Generate preview failed",
+        `Piece: ${this.pieceId}\nCould not present a meaningful frame to the stage.`,
+      );
+    }
   }
 
   private async applyLiveSceneModeOnly(
@@ -1002,16 +1090,15 @@ export class StudioApp {
       this.session.runtime.transport.stop();
       if (this.generateReadySceneKey !== sceneKey) {
         await this.finishLiveGenerate(requestGen, sceneKey);
+        await this.finalizeLiveGeneratePresent(requestGen);
       } else {
-        this.session.runtime.setSimulationPaused(false);
-        this.session.paintFrames(Math.max(12, this.animatePrimeFrameCount()), performance.now());
-        this.session.runtime.setSimulationPaused(true);
-        this.session.stopLoop();
+        this.sceneApplyPhase = "presenting";
+        await this.awaitMeaningfulLivePresent(requestGen);
+        await this.finalizeLiveGeneratePresent(requestGen);
       }
     } else if (desired.mode === "animate") {
       this.playing = true;
       this.ensureAnimateTransport();
-      this.session.ensureLoopRunning();
       const methodForSpec =
         this.animationMethodId === RANDOM_METHOD_ID
           ? this.activeAnimationMethodId
@@ -1041,6 +1128,7 @@ export class StudioApp {
 
   private async runApplyPieceScene(requestGen: number): Promise<void> {
     if (requestGen !== this.sceneGeneration) return;
+    this.session?.exitGeneratePresentationFreeze();
     this.sceneApplyPhase = "loading";
     this.sceneApplyStartedMs = performance.now();
     this.generateWarmupToken += 1;
@@ -1075,11 +1163,16 @@ export class StudioApp {
       this.animBackend = "buffered-api";
       if (this.mode === "animate" && this.playing) {
         this.syncApiPreviewAnimate(true);
-      } else {
-        this.stopApiAnim({ abort: this.mode !== "animate" });
-        this.scheduleGeneratePreview();
+        this.syncChrome();
+        this.markSceneCommitted(requestGen);
+        return;
       }
+      this.stopApiAnim({ abort: this.mode !== "animate" });
+      this.sceneApplyPhase = "presenting";
+      await this.finishApiGeneratePreview(requestGen);
       this.syncChrome();
+      if (requestGen !== this.sceneGeneration) return;
+      this.sceneApplyPhase = "frozen";
       this.markSceneCommitted(requestGen);
       return;
     }
@@ -1147,12 +1240,7 @@ export class StudioApp {
       this.pendingImportState = null;
     }
     this.syncColorToParams();
-    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
-      this.session.stopLoop();
-      this.session.runtime.setSimulationPaused(true);
-    } else {
-      this.session.ensureLoopRunning();
-    }
+    this.session.ensureLoopRunning();
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
@@ -1200,6 +1288,9 @@ export class StudioApp {
       this.applyStudioPerformanceClock();
     }
     this.session.fitStageViewport();
+    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
+      await this.finalizeLiveGeneratePresent(requestGen);
+    }
     this.syncCompositionLayerAnimations();
     if (!this.compositionId) {
       const norm = normalizeAnimationMethodForPiece(
@@ -1226,14 +1317,20 @@ export class StudioApp {
       }
     }
     this.loadedInteractiveSceneKey = sceneKey;
-    this.kickLiveSurface();
+    if (!(this.mode === "generate" && this.session?.isGeneratePresentationFrozen())) {
+      this.kickLiveSurface();
+    }
     this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
     this.lastVisualChangeMs = Date.now();
     this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
-    this.sceneApplyPhase = "live";
+    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
+      this.sceneApplyPhase = this.presentSceneGeneration === requestGen ? "frozen" : "live";
+    } else {
+      this.sceneApplyPhase = "live";
+    }
     this.syncChrome();
     this.markSceneCommitted(requestGen);
   }
@@ -4649,7 +4746,8 @@ export class StudioApp {
         }
       }
       const sceneSettled = this.committedSceneGeneration === this.sceneGeneration;
-      const livePhase = this.sceneApplyPhase === "live" && !this.generating;
+      const livePhase =
+        (this.sceneApplyPhase === "live" || this.sceneApplyPhase === "frozen") && !this.generating;
       if (warmupMs > 2500 && sceneSettled && livePhase && diag.rafStalled && !document.hidden) {
         this.stallError = [
           "RAF STALLED",

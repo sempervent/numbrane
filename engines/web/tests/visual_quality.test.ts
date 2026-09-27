@@ -12,6 +12,7 @@ function flatFrame(lum: number, varL = 1): PixelFrame {
     alphaOccupancy: 1,
     changedPixelFraction: 0.001,
     rmsDifference: 0.5,
+    edgeEnergy: 0,
     digest: "flat",
   };
 }

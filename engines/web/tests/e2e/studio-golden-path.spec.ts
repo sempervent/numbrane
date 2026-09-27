@@ -6,15 +6,12 @@ import { test, expect } from "@playwright/test";
 import {
   clickStudioMode,
   failureBannerText,
-  waitForStudioBoot,
+  openStudioHome,
+  selectPieceInConfig,
   waitForStudioSceneSettled,
 } from "./studioUi";
-import {
-  frameIsVisible,
-  sampleStagePixels,
-  waitForLiveFrame,
-  waitForStudioPresent,
-} from "./animationMetrics";
+import { waitForLiveFrame } from "./animationMetrics";
+import { assertStageMeaningfullyPresent, assertStageStableForMs } from "./studioVisiblePresent";
 
 test.describe("Studio golden path", () => {
   test("CREATE → Generate/Animate simple pieces → Set flow", async ({ page }) => {
@@ -25,11 +22,10 @@ test.describe("Studio golden path", () => {
       if (msg.type() === "error") errors.push(msg.text());
     });
 
-    await page.goto("/studio.html", { waitUntil: "domcontentloaded", timeout: 60_000 });
-    await waitForStudioBoot(page, 120_000);
+    await openStudioHome(page);
     expect(await failureBannerText(page)).toBeNull();
 
-    await page.selectOption("#cfg-piece", "tiling/truchet-tiles");
+    await selectPieceInConfig(page, "tiling/truchet-tiles");
     await clickStudioMode(page, "generate");
     await waitForStudioSceneSettled(page, 120_000);
     await page.waitForFunction(
@@ -41,13 +37,19 @@ test.describe("Studio golden path", () => {
       null,
       { timeout: 120_000 },
     );
-    await waitForStudioPresent(page, 60_000);
-    const genPx = await sampleStagePixels(page);
-    expect(frameIsVisible(genPx)).toBe(true);
+    await assertStageMeaningfullyPresent(page, {
+      pieceId: "tiling/truchet-tiles",
+      mode: "generate",
+    });
+    await assertStageStableForMs(page, "tiling/truchet-tiles", 5_000);
 
     await clickStudioMode(page, "animate");
     await waitForStudioSceneSettled(page, 120_000);
     await waitForLiveFrame(page, 60_000);
+    await assertStageMeaningfullyPresent(page, {
+      pieceId: "tiling/truchet-tiles",
+      mode: "animate",
+    });
 
     const behaviorCount = await page.locator("#scene-behavior option:not([value=''])").count();
     expect(behaviorCount).toBeGreaterThan(0);
