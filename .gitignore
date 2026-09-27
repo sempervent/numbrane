@@ -232,6 +232,7 @@ artifacts/
 engines/python/dist/
 
 # Browser / test artifacts
+tmp/
 engines/web/test-results/
 engines/web/playwright-report/
 playwright-report/
