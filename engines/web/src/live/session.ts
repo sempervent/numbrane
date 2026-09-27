@@ -518,6 +518,40 @@ export class LiveSession {
     }
   }
 
+  /**
+   * Deterministic simulation warm-up for GENERATE on stateful pieces.
+   * Advances logical simulation steps (not wall-clock animation) then leaves sim paused.
+   */
+  async runGenerateWarmup(options: {
+    steps: number;
+    chunkSteps: number;
+    isCancelled: () => boolean;
+    onProgress?: (completed: number, total: number) => void;
+  }): Promise<{ stepsCompleted: number }> {
+    const { steps, chunkSteps, isCancelled, onProgress } = options;
+    const wasPaused = this.runtime.isSimulationPaused();
+    this.runtime.setSimulationPaused(false);
+    let done = 0;
+    const t0 = performance.now();
+    try {
+      while (done < steps) {
+        if (isCancelled()) break;
+        const chunk = Math.min(chunkSteps, steps - done);
+        for (let i = 0; i < chunk; i++) {
+          this.frame(t0 + done * (1000 / 60));
+          done += 1;
+        }
+        onProgress?.(done, steps);
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 0);
+        });
+      }
+    } finally {
+      this.runtime.setSimulationPaused(wasPaused);
+    }
+    return { stepsCompleted: done };
+  }
+
   /** Capture stable parameter bases for animation arcs (immune to per-frame modulation). */
   refreshAnimationBaseParams(): void {
     const scene = this.runtime.getScene();

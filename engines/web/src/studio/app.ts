@@ -126,6 +126,7 @@ import {
   defaultsForPiece,
   getPieceRuntime,
   isBrowserNativeAnimate,
+  resolveGeneratePolicy,
   supportsMode,
 } from "./runtime/registry";
 import { buildMashupSet } from "./mashups";
@@ -291,6 +292,10 @@ export class StudioApp {
   /** Wall ms from scene apply start to first kickLiveSurface (interactive GENERATE). */
   lastInteractivePreviewMs = 0;
   private sceneApplyStartedMs = 0;
+  private loadedInteractiveSceneKey = "";
+  private generateReadySceneKey = "";
+  private generateWarmupToken = 0;
+  lastWarmupStepsCompleted = 0;
   animationMethodId = "pan-left-right";
   /** Resolved method id when animationMethodId is random or composite. */
   activeAnimationMethodId = "pan-left-right";
@@ -525,17 +530,21 @@ export class StudioApp {
 
   getGenerateDiagnostics(): Record<string, unknown> {
     const surface = studioSurface(this.pieceId, this.mode);
+    const policy = resolveGeneratePolicy(this.pieceId);
     return {
       piece: this.pieceId,
       mode: this.mode,
       seed: this.seed,
       surface,
       generatePreviewClass: generatePreviewClass(this.pieceId),
+      generatePolicy: policy,
       generating: this.generating,
       lastInteractivePreviewMs: this.lastInteractivePreviewMs,
+      lastWarmupStepsCompleted: this.lastWarmupStepsCompleted,
       lastRenderMs: this.lastRenderMs,
       recipeDigest: this.recipeDigest,
       renderDigest: this.renderDigest,
+      sceneReadyKey: this.generateReadySceneKey,
     };
   }
 
@@ -880,9 +889,119 @@ export class StudioApp {
     await this.enqueueApplyPieceScene();
   }
 
+  private interactiveSceneKey(desired: StudioDesiredState): string {
+    return JSON.stringify({
+      pieceId: desired.pieceId,
+      seed: desired.seed,
+      compositionId: desired.compositionId,
+      params: desired.params,
+      color: desired.color,
+    });
+  }
+
+  private async finishLiveGenerate(requestGen: number, sceneKey: string): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    const policy = resolveGeneratePolicy(this.pieceId);
+    const statusEl = document.getElementById("gen-status");
+    const token = ++this.generateWarmupToken;
+    this.session.paintFrames(2, performance.now());
+
+    if (
+      policy.interactive === "warmup" &&
+      this.generateReadySceneKey !== sceneKey
+    ) {
+      this.generating = true;
+      statusEl?.classList.add("visible");
+      if (statusEl) statusEl.textContent = "Initializing…";
+      const steps = policy.warmupSteps ?? 120;
+      const chunk = policy.warmupChunk ?? 10;
+      const result = await this.session.runGenerateWarmup({
+        steps,
+        chunkSteps: chunk,
+        isCancelled: () =>
+          token !== this.generateWarmupToken || requestGen !== this.sceneGeneration,
+        onProgress: (done, total) => {
+          if (statusEl) statusEl.textContent = `Warming up ${done} / ${total} steps`;
+        },
+      });
+      if (token !== this.generateWarmupToken || requestGen !== this.sceneGeneration) return;
+      this.lastWarmupStepsCompleted = result.stepsCompleted;
+      this.generateReadySceneKey = sceneKey;
+      this.generating = false;
+      statusEl?.classList.remove("visible");
+      if (statusEl) statusEl.textContent = "";
+    } else if (policy.interactive === "immediate") {
+      this.generateReadySceneKey = sceneKey;
+    }
+
+    this.session.runtime.setSimulationPaused(true);
+    this.session.paintFrames(4, performance.now());
+  }
+
+  private async applyLiveSceneModeOnly(
+    desired: StudioDesiredState,
+    requestGen: number,
+  ): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    const sceneKey = this.interactiveSceneKey(desired);
+    this.stopApiAnim({ abort: true });
+    this.preview.cancel();
+    this.canvas.classList.remove("hidden-live");
+    document.getElementById("generate-preview")?.classList.remove("visible");
+    document.getElementById("gen-status")?.classList.remove("visible");
+
+    for (const layer of this.session.runtime.getScene()?.layers ?? []) {
+      for (const [k, v] of Object.entries(this.params)) {
+        if (typeof v === "number") {
+          this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
+        }
+      }
+    }
+    this.syncColorToParams();
+
+    if (desired.mode === "generate") {
+      this.playing = false;
+      this.session.runtime.transport.stop();
+      if (this.generateReadySceneKey !== sceneKey) {
+        await this.finishLiveGenerate(requestGen, sceneKey);
+      } else {
+        this.session.runtime.setSimulationPaused(true);
+        this.session.paintFrames(2, performance.now());
+      }
+    } else if (desired.mode === "animate") {
+      this.playing = true;
+      this.ensureAnimateTransport();
+      const methodForSpec =
+        this.animationMethodId === RANDOM_METHOD_ID
+          ? this.activeAnimationMethodId
+          : this.animationMethodId;
+      this.animationSpec = resolveLivePerformanceMethodSpec(
+        this.pieceId,
+        methodForSpec,
+        this.mode,
+      );
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: true,
+        performanceMode: true,
+      });
+      this.applyStudioPerformanceClock();
+      this.session.runtime.setSimulationPaused(false);
+    } else if (desired.mode === "react") {
+      this.playing = true;
+      this.ensureAnimateTransport();
+      this.applyStudioPerformanceClock();
+      this.session.runtime.setSimulationPaused(false);
+    }
+
+    this.kickLiveSurface();
+    this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
+    this.syncChrome();
+  }
+
   private async runApplyPieceScene(requestGen: number): Promise<void> {
     if (requestGen !== this.sceneGeneration) return;
     this.sceneApplyStartedMs = performance.now();
+    this.generateWarmupToken += 1;
     this.hideBrowserMotionPane();
     await this.browserPreview?.teardown();
     if (requestGen !== this.sceneGeneration) return;
@@ -931,6 +1050,16 @@ export class StudioApp {
     statusEl?.classList.remove("visible");
     this.animBackend = String(rendererKindFor(desired.pieceId, desired.mode) ?? "live");
     if (!this.session) return;
+
+    const sceneKey = this.interactiveSceneKey(desired);
+    if (
+      sceneKey === this.loadedInteractiveSceneKey &&
+      this.session.runtime.getScene()
+    ) {
+      await this.applyLiveSceneModeOnly(desired, requestGen);
+      this.markSceneCommitted(requestGen);
+      return;
+    }
 
     const liveMode = desired.mode === "react" ? "react" : "animate";
     const set = buildStudioSetDef(desired);
@@ -985,7 +1114,6 @@ export class StudioApp {
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
-      this.session.runtime.setSimulationPaused(true);
     } else if (this.mode === "animate" || this.mode === "react") {
       this.ensureAnimateTransport();
     } else if (this.playing) {
@@ -1015,7 +1143,7 @@ export class StudioApp {
       this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
     } else if (this.mode === "generate") {
-      this.session.paintFrames(6, performance.now());
+      await this.finishLiveGenerate(requestGen, sceneKey);
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
     }
@@ -1045,6 +1173,7 @@ export class StudioApp {
         });
       }
     }
+    this.loadedInteractiveSceneKey = sceneKey;
     this.kickLiveSurface();
     this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
     this.stallError = "";
@@ -1148,7 +1277,7 @@ export class StudioApp {
       () => {
         this.generating = true;
         status?.classList.add("visible");
-        if (status) status.textContent = "Quick preview…";
+        if (status) status.textContent = "Rendering preview…";
       },
       (result) => {
         paint(result, "Preview ready — refining…");
@@ -1827,6 +1956,8 @@ export class StudioApp {
     this.prefs.pieceId = pieceId;
     this.recipeDigest = "";
     this.renderDigest = "";
+    this.generateReadySceneKey = "";
+    this.loadedInteractiveSceneKey = "";
     if (this.mode === "animate" || this.mode === "react") {
       this.playing = true;
     }
@@ -1869,6 +2000,7 @@ export class StudioApp {
     }
     this.seed = cryptoSeed();
     this.prefs.seed = this.seed;
+    this.generateReadySceneKey = "";
     if (this.mode === "animate" || this.mode === "react") {
       this.playing = true;
     }

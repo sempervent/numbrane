@@ -5,6 +5,7 @@
 import type { ColorConfig } from "../color/model";
 import { mergeParamsWithColor } from "../color/serialize";
 import {
+  effectiveGenerateKind,
   generatePreviewClassFor,
   getPieceRuntime,
   supportsMode,
@@ -20,7 +21,7 @@ export function rendererKindFor(
   mode: StudioMode,
 ): RendererKind | null {
   const r = getPieceRuntime(pieceId);
-  if (mode === "generate") return r.generate;
+  if (mode === "generate") return effectiveGenerateKind(pieceId);
   if (mode === "animate") return r.animate;
   return r.react;
 }

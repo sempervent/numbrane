@@ -6,7 +6,13 @@
 import type { Page } from "@playwright/test";
 import fs from "node:fs";
 import path from "node:path";
-import { isMeaningfulVisualChange, type PixelFrame } from "../../src/live/pixelMetrics";
+import {
+  frameHasMeaningfulStructure,
+  isMeaningfulVisualChange,
+  type PixelFrame,
+} from "../../src/live/pixelMetrics";
+
+export { frameHasMeaningfulStructure };
 import { isPerceptuallyAlive } from "../../src/live/visualQuality";
 import type { PerformanceDensity, PerformanceMotion } from "../../src/studio/performance/catalog";
 

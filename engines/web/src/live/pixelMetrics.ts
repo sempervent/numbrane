@@ -101,6 +101,14 @@ export function analyzeRgbaGrid(
   };
 }
 
+/** Authoring preview has recognizable structure (not a bare empty/dark field). */
+export function frameHasMeaningfulStructure(px: PixelFrame): boolean {
+  if (px.luminanceVariance > 1.2 && px.occupiedFraction > 0.015) return true;
+  if (px.occupiedFraction > 0.06) return true;
+  if (px.alphaOccupancy > 0.5 && px.luminanceVariance > 0.08) return true;
+  return false;
+}
+
 /** Meaningful visual change between two decoded RGBA grids. */
 export function isMeaningfulVisualChange(
   a: PixelFrame,

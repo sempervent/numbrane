@@ -26,12 +26,23 @@ export type AnimationExportBackend = "python-frames" | "runtime-frames" | "unsup
 /** How CREATE → GENERATE should behave in the Studio UI. */
 export type GeneratePreviewClass = "interactive" | "async-python";
 
+/** Interactive GENERATE tier — capability-driven, not family-driven. */
+export type GenerateInteractiveMode = "immediate" | "warmup" | "async";
+
+export type GeneratePolicy = {
+  interactive: GenerateInteractiveMode;
+  warmupSteps?: number;
+  warmupChunk?: number;
+};
+
 export type PieceRuntimeDescriptor = {
   pieceId: string;
   generate: RendererKind;
   animate: RendererKind | null;
   react: RendererKind | null;
-  /** Interactive live canvas vs /api/render still pipeline. */
+  /** Override capability-driven GENERATE policy. */
+  generatePolicy?: GeneratePolicy;
+  /** @deprecated use resolveGeneratePolicy(); kept for docs/export metadata */
   generatePreviewClass?: GeneratePreviewClass;
   /** Explicit animation export backend (derived from animate kind when omitted). */
   exportBackend?: AnimationExportBackend;
@@ -208,7 +219,10 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "python-api",
     "webgl-stateful",
     "webgl-stateful",
-    { paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META] },
+    {
+      paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META],
+      generatePolicy: { interactive: "warmup", warmupSteps: 140, warmupChunk: 20 },
+    },
   ),
   "growth/lsystem": d("growth/lsystem", "python-api", "shader-native", null),
   "growth/slime-mold": d("growth/slime-mold", "python-api", "webgl-stateful", "webgl-stateful", {
@@ -303,19 +317,59 @@ export function animationExportBackendFor(pieceId: string): AnimationExportBacke
   return "runtime-frames";
 }
 
+function defaultWarmupSteps(pieceId: string): number {
+  if (pieceId.includes("reaction-diffusion")) return 140;
+  if (pieceId.includes("differential-growth")) return 200;
+  if (pieceId.includes("slime-mold")) return 100;
+  if (pieceId.includes("noodles")) return 80;
+  return 96;
+}
+
+/** Authoring-time GENERATE behavior from live capability. */
+export function resolveGeneratePolicy(pieceId: string): GeneratePolicy {
+  const r = getPieceRuntime(pieceId);
+  if (r.generatePolicy) return r.generatePolicy;
+  if (!isBrowserNativeAnimate(r.animate)) {
+    return { interactive: "async" };
+  }
+  if (r.animate === "webgl-stateful") {
+    return {
+      interactive: "warmup",
+      warmupSteps: defaultWarmupSteps(pieceId),
+      warmupChunk: 10,
+    };
+  }
+  return { interactive: "immediate" };
+}
+
+/** Renderer used for interactive GENERATE (matches ANIMATE when browser-native). */
+export function effectiveGenerateKind(pieceId: string): RendererKind {
+  const policy = resolveGeneratePolicy(pieceId);
+  if (policy.interactive === "async") {
+    return getPieceRuntime(pieceId).generate;
+  }
+  const animate = getPieceRuntime(pieceId).animate;
+  return animate && animate !== "unsupported" ? animate : "unsupported";
+}
+
 export function supportsMode(
   pieceId: string,
   mode: "generate" | "animate" | "react",
 ): boolean {
   const r = getPieceRuntime(pieceId);
-  const kind = mode === "generate" ? r.generate : mode === "animate" ? r.animate : r.react;
+  const kind =
+    mode === "generate"
+      ? effectiveGenerateKind(pieceId)
+      : mode === "animate"
+        ? r.animate
+        : r.react;
   return kind !== null && kind !== "unsupported";
 }
 
 export function generatePreviewClassFor(pieceId: string): GeneratePreviewClass {
   const r = getPieceRuntime(pieceId);
-  if (r.generatePreviewClass) return r.generatePreviewClass;
-  if (r.generate === "python-api") return "async-python";
+  if (r.generatePreviewClass === "async-python") return "async-python";
+  if (resolveGeneratePolicy(pieceId).interactive === "async") return "async-python";
   return "interactive";
 }
 

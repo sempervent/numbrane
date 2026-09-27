@@ -36,24 +36,23 @@ describe("studio-piece-fidelity registry", () => {
     expect(studioSurface("fake/unknown-piece", "generate")).toBe("unsupported");
   });
 
-  it("GENERATE for maintained catalog uses python-api or native, never silent fallback", () => {
+  it("GENERATE surface follows effective interactive routing", () => {
     const critical = [
       "geometry/metatron",
       "geometry/sri-yantra",
       "fields/flow-hatching",
       "fractals/strange-attractors",
       "growth/slime-mold",
+      "growth/differential-growth",
       "reaction-diffusion/reaction-diffusion",
       "tiling/truchet-tiles",
     ];
     for (const id of critical) {
-      const r = getPieceRuntime(id);
-      expect(r.generate === "python-api" || r.generate === "wasm" || r.generate === "geometry-ir").toBe(
-        true,
-      );
-      expect(studioSurface(id, "generate")).toBe(
-        r.generate === "python-api" ? "api-preview" : "live",
-      );
+      const surface = studioSurface(id, "generate");
+      expect(surface === "live" || surface === "api-preview").toBe(true);
+      if (id === "growth/differential-growth" || id === "growth/slime-mold") {
+        expect(surface).toBe("live");
+      }
     }
   });
 });
