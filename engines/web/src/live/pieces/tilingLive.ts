@@ -90,6 +90,8 @@ export async function createTilingLivePiece(
   const kind = pieceId.includes("voronoi") ? 1 : 0;
   const params: Record<string, number> = { density: 0.7, chaos: 0.3, hue: 0.55 };
   let seed = 42;
+  let animTimeSec = 0;
+  let animPhase = 0;
   let last: FrameState = {
     frame: 0,
     t: 0,
@@ -112,7 +114,16 @@ export async function createTilingLivePiece(
       last = frame;
     },
     setParameter(name, value) {
-      if (typeof value === "number" && name in params) params[name] = value;
+      if (typeof value !== "number") return;
+      if (name === "anim.timeSec") {
+        animTimeSec = value;
+        return;
+      }
+      if (name === "anim.phase") {
+        animPhase = value;
+        return;
+      }
+      if (name in params) params[name] = value;
     },
     getParameter(name) {
       return params[name];
@@ -130,7 +141,8 @@ export async function createTilingLivePiece(
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.useProgram(prog);
       gl.uniform2f(loc("u_res"), ctx.width, ctx.height);
-      gl.uniform1f(loc("u_time"), last.t);
+      const t = animTimeSec > 0 ? animTimeSec : last.t;
+      gl.uniform1f(loc("u_time"), t + animPhase * 3.5);
       gl.uniform1f(loc("u_hue"), params.hue);
       gl.uniform1f(loc("u_density"), params.density);
       gl.uniform1f(loc("u_chaos"), params.chaos);

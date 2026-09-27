@@ -87,7 +87,7 @@ export function buildStudioSetDef(desired: StudioDesiredState): SetDefV1 {
               },
             ],
             modulation: mappings,
-            post: { bloom: 0.2, feedback: 0.05 },
+            post: { bloom: 0.18, feedback: 0.04, vignette: 0 },
           },
         ],
         cues: [],

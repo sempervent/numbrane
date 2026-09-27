@@ -124,6 +124,44 @@ export function isMeaningfulVisualChange(
   );
 }
 
+/** Diagnostic: central vs outer structure (flags scope-like concentration). */
+export function spatialCoverageFromGrid(
+  pixels: Uint8Array,
+  gridW: number,
+  gridH: number,
+): {
+  centerOccupied: number;
+  outerOccupied: number;
+  scopeLike: boolean;
+} {
+  const cx0 = Math.floor(gridW / 3);
+  const cx1 = Math.ceil((gridW * 2) / 3);
+  const cy0 = Math.floor(gridH / 3);
+  const cy1 = Math.ceil((gridH * 2) / 3);
+  let center = 0;
+  let centerN = 0;
+  let outer = 0;
+  let outerN = 0;
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      const idx = gy * gridW + gx;
+      const lum = luminanceAt(pixels, idx);
+      const inCenter = gx >= cx0 && gx < cx1 && gy >= cy0 && gy < cy1;
+      if (inCenter) {
+        centerN += 1;
+        if (lum > 12) center += 1;
+      } else {
+        outerN += 1;
+        if (lum > 12) outer += 1;
+      }
+    }
+  }
+  const centerOccupied = center / Math.max(1, centerN);
+  const outerOccupied = outer / Math.max(1, outerN);
+  const scopeLike = centerOccupied > 0.2 && outerOccupied < centerOccupied * 0.35;
+  return { centerOccupied, outerOccupied, scopeLike };
+}
+
 /** Guard: compressed PNG bytes must never pass as pixel buffers. */
 export function assertNotCompressedImageBytes(buf: Uint8Array): void {
   if (buf.length >= 4 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
