@@ -2,57 +2,81 @@
 
 Branch: `feat/autonomous-scene-behaviors` (stabilization pass; feature freeze).
 
-Date: 2026-09-26
+Dates: 2026-09-26 (pass 1), 2026-09-27 (pass 2 — visual continuity)
 
 ## Human-reported defect classes
 
-| Class | Symptom | Initial evidence |
-|-------|---------|------------------|
-| A. Non-render | Blank canvas / missing piece | Playwright: `audiovisual/nodes` soak not visible @ 5s; occasional pan sample luma &lt; 8 |
-| B. Jump / reset | Camera/phase teleports | `applyAnimationMethodId` always `resetTime: true` on behavior/method change |
-| C. Stutter | Uneven motion | Under investigation (frame pacing ring exists; macro input may rebuild scene) |
-| D. Freeze / stall | Motion stops | Liveness watchdog false-positive on slow digest → recovery; calligraphy anim time lag vs wall clock |
-| E. Transition | Snap / blank / wrong B | Morph render ignored interpolated params; different piece ids flipped at p=0.5 |
+| Class | Symptom | Status after pass 2 |
+|-------|---------|------------------------|
+| A. Non-render | Blank canvas / missing piece | **Fixed** — `audiovisual/nodes` time uniforms + E2E enter order |
+| B. Jump / reset | Camera/phase teleports | **Improved** — live clock preserved on method/macros (pass 1) |
+| C. Stutter | Uneven motion | **Partial** — browser thumb previews paused during set perform |
+| D. Freeze / stall | Motion stops | **Improved** — watchdog uses animation advance; perf-mode dt cap 2s |
+| E. Transition | Snap / blank / wrong B | **Improved** — morph params + dual composite; monotonic morph E2E |
+
+## Live vs export contract
+
+| Surface | Clock | End behavior |
+|---------|-------|----------------|
+| **Live Animate / Perform** | `performanceMode=true`, unbounded `animationTimeSec`, repeating `cyclePhase` | Hold/stop/loop/ping-pong affect **cycle** motion, not terminal freeze |
+| **Export / envelope lab** | `performanceMode=false`, finite `exportPhase` | Hold/stop freeze at duration; loop/ping-pong wrap in export phase |
+| **E2E export semantics** | `StudioApp.exportEnvelopeLab=true` skips `normalizeSpecForLivePerformance` | Tests in `studio-animation-semantics.spec.ts` |
+
+## E2E harness
+
+| Issue | Fix |
+|-------|-----|
+| Connection refused after mid-suite death | Playwright owns dev server; readiness URL `studio.html`; `reuseExistingServer` only when `PW_REUSE_SERVER=1` (not default locally) |
+| Port 5173 already used | Kill orphan Vite or use managed server (default) |
+| Regression | `studio-server-health.spec.ts` |
 
 ## Reproduction matrix (automated sentinel)
 
-| Piece | CREATE animate | Long-run | Smooth (sentinel) | Transition | Failure signature |
-|-------|----------------|----------|-------------------|------------|-------------------|
-| geometry/circle-lattice | smoke CLI ✓ | not in E2E batch | — | — | — |
-| mashups/attractor-calligraphy | E2E | FAIL anim time &lt; 55 @ 60s wall | motion OK early | not run | D: clock lag / false stall |
-| fractals/strange-attractors | E2E scene | semantics mixed | hold tests fail on live continuous | — | export vs performance mode |
-| fractals/sdf-raymarch2d | pan continuity | partial | black luma sample @ t=8.1 | — | A/D |
-| geometry/metatron | liveness timeout | FAIL wait 12s | construction phase | — | D |
-| audiovisual/nodes | soak FAIL @ 5s | — | — | — | A |
-| Set fixture (4 scenes) | unit | morph opacities ✓ | — | dual morph added | E (params not applied — fixed) |
+| Piece / area | Result |
+|--------------|--------|
+| audiovisual/nodes + reference | E2E **PASS** (digest + animation time) |
+| fractals/sdf-raymarch2d pan | E2E **PASS** (visibility, not mean luma) |
+| set-performance-fixture morph | E2E **PASS** (per-edge monotonic progress) |
+| mashups/attractor-calligraphy 60s | E2E **PASS** (wall-window clock advance ≥48s, motion) |
+| geometry/metatron post-construction | E2E **PASS** |
+| animation semantics (hold/loop/construction) | E2E **PASS** (export envelope lab) |
+| npm unit | **214** passed |
 
-**Note:** “PASS” requires motion + time + visibility, not pixels alone.
+## Pass 1 fixes (commits `76b6d7c` … `11629ec`)
 
-## Clock model (authoritative)
+1. Method change: preserve animation time except construction/deconstruction.
+2. Macro / behavior: `syncLiveParamsFromAuthoring` without full rebuild.
+3. Morph render: interpolated params; dual composite for different piece ids.
+4. Liveness watchdog: `noteAnimationAdvance`.
+5. Unit tests + this doc (initial).
 
-| Clock | Owner | Live use |
-|-------|-------|----------|
-| **Performance / animation** | `AnimationRuntime.timeSec` ticked in `LiveSession.frame` from wall Δ (cap 0.25s) | CREATE / Rehearse / Perform live surfaces |
-| **Performance mode** | `AnimationRuntime.performanceMode` | When true: unbounded time; cycle phase from `livePerformanceTimeAt` |
-| **Export envelope** | `animationPhase` / hold-stop | Export + non-performance preview only |
-| **Transition** | `SetOrchestrator` beat progress → morph progress | Independent of animation reset unless commit rebuilds pieces |
-| **MIDI** | Transport beat | Quantization only; must not reset animation time on scene sync |
+## Pass 2 fixes (uncommitted → next commits)
 
-## Fixes in this pass (root-cause oriented)
+1. **nodesLive:** `u_time` from performance/animation time.
+2. **studioUi:** animate before piece select in `enterAnimateViaUi`.
+3. **exportEnvelopeLab:** finite envelope tests without live normalization.
+4. **session:** performance-mode animation dt cap 2.0s (reduces wall-clock lag under load).
+5. **app:** suspend browser thumb previews when set score surface ≠ idle.
+6. E2E: pan visibility, transition continuity, server health, semantics, liveness thresholds.
 
-1. **Method change:** preserve animation time except construction/deconstruction methods.
-2. **Macro / behavior sliders:** push params to live pieces via `syncLiveParamsFromAuthoring` instead of full scene rebuild when `reloadScene=false`.
-3. **Morph render:** apply morphed parameters to pieces; dual composite when source/destination piece ids differ (`morphDest`).
-4. **Liveness watchdog:** treat advancing `animationTimeSec` as activity (avoid false stall on slow-changing digests).
-5. **setAnimationSpec:** preserve `performanceMode` once enabled.
+## Remaining / open (human visual review)
 
-## Remaining / open
+- **Transition commit boundary:** runtime identity + feedback/history at 100% → ACTIVE(B) first frame (instrumentation harness, screenshot matrix not fully automated).
+- **Parameter morph kinds:** cyclic hue / discrete enums — naive lerp only today.
+- **Transition pair matrix:** manual review of representative A→B pairs (see `tmp/visual-continuity-review/` when generated locally).
+- **Full Studio E2E matrix** (`studio-all-animation`, piece contract batch): not re-run in pass 2.
 
-- `audiovisual/nodes` visibility (shader boot / piece-specific).
-- Export hold/loop/ping-pong E2E vs live continuous normalization (test semantics).
-- Transition commit feedback buffer continuity (needs targeted harness).
-- Dev-only `?debugRender=1` diagnostics (optional follow-up).
+## Human review artifacts
+
+Generate locally (gitignored):
+
+```bash
+mkdir -p tmp/visual-continuity-review
+# Recommended: run sentinel E2E with Playwright trace, or capture from Studio Perform transitions.
+```
+
+Review order: running nodes → calligraphy 60s clip → set fixture morph → incompatible-piece morph in Rehearse.
 
 ## Merge recommendation
 
-**NOT READY** until human re-checks representative CREATE → Rehearse → Perform transitions after this pass.
+**READY FOR HUMAN VISUAL REVIEW** — automated sentinels green; transition commit equivalence and broad transition matrix still require human eyes. **NOT READY TO MERGE** until visual sign-off.
