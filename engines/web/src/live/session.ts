@@ -44,12 +44,14 @@ import { AnimationRuntime } from "./animationRuntime";
 import { FramePacingRing, type FramePacingSnapshot } from "./framePacing";
 import type { AnimationSpec } from "../studio/animation/spec";
 import { defaultAnimationSpec, hasComponent } from "../studio/animation/spec";
+import { performanceCycleDurationSec } from "../studio/animation/livePerformanceTime";
 import { normalizeSpecForLivePerformance } from "../studio/animation/performance";
 import {
   VisualLivenessWatchdog,
   type VisualLivenessSnapshot,
 } from "./visualLiveness";
-import { morphScenes } from "./sceneMorph";
+import { morphScenes, type MorphLayerState } from "./sceneMorph";
+import type { LivePiece } from "./piece";
 import { captureSceneCandidate, type CaptureContext } from "./sceneCapture";
 import { orderedScenes, resolveSetModel, singleSceneSet } from "./setModel";
 import type { AdvanceResult } from "./setOrchestrator";
@@ -95,6 +97,11 @@ export type LiveDiagnostics = {
   visualLiveness: VisualLivenessSnapshot;
   animationPhase: number;
   performanceMode: boolean;
+  /** Live GENERATE: sim paused but RAF keeps presenting frozen frame to the canvas. */
+  generatePresentationFrozen: boolean;
+  presentEpoch: number;
+  presentationMode: "none" | "live" | "frozen";
+  lastPresentedPresentEpoch: number;
 };
 
 const QUALITY_SCALE: Record<QualityProfile, number> = {
@@ -224,6 +231,14 @@ export class LiveSession {
   onHud: ((h: HudStats) => void) | null = null;
   onStatus: ((s: Record<string, unknown>) => void) | null = null;
   private loadGeneration = 0;
+  /** Monotonic — bumps on each committed scene load (stale present detection). */
+  private presentEpoch = 0;
+  /** GENERATE_FROZEN: keep presenting without advancing simulation. */
+  private generatePresentationFrozen = false;
+  /** Wall time locked while GENERATE_FROZEN (no sim/animation advance on redraw). */
+  private generateFrozenWallMs = 0;
+  private presentationMode: "none" | "live" | "frozen" = "none";
+  private lastPresentedPresentEpoch = 0;
   private digestSampleIntervalMs = 250;
   private lastScenePrepareMs = 0;
   private lastSceneCommitMs = 0;
@@ -500,6 +515,13 @@ export class LiveSession {
     for (const p of previous) {
       p.dispose();
     }
+    this.presentEpoch += 1;
+    this.lastPresentedGrid = null;
+    this.lastPresentedStats = null;
+    this.pixelDigest = "";
+    this.presentationMode = "none";
+    this.lastPresentedPresentEpoch = 0;
+    this.exitGeneratePresentationFreeze();
     this.sessionStartedPerfMs = performance.now();
     this.visualLiveness.reset(this.pixelDigest, this.sessionStartedPerfMs);
   }
@@ -517,6 +539,52 @@ export class LiveSession {
     }
   }
 
+  /** Prime simulation without blocking the RAF loop (Studio ANIMATE boot). */
+  async paintFramesAsync(count = 8, wallStartMs = performance.now()): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          this.frame(wallStartMs + i * (1000 / 60));
+          resolve();
+        });
+      });
+    }
+  }
+
+  /**
+   * Deterministic simulation warm-up for GENERATE on stateful pieces.
+   * Advances logical simulation steps (not wall-clock animation) then leaves sim paused.
+   */
+  async runGenerateWarmup(options: {
+    steps: number;
+    chunkSteps: number;
+    isCancelled: () => boolean;
+    onProgress?: (completed: number, total: number) => void;
+  }): Promise<{ stepsCompleted: number }> {
+    const { steps, chunkSteps, isCancelled, onProgress } = options;
+    const wasPaused = this.runtime.isSimulationPaused();
+    this.runtime.setSimulationPaused(false);
+    let done = 0;
+    const t0 = performance.now();
+    try {
+      while (done < steps) {
+        if (isCancelled()) break;
+        const chunk = Math.min(chunkSteps, steps - done);
+        for (let i = 0; i < chunk; i++) {
+          this.frame(t0 + done * (1000 / 60));
+          done += 1;
+        }
+        onProgress?.(done, steps);
+        await new Promise<void>((resolve) => {
+          window.setTimeout(resolve, 0);
+        });
+      }
+    } finally {
+      this.runtime.setSimulationPaused(wasPaused);
+    }
+    return { stepsCompleted: done };
+  }
+
   /** Capture stable parameter bases for animation arcs (immune to per-frame modulation). */
   refreshAnimationBaseParams(): void {
     const scene = this.runtime.getScene();
@@ -529,10 +597,12 @@ export class LiveSession {
 
   setAnimationSpec(spec: AnimationSpec, opts?: SetAnimationSpecOptions): void {
     const prevTime = this.animationRuntime.animationTimeSec;
+    const prevPerf = this.animationRuntime.performanceMode;
     this.animationRuntime.setSpec(spec);
-    const perf =
-      opts?.performanceMode ??
-      (spec.endBehavior === "continuous" && spec.durationSec <= 0);
+    let perf = opts?.performanceMode ?? prevPerf;
+    if (perf == null) {
+      perf = spec.endBehavior === "continuous" && spec.durationSec <= 0;
+    }
     this.animationRuntime.performanceMode = perf;
     if (opts?.preserveTime) {
       this.animationRuntime.seekTime(prevTime);
@@ -574,9 +644,10 @@ export class LiveSession {
       this.animationRuntime.spec,
       liveMode,
     );
+    const prevTime = this.animationRuntime.animationTimeSec;
     this.animationRuntime.setSpec(normalized);
     this.animationRuntime.performanceMode = true;
-    this.animationRuntime.seekTime(this.animationRuntime.animationTimeSec);
+    this.animationRuntime.seekTime(prevTime);
     this.runtime.setFreezePieceUpdates(false);
     this.runtime.setSimulationPaused(false);
     this.visualLiveness.markRecovering(performance.now());
@@ -660,9 +731,14 @@ export class LiveSession {
       transportPlaying: snap.playing,
       visualFps: this.hud.fps,
       rafStalled:
+        !this.generatePresentationFrozen &&
         this.running &&
         this.rafCount > 20 &&
         now - this.rafProgressMs > 1500,
+      generatePresentationFrozen: this.generatePresentationFrozen,
+      presentEpoch: this.presentEpoch,
+      presentationMode: this.presentationMode,
+      lastPresentedPresentEpoch: this.lastPresentedPresentEpoch,
       activeLayerCount: this.runtime.getScene()?.layers.length ?? 0,
       quality: this.quality,
       framePacing: this.getFramePacingSnapshot(),
@@ -990,6 +1066,9 @@ export class LiveSession {
     const cssW = Math.max(1, parent?.width || rect.width || window.innerWidth);
     const cssH = Math.max(1, parent?.height || rect.height || window.innerHeight);
     this.applyRenderSize(cssW, cssH, dpr);
+    if (this.generatePresentationFrozen) {
+      void this.presentAndFreezeGenerate(0);
+    }
   }
 
   private applyRenderSize(cssWidth: number, cssHeight: number, dpr = 1): void {
@@ -1043,6 +1122,117 @@ export class LiveSession {
   stopLoop(): void {
     this.running = false;
     cancelAnimationFrame(this.raf);
+  }
+
+  /** GENERATE: jump construction/envelope to a complete still (transport stays stopped). */
+  primeGenerateStillFrame(): void {
+    const spec = this.animationRuntime.spec;
+    if (hasComponent(spec, "construction")) {
+      const cycleSec = performanceCycleDurationSec(spec);
+      const endSec = Math.max(spec.durationSec, cycleSec);
+      this.animationRuntime.seekTime(endSec);
+    } else if (hasComponent(spec, "generative")) {
+      const cycleSec = performanceCycleDurationSec(spec);
+      this.animationRuntime.seekTime(Math.max(0.5, cycleSec * 0.35));
+    }
+    this.animationRuntime.applyToPieces(this.runtime.getPieces(), this.baseParams);
+  }
+
+  /** Live GENERATE: freeze sim and retain last presented frame (redraw on resize only). */
+  enterGeneratePresentationFreeze(wallNowMs = performance.now()): void {
+    this.generatePresentationFrozen = true;
+    this.generateFrozenWallMs = wallNowMs;
+    this.runtime.setSimulationPaused(true);
+    this.runtime.transport.stop();
+    this.redrawFrozenPresent();
+  }
+
+  /** Redraw frozen GENERATE frame (resize / chrome / explicit refresh). */
+  redrawFrozenPresent(wallNowMs?: number): void {
+    if (!this.generatePresentationFrozen) return;
+    const t = wallNowMs ?? this.generateFrozenWallMs;
+    this.runtime.setSimulationPaused(false);
+    this.frame(t);
+    this.runtime.setSimulationPaused(true);
+  }
+
+  exitGeneratePresentationFreeze(): void {
+    this.generatePresentationFrozen = false;
+    this.generateFrozenWallMs = 0;
+    if (this.presentationMode === "frozen") {
+      this.presentationMode = "none";
+    }
+  }
+
+  isGeneratePresentationFrozen(): boolean {
+    return this.generatePresentationFrozen;
+  }
+
+  getPresentEpoch(): number {
+    return this.presentEpoch;
+  }
+
+  private drainGlErrors(): void {
+    const gl = this.compositor.gl;
+    while (gl.getError() !== gl.NO_ERROR) {
+      /* drain stale errors before readback */
+    }
+  }
+
+  private noteRenderGlError(): void {
+    const gl = this.compositor.gl;
+    const err = gl.getError();
+    if (err !== gl.NO_ERROR) {
+      this.webglError = `GL ${err}`;
+    }
+  }
+
+  /** Render one logical frame and composite to the visible default framebuffer. */
+  renderToVisibleSurface(wallNowMs = performance.now()): void {
+    this.runtime.setSimulationPaused(false);
+    this.frame(wallNowMs);
+    this.runtime.setSimulationPaused(true);
+    this.noteRenderGlError();
+    const gl = this.compositor.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** Browser presentation boundary — compositor output must reach the human-visible canvas. */
+  async presentToVisibleSurface(
+    wallNowMs = performance.now(),
+    modeAfter: "live" | "frozen" = "live",
+  ): Promise<void> {
+    this.renderToVisibleSurface(wallNowMs);
+    const gl = this.compositor.gl;
+    gl.finish?.();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => resolve());
+      });
+    });
+    this.presentationMode = modeAfter;
+    this.lastPresentedPresentEpoch = this.presentEpoch;
+    this.presentCount += 1;
+  }
+
+  /** GENERATE: final viewport → render → present → freeze without clearing the visible frame. */
+  async presentAndFreezeGenerate(primeFrames = 24): Promise<void> {
+    this.exitGeneratePresentationFreeze();
+    this.primeGenerateStillFrame();
+    const wall = performance.now();
+    this.runtime.setSimulationPaused(false);
+    if (primeFrames > 0) {
+      this.paintFrames(primeFrames, wall);
+    }
+    this.runtime.setSimulationPaused(true);
+    await this.presentToVisibleSurface(wall, "frozen");
+    this.enterGeneratePresentationFreeze(wall);
+    this.stopLoop();
+  }
+
+  /** Ensure WebGL present reaches the default framebuffer before tests/human paint. */
+  async flushPresentToScreen(): Promise<void> {
+    await this.presentToVisibleSurface(performance.now());
   }
 
   /** Pin last presented grid as baseline for cross-cycle comparison. */
@@ -1131,11 +1321,13 @@ export class LiveSession {
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
     const rp0 = performance.now();
     const gl = this.compositor.gl;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
+    this.drainGlErrors();
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const cw = Math.max(1, gl.drawingBufferWidth);
+    const ch = Math.max(1, gl.drawingBufferHeight);
+    const raw = new Uint8Array(cw * ch * 4);
     gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    this.drainGlErrors();
     this.lastReadPixelsMs = performance.now() - rp0;
     this.noteMainThreadBlock(this.lastReadPixelsMs);
     const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
@@ -1154,6 +1346,9 @@ export class LiveSession {
 
   /** Single deterministic tick (tests / smoke). */
   frame(wallNowMs: number): FrameState {
+    if (this.generatePresentationFrozen) {
+      wallNowMs = this.generateFrozenWallMs;
+    }
     this.rafCount += 1;
     this.rafLastTimestamp = performance.now();
     this.rafProgressMs = this.rafLastTimestamp;
@@ -1192,12 +1387,19 @@ export class LiveSession {
 
     const snap = this.runtime.transport.getSnapshot();
     const simPaused = this.runtime.isSimulationPaused();
+    const animDtCap = this.animationRuntime.performanceMode ? 2.0 : 0.25;
     const animWallDt =
       this.lastAnimWallMs > 0
-        ? Math.min(0.25, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
+        ? Math.min(animDtCap, Math.max(0, (wallNowMs - this.lastAnimWallMs) / 1000))
         : 0;
     this.lastAnimWallMs = wallNowMs;
-    this.animationRuntime.tick(animWallDt, snap.playing && !simPaused);
+    const animAdvance = snap.playing && !simPaused && !this.generatePresentationFrozen;
+    this.animationRuntime.tick(animWallDt, animAdvance);
+    this.visualLiveness.noteAnimationAdvance(
+      this.animationRuntime.animationTimeSec,
+      wallNowMs,
+      snap.playing && !simPaused,
+    );
     for (const rt of this.overlayAnimationRuntimes.values()) {
       rt.tick(animWallDt, snap.playing && !simPaused);
     }
@@ -1291,6 +1493,7 @@ export class LiveSession {
     this.renderFrame(frame);
     this.hud.glMs = performance.now() - g0;
     this.renderCount += 1;
+    this.noteRenderGlError();
     this.lastSuccessfulDrawMs = performance.now();
     if (wallNowMs - this.lastDigestSampleMs > this.digestSampleIntervalMs) {
       this.lastDigestSampleMs = wallNowMs;
@@ -1322,9 +1525,9 @@ export class LiveSession {
         /* readPixels may fail during resize; keep last digest */
       }
     }
-    const err = this.compositor.gl.getError();
-    if (err !== this.compositor.gl.NO_ERROR) {
-      this.webglError = `GL ${err}`;
+    if (!this.generatePresentationFrozen && snap.playing) {
+      this.presentationMode = "live";
+      this.lastPresentedPresentEpoch = this.presentEpoch;
     }
     this.hud.frameMs = performance.now() - t0;
     this.hud.layers = scene?.layers.length ?? 0;
@@ -1340,6 +1543,33 @@ export class LiveSession {
     }
 
     return frame;
+  }
+
+  private pushMorphParameters(
+    piece: LivePiece,
+    params: Record<string, number | string | boolean>,
+  ): void {
+    for (const [k, v] of Object.entries(params)) {
+      piece.setParameter(k, v);
+    }
+  }
+
+  private renderMorphLayerPass(ml: MorphLayerState, fromRuntime: boolean): void {
+    if (ml.presence <= 0.001) return;
+    const fromPiece = this.runtime.getPiece(ml.id);
+    const toPiece = this.morphToPieces.get(ml.id);
+    const piece = fromRuntime ? fromPiece : toPiece;
+    if (!piece) return;
+    if (this.layerEnabled.get(ml.id) === false && fromRuntime) return;
+    this.pushMorphParameters(piece, ml.parameters);
+    const target = this.compositor.getLayerTarget();
+    piece.render({
+      framebuffer: target.framebuffer,
+      width: target.width,
+      height: target.height,
+      transparent: this.compositor.transparent,
+    });
+    this.compositor.compositeLayer(ml.blend ?? "normal", ml.opacity * ml.presence);
   }
 
   private applyReplayEvent(ev: PerfEvent): void {
@@ -1416,20 +1646,10 @@ export class LiveSession {
           const morphed = morphScenes(fromScene, toScene, orchTr.progress);
           post = { ...morphed.post };
           for (const ml of morphed.layers) {
-            if (ml.presence <= 0.001) continue;
-            const fromPiece = this.runtime.getPiece(ml.id);
-            const toPiece = this.morphToPieces.get(ml.id);
-            const piece = toPiece ?? fromPiece;
-            if (!piece) continue;
-            if (this.layerEnabled.get(ml.id) === false && !toPiece) continue;
-            const target = this.compositor.getLayerTarget();
-            piece.render({
-              framebuffer: target.framebuffer,
-              width: target.width,
-              height: target.height,
-              transparent: this.compositor.transparent,
-            });
-            this.compositor.compositeLayer(ml.blend ?? "normal", ml.opacity * ml.presence);
+            this.renderMorphLayerPass(ml, true);
+            if (ml.morphDest) {
+              this.renderMorphLayerPass({ id: ml.id, ...ml.morphDest }, false);
+            }
           }
         }
       } else {

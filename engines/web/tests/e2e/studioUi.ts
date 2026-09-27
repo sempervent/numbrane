@@ -30,7 +30,18 @@ export async function fetchBrowserCatalog(baseURL: string): Promise<BrowserCatal
 }
 
 export async function openStudioHome(page: Page): Promise<void> {
-  await page.goto("/studio.html", { waitUntil: "domcontentloaded", timeout: 30_000 });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await page.goto("/studio.html", { waitUntil: "domcontentloaded", timeout: 60_000 });
+      lastErr = undefined;
+      break;
+    } catch (err) {
+      lastErr = err;
+      await page.waitForTimeout(1500);
+    }
+  }
+  if (lastErr) throw lastErr;
   await waitForStudioBoot(page);
   await page.evaluate(() => {
     (
@@ -63,7 +74,22 @@ export async function selectPieceInBrowser(page: Page, pieceId: string): Promise
 
 /** Config header piece `<select>` — reliable for catalog ids not in performance browser filters. */
 export async function selectPieceInConfig(page: Page, pieceId: string): Promise<void> {
-  await page.selectOption("#cfg-piece", pieceId);
+  const hasOption = await page.evaluate(
+    (id) =>
+      Array.from(
+        (document.querySelector("#cfg-piece") as HTMLSelectElement | null)?.options ?? [],
+      ).some((o) => o.value === id),
+    pieceId,
+  );
+  if (hasOption) {
+    await page.selectOption("#cfg-piece", pieceId);
+  } else {
+    await page.evaluate(async (id) => {
+      await (
+        window as unknown as { __NUMBRANE_STUDIO__?: { setPiece?: (p: string) => Promise<void> } }
+      ).__NUMBRANE_STUDIO__?.setPiece?.(id);
+    }, pieceId);
+  }
   await page.waitForFunction(
     (id) => (window as unknown as { __NUMBRANE_STUDIO__?: { pieceId?: string } }).__NUMBRANE_STUDIO__?.pieceId === id,
     pieceId,
@@ -92,8 +118,8 @@ export async function clickStudioMode(page: Page, mode: "generate" | "animate" |
 
 export async function enterAnimateViaUi(page: Page, pieceId: string): Promise<void> {
   await openStudioHome(page);
-  await selectPieceInBrowser(page, pieceId);
   await clickStudioMode(page, "animate");
+  await selectPieceInConfig(page, pieceId);
 }
 
 export async function enterGenerateViaUi(page: Page, pieceId: string): Promise<void> {

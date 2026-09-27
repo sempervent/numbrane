@@ -74,6 +74,43 @@ describe("API animation self-cancellation", () => {
     ctrl.dispose();
     globalThis.fetch = originalFetch;
   });
+
+  it("discards stale completion when a newer request id is active", async () => {
+    const ctrl = new GeneratePreviewController();
+    const originalFetch = globalThis.fetch;
+    let resolveFirst: (() => void) | undefined;
+    globalThis.fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const signal = init?.signal as AbortSignal | undefined;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { frame?: number };
+      if (body.frame === 0) {
+        await new Promise<void>((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+      if (signal?.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      return new Response(new Blob([new Uint8Array([9])], { type: "image/png" }), { status: 200 });
+    }) as typeof fetch;
+
+    const seen: number[] = [];
+    void ctrl.run(
+      { piece: "a", seed: 1, frame: 0, width: 8, height: 8, parameters: {} },
+      () => {},
+      (r) => seen.push(r.requestId),
+      () => {},
+    );
+    void ctrl.run(
+      { piece: "b", seed: 2, frame: 1, width: 8, height: 8, parameters: {} },
+      () => {},
+      (r) => seen.push(r.requestId),
+      () => {},
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    if (resolveFirst) resolveFirst();
+    await new Promise((r) => setTimeout(r, 30));
+    expect(seen).toEqual([2]);
+    ctrl.dispose();
+    globalThis.fetch = originalFetch;
+  });
 });
 
 describe("BufferedFrameAnimationController", () => {

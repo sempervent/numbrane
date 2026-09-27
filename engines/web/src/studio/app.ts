@@ -22,6 +22,7 @@ import {
   thumbCacheKey,
   type BrowserThumbQueueStats,
 } from "./performance/browserThumbs";
+import { frameHasMeaningfulStructure } from "../live/pixelMetrics";
 import { classifyVisualQuality, snapshotFromFrame } from "../live/visualQuality";
 import { BrowserPreviewSession } from "./performance/browserPreviewSession";
 import { BUILD_SHA, BUILD_TIME, buildInfoLine } from "./buildInfo";
@@ -126,6 +127,7 @@ import {
   defaultsForPiece,
   getPieceRuntime,
   isBrowserNativeAnimate,
+  resolveGeneratePolicy,
   supportsMode,
 } from "./runtime/registry";
 import { buildMashupSet } from "./mashups";
@@ -135,6 +137,7 @@ import {
   previewSize,
   rendererKindFor,
   studioSurface,
+  generatePreviewClass,
 } from "./runtime/surface";
 import {
   buildStudioSetDef,
@@ -177,11 +180,32 @@ import {
   type SceneLibraryState,
 } from "./scene/sceneLibrary";
 import {
+  behaviorCompatibility,
+  listCompatibleBehaviors,
+  type BehaviorPresetId,
+} from "./scene/behaviorPresets";
+import {
+  compatibleBehaviorCount,
+  createCatalogFamilyOptions,
+  filterCreateCatalogPieces,
+  pieceDisplayLabel,
+  pieceFamilyLabel,
+} from "./scene/pieceDiscovery";
+import {
+  applyCreativeMacros,
+  DEFAULT_MACRO_VALUES,
+  type CreativeMacroId,
+  type CreativeMacroValues,
+} from "./scene/creativeMacros";
+import {
+  defaultSceneAuthoringSemantics,
   defaultSceneName,
   newSceneId,
   sceneDefFromRecipe,
   type PersistedSceneRecipeV1,
+  type SceneAuthoringSemantics,
 } from "./scene/sceneRecipe";
+import { applyVariationToParams, variationSeed } from "./scene/sceneVariation";
 import { loadPersistedSets } from "./setPerformance";
 
 declare global {
@@ -264,6 +288,15 @@ export class StudioApp {
     thumbUrl: string | null;
   }> = [];
   animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
+  /** E2E export-semantics lab: finite envelope (hold/loop/stop) without live performance clock. */
+  exportEnvelopeLab = false;
+  /** Wall ms from scene apply start to first kickLiveSurface (interactive GENERATE). */
+  lastInteractivePreviewMs = 0;
+  private sceneApplyStartedMs = 0;
+  private loadedInteractiveSceneKey = "";
+  private generateReadySceneKey = "";
+  private generateWarmupToken = 0;
+  lastWarmupStepsCompleted = 0;
   animationMethodId = "pan-left-right";
   /** Resolved method id when animationMethodId is random or composite. */
   activeAnimationMethodId = "pan-left-right";
@@ -279,6 +312,8 @@ export class StudioApp {
   performanceFavorites: string[] = [];
   performanceCycleFavoritesOnly = false;
   performanceCyclePackOrder = false;
+  /** CREATE visual browser — shallow family filter (not performance catalog). */
+  createCatalogFamilyFilter = "all";
   private browserPreview: BrowserPreviewSession | null = null;
   private browserMotionTimer: number | null = null;
   private browserMotionPieceId: string | null = null;
@@ -336,12 +371,19 @@ export class StudioApp {
   readonly setScore = new SetScoreController(() => this.session);
   sceneLibrary: SceneLibraryState = loadSceneLibrary();
   sceneAuthoring: SceneAuthoringSession = newAuthoringSession("Untitled Scene");
+  sceneAuthoringSemantics: SceneAuthoringSemantics = defaultSceneAuthoringSemantics();
   private setPerformStatusKey = "";
   workflow: StudioWorkflow = "create";
   private workflowPanelKey = "";
   /** Monotonic scene apply generation — latest request wins at commit. */
   private sceneGeneration = 0;
   private committedSceneGeneration = 0;
+  /** Scene lifecycle — watchdog must ignore loading/warming/frozen generate. */
+  private sceneApplyPhase: "idle" | "loading" | "warming" | "presenting" | "frozen" | "live" =
+    "idle";
+  /** Scene generation tied to last meaningful visible present (tests + readiness). */
+  private presentSceneGeneration = 0;
+  private presentEpochAtCommit = 0;
   private sceneApplyChain: Promise<void> = Promise.resolve();
   private longTaskObserver: PerformanceObserver | null = null;
   private sceneAuthoringDelegationInstalled = false;
@@ -493,6 +535,35 @@ export class StudioApp {
     }
   }
 
+  /** Always pair generation with commit so Studio cannot stay stuck unsettled. */
+  private resolveSceneApply(requestGen: number, phase: "idle" | "live" = "live"): void {
+    if (requestGen !== this.sceneGeneration) return;
+    this.markSceneCommitted(requestGen);
+    this.sceneApplyPhase = phase;
+    this.generating = false;
+    this.syncChrome();
+  }
+
+  getGenerateDiagnostics(): Record<string, unknown> {
+    const surface = studioSurface(this.pieceId, this.mode);
+    const policy = resolveGeneratePolicy(this.pieceId);
+    return {
+      piece: this.pieceId,
+      mode: this.mode,
+      seed: this.seed,
+      surface,
+      generatePreviewClass: generatePreviewClass(this.pieceId),
+      generatePolicy: policy,
+      generating: this.generating,
+      lastInteractivePreviewMs: this.lastInteractivePreviewMs,
+      lastWarmupStepsCompleted: this.lastWarmupStepsCompleted,
+      lastRenderMs: this.lastRenderMs,
+      recipeDigest: this.recipeDigest,
+      renderDigest: this.renderDigest,
+      sceneReadyKey: this.generateReadySceneKey,
+    };
+  }
+
   getAnimationDiagnostics(): Record<string, unknown> {
     const kind = rendererKindFor(this.pieceId, this.mode) ?? "unsupported";
     const diag = this.session?.getDiagnostics();
@@ -562,6 +633,13 @@ export class StudioApp {
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
       consistency: this.getStudioConsistencySnapshot().consistency,
+      sceneApplyPhase: this.sceneApplyPhase,
+      presentSceneGeneration: this.presentSceneGeneration,
+      presentEpochAtCommit: this.presentEpochAtCommit,
+      generatePresentationFrozen: this.session?.isGeneratePresentationFrozen() ?? false,
+      presentEpoch: this.session?.getPresentEpoch() ?? 0,
+      presentationMode: diag?.presentationMode ?? "none",
+      lastPresentedPresentEpoch: diag?.lastPresentedPresentEpoch ?? 0,
       sessionTiming: this.session?.getSessionTimingDiagnostics() ?? null,
     };
   }
@@ -664,9 +742,11 @@ export class StudioApp {
 
   private ensureAnimateTransport(): void {
     if (this.mode !== "animate" && this.mode !== "react") return;
+    this.session?.exitGeneratePresentationFreeze();
     this.playing = true;
     this.session?.runtime.setSimulationPaused(false);
     this.session?.runtime.transport.start();
+    this.session?.ensureLoopRunning();
   }
 
   /** Studio Animate/React: unbounded live clock — never freeze generative sim for camera-only methods. */
@@ -679,6 +759,14 @@ export class StudioApp {
 
   private kickLiveSurface(): void {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    if (this.mode === "generate" && this.session.isGeneratePresentationFrozen()) {
+      this.session.redrawFrozenPresent();
+      void this.session.flushPresentToScreen();
+      return;
+    }
+    if (this.mode === "animate" || this.mode === "react") {
+      this.session.exitGeneratePresentationFreeze();
+    }
     this.session.ensureLoopRunning();
     // One immediate present — ongoing motion must come from RAF, not repeated paintFrames().
     this.session.frame(performance.now());
@@ -687,10 +775,30 @@ export class StudioApp {
       this.lastVisualDigest = stats.digest;
       this.lastVisualChangeMs = Date.now();
     }
+    if (this.mode === "animate" || this.mode === "react") {
+      const diag = this.session.getDiagnostics();
+      if (diag.presentationMode === "live" && diag.lastPresentedPresentEpoch === diag.presentEpoch) {
+        this.presentSceneGeneration = this.sceneGeneration;
+        this.presentEpochAtCommit = diag.presentEpoch;
+      }
+    }
   }
 
   syncAnimationSpecToSession(preview = true, opts?: { resetTime?: boolean }): void {
     if (!this.session || this.mode !== "animate") return;
+    if (this.exportEnvelopeLab) {
+      this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: opts?.resetTime !== true,
+        performanceMode: false,
+      });
+      if (studioSurface(this.pieceId, this.mode) === "api-preview") {
+        this.syncApiPreviewAnimate(preview);
+        return;
+      }
+      if (preview) this.kickLiveSurface();
+      return;
+    }
     this.animationSpec = normalizeSpecForLivePerformance(
       this.pieceId,
       this.animationSpec,
@@ -698,13 +806,14 @@ export class StudioApp {
     );
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     const livePerf =
+      !this.exportEnvelopeLab &&
       studioSurface(this.pieceId, this.mode) === "live" &&
       (this.mode === "animate" || this.mode === "react");
     this.session.setAnimationSpec(this.animationSpec, {
       preserveTime: opts?.resetTime !== true,
       performanceMode: livePerf,
     });
-    this.applyStudioPerformanceClock();
+    if (!this.exportEnvelopeLab) this.applyStudioPerformanceClock();
     if (studioSurface(this.pieceId, this.mode) === "api-preview") {
       this.syncApiPreviewAnimate(preview);
       return;
@@ -820,8 +929,246 @@ export class StudioApp {
     await this.enqueueApplyPieceScene();
   }
 
+  private interactiveSceneKey(desired: StudioDesiredState): string {
+    return JSON.stringify({
+      pieceId: desired.pieceId,
+      seed: desired.seed,
+      compositionId: desired.compositionId,
+      params: desired.params,
+      color: desired.color,
+    });
+  }
+
+  /** Logical frames to prime trail/state after scene load in ANIMATE (piece capability driven). */
+  private animatePrimeFrameCount(): number {
+    if (this.pieceId.includes("audiovisual/nodes")) return 4;
+    const steps = resolveGeneratePolicy(this.pieceId).warmupSteps ?? 0;
+    if (steps >= 100) return 36;
+    if (steps >= 48) return 24;
+    if (steps >= 20) return 16;
+    return 8;
+  }
+
+  private pushStudioParamsToLivePieces(): void {
+    if (!this.session) return;
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void; setParameter?: (n: string, v: unknown) => void }
+        | undefined;
+      if (!piece) continue;
+      for (const [k, v] of Object.entries(this.params)) {
+        piece.setParameter?.(k, v);
+      }
+      piece.setColorConfig?.(this.color);
+    }
+  }
+
+  private runtimePieceMatchesStudio(): boolean {
+    if (!this.session) return false;
+    const setId = this.session.runtime.getSet()?.set_id;
+    if (setId === this.pieceId) return true;
+    const scene = this.session.runtime.getScene();
+    const livePiece = scene?.layers[0]?.piece;
+    return livePiece === this.pieceId;
+  }
+
+  private recordMeaningfulPresentIfVisible(requestGen: number): boolean {
+    if (!this.session || requestGen !== this.sceneGeneration) return false;
+    if (!this.runtimePieceMatchesStudio()) {
+      if (this.presentSceneGeneration === requestGen) this.presentSceneGeneration = 0;
+      return false;
+    }
+    const diag = this.session.getDiagnostics();
+    if (
+      this.mode === "generate" &&
+      (diag.lastPresentedPresentEpoch !== diag.presentEpoch || diag.presentationMode !== "frozen")
+    ) {
+      if (this.presentSceneGeneration === requestGen) this.presentSceneGeneration = 0;
+      return false;
+    }
+    const px = this.sampleIncomingPresentedPixels(64, 36);
+    if (!px || !frameHasMeaningfulStructure(px)) {
+      if (this.presentSceneGeneration === requestGen) this.presentSceneGeneration = 0;
+      return false;
+    }
+    this.presentSceneGeneration = requestGen;
+    this.presentEpochAtCommit = this.session.getPresentEpoch();
+    this.clearFailureBanner();
+    return true;
+  }
+
+  private async awaitMeaningfulLivePresent(requestGen: number): Promise<boolean> {
+    if (!this.session) return false;
+    if (this.recordMeaningfulPresentIfVisible(requestGen)) return true;
+    const epoch0 = this.session.getPresentEpoch();
+    const wall0 = performance.now();
+    for (let i = 0; i < 32; i++) {
+      if (requestGen !== this.sceneGeneration) return false;
+      if (this.session.getPresentEpoch() !== epoch0) return false;
+      this.session.runtime.setSimulationPaused(false);
+      this.session.frame(wall0 + i * (1000 / 60));
+      this.session.runtime.setSimulationPaused(true);
+      if (i % 4 === 3 && this.recordMeaningfulPresentIfVisible(requestGen)) return true;
+    }
+    await this.session.flushPresentToScreen();
+    return this.recordMeaningfulPresentIfVisible(requestGen);
+  }
+
+  private async finishApiGeneratePreview(requestGen: number): Promise<void> {
+    this.scheduleGeneratePreview(true);
+    const start = performance.now();
+    while (performance.now() - start < 120_000) {
+      if (requestGen !== this.sceneGeneration) return;
+      if (this.generating) {
+        await new Promise((r) => setTimeout(r, 80));
+        continue;
+      }
+      const px = this.sampleIncomingPresentedPixels(64, 36);
+      if (px && frameHasMeaningfulStructure(px)) {
+        this.presentSceneGeneration = requestGen;
+        this.presentEpochAtCommit = this.session?.getPresentEpoch() ?? 0;
+        return;
+      }
+      const banner = document.getElementById("unsupported-banner");
+      if (banner?.classList.contains("visible")) return;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  private async finishLiveGenerate(requestGen: number, sceneKey: string): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    const policy = resolveGeneratePolicy(this.pieceId);
+    const statusEl = document.getElementById("gen-status");
+    const token = ++this.generateWarmupToken;
+    this.pushStudioParamsToLivePieces();
+    this.sceneApplyPhase = "presenting";
+    this.session.primeGenerateStillFrame();
+
+    const steps = policy.interactive === "warmup" ? (policy.warmupSteps ?? 0) : 0;
+    if (steps > 0 && this.generateReadySceneKey !== sceneKey) {
+      this.generating = true;
+      statusEl?.classList.add("visible");
+      if (statusEl) {
+        statusEl.textContent =
+          policy.interactive === "warmup" ? "Initializing…" : "Priming preview…";
+      }
+      const chunk = policy.warmupChunk ?? Math.min(20, steps);
+      const result = await this.session.runGenerateWarmup({
+        steps,
+        chunkSteps: chunk,
+        isCancelled: () =>
+          token !== this.generateWarmupToken || requestGen !== this.sceneGeneration,
+        onProgress: (done, total) => {
+          if (statusEl) statusEl.textContent = `Warming up ${done} / ${total} steps`;
+        },
+      });
+      if (token !== this.generateWarmupToken || requestGen !== this.sceneGeneration) return;
+      this.lastWarmupStepsCompleted = result.stepsCompleted;
+      this.generateReadySceneKey = sceneKey;
+      this.generating = false;
+      statusEl?.classList.remove("visible");
+      if (statusEl) statusEl.textContent = "";
+    } else if (this.generateReadySceneKey !== sceneKey) {
+      this.generateReadySceneKey = sceneKey;
+    }
+
+  }
+
+  /** After stage viewport fit — render, present, freeze (viewport must be final). */
+  private async finalizeLiveGeneratePresent(requestGen: number): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    const kind = rendererKindFor(this.pieceId, "generate");
+    const policy = resolveGeneratePolicy(this.pieceId);
+    const warmupPrime = policy.interactive === "warmup" ? Math.min(64, policy.warmupSteps ?? 32) : 0;
+    let prime =
+      kind === "shader-native" || kind === "wasm"
+        ? 32
+        : kind === "webgl-stateful"
+          ? Math.max(8, warmupPrime)
+          : 16;
+    if (policy.interactive === "warmup" && (kind === "shader-native" || kind === "wasm")) {
+      prime = Math.max(prime, Math.min(48, policy.warmupSteps ?? 32));
+    }
+    if (this.pieceId.includes("mashup")) prime = Math.max(prime, 48);
+    await this.session.presentAndFreezeGenerate(prime);
+    const ok = await this.awaitMeaningfulLivePresent(requestGen);
+    if (!ok && requestGen === this.sceneGeneration) {
+      this.showFailureBanner(
+        "Generate preview failed",
+        `Piece: ${this.pieceId}\nCould not present a meaningful frame to the stage.`,
+      );
+    }
+  }
+
+  private async applyLiveSceneModeOnly(
+    desired: StudioDesiredState,
+    requestGen: number,
+  ): Promise<void> {
+    if (!this.session || requestGen !== this.sceneGeneration) return;
+    const sceneKey = this.interactiveSceneKey(desired);
+    this.stopApiAnim({ abort: true });
+    this.preview.cancel();
+    this.canvas.classList.remove("hidden-live");
+    document.getElementById("generate-preview")?.classList.remove("visible");
+    document.getElementById("gen-status")?.classList.remove("visible");
+
+    this.pushStudioParamsToLivePieces();
+    this.syncColorToParams();
+
+    if (desired.mode === "generate") {
+      this.playing = false;
+      this.session.runtime.transport.stop();
+      if (this.generateReadySceneKey !== sceneKey) {
+        await this.finishLiveGenerate(requestGen, sceneKey);
+      } else {
+        this.sceneApplyPhase = "presenting";
+      }
+    } else if (desired.mode === "animate") {
+      this.playing = true;
+      this.ensureAnimateTransport();
+      const methodForSpec =
+        this.animationMethodId === RANDOM_METHOD_ID
+          ? this.activeAnimationMethodId
+          : this.animationMethodId;
+      this.animationSpec = resolveLivePerformanceMethodSpec(
+        this.pieceId,
+        methodForSpec,
+        this.mode,
+      );
+      this.session.setAnimationSpec(this.animationSpec, {
+        preserveTime: false,
+        performanceMode: true,
+      });
+      this.applyStudioPerformanceClock();
+      this.session.runtime.setSimulationPaused(false);
+    } else if (desired.mode === "react") {
+      this.playing = true;
+      this.ensureAnimateTransport();
+      this.applyStudioPerformanceClock();
+      this.session.runtime.setSimulationPaused(false);
+    }
+
+    if (desired.mode === "generate" && studioSurface(desired.pieceId, "generate") === "live") {
+      this.session.fitStageViewport();
+      await this.finalizeLiveGeneratePresent(requestGen);
+    } else {
+      this.kickLiveSurface();
+      if (desired.mode === "animate" || desired.mode === "react") {
+        this.recordMeaningfulPresentIfVisible(requestGen);
+      }
+    }
+    this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
+    this.syncChrome();
+  }
+
   private async runApplyPieceScene(requestGen: number): Promise<void> {
     if (requestGen !== this.sceneGeneration) return;
+    this.session?.exitGeneratePresentationFreeze();
+    this.sceneApplyPhase = "loading";
+    this.sceneApplyStartedMs = performance.now();
+    this.generateWarmupToken += 1;
     this.hideBrowserMotionPane();
     await this.browserPreview?.teardown();
     if (requestGen !== this.sceneGeneration) return;
@@ -853,11 +1200,16 @@ export class StudioApp {
       this.animBackend = "buffered-api";
       if (this.mode === "animate" && this.playing) {
         this.syncApiPreviewAnimate(true);
-      } else {
-        this.stopApiAnim({ abort: this.mode !== "animate" });
-        this.scheduleGeneratePreview();
+        this.syncChrome();
+        this.markSceneCommitted(requestGen);
+        return;
       }
+      this.stopApiAnim({ abort: this.mode !== "animate" });
+      this.sceneApplyPhase = "presenting";
+      await this.finishApiGeneratePreview(requestGen);
       this.syncChrome();
+      if (requestGen !== this.sceneGeneration) return;
+      this.sceneApplyPhase = "frozen";
       this.markSceneCommitted(requestGen);
       return;
     }
@@ -869,7 +1221,20 @@ export class StudioApp {
     previewEl?.classList.remove("visible");
     statusEl?.classList.remove("visible");
     this.animBackend = String(rendererKindFor(desired.pieceId, desired.mode) ?? "live");
-    if (!this.session) return;
+    if (!this.session) {
+      this.resolveSceneApply(requestGen, "idle");
+      return;
+    }
+
+    const sceneKey = this.interactiveSceneKey(desired);
+    if (
+      sceneKey === this.loadedInteractiveSceneKey &&
+      this.session.runtime.getScene()
+    ) {
+      await this.applyLiveSceneModeOnly(desired, requestGen);
+      this.markSceneCommitted(requestGen);
+      return;
+    }
 
     const liveMode = desired.mode === "react" ? "react" : "animate";
     const set = buildStudioSetDef(desired);
@@ -887,21 +1252,13 @@ export class StudioApp {
           `Piece: ${desired.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      this.resolveSceneApply(requestGen, "idle");
       return;
     }
     if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
-    for (const layer of (set.protocol_version === "0.1.0" ? set.scenes[0]?.layers : []) ?? []) {
-      for (const [k, v] of Object.entries(this.params)) {
-        if (typeof v === "number") {
-          this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
-        }
-      }
-      const lp = this.session.runtime.getPiece(layer.id) as
-        | { setColorConfig?: (c: ColorConfig) => void }
-        | undefined;
-      lp?.setColorConfig?.(this.color);
-    }
+    this.sceneApplyPhase = "warming";
+    this.pushStudioParamsToLivePieces();
     if (this.pendingImportState) {
       const piece = this.session.runtime.getPiece("L0") as
         | {
@@ -924,7 +1281,6 @@ export class StudioApp {
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
-      this.session.runtime.setSimulationPaused(true);
     } else if (this.mode === "animate" || this.mode === "react") {
       this.ensureAnimateTransport();
     } else if (this.playing) {
@@ -953,10 +1309,25 @@ export class StudioApp {
       });
       this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
+      const extra = Math.max(0, this.animatePrimeFrameCount() - 4);
+      if (extra > 0) {
+        await this.session.paintFramesAsync(extra, performance.now());
+      }
+    } else if (this.mode === "generate") {
+      if (studioSurface(this.pieceId, this.mode) === "live") {
+        this.session.setAnimationSpec(
+          normalizeSpecForLivePerformance(this.pieceId, this.animationSpec, this.mode),
+          { preserveTime: true, performanceMode: true },
+        );
+      }
+      await this.finishLiveGenerate(requestGen, sceneKey);
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
     }
     this.session.fitStageViewport();
+    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
+      await this.finalizeLiveGeneratePresent(requestGen);
+    }
     this.syncCompositionLayerAnimations();
     if (!this.compositionId) {
       const norm = normalizeAnimationMethodForPiece(
@@ -982,12 +1353,24 @@ export class StudioApp {
         });
       }
     }
-    this.kickLiveSurface();
+    this.loadedInteractiveSceneKey = sceneKey;
+    if (this.mode === "animate" || this.mode === "react") {
+      this.kickLiveSurface();
+      this.recordMeaningfulPresentIfVisible(requestGen);
+    } else if (!(this.mode === "generate" && this.session?.isGeneratePresentationFrozen())) {
+      this.kickLiveSurface();
+    }
+    this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
     this.lastVisualChangeMs = Date.now();
     this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
+    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
+      this.sceneApplyPhase = this.presentSceneGeneration === requestGen ? "frozen" : "live";
+    } else {
+      this.sceneApplyPhase = "live";
+    }
     this.syncChrome();
     this.markSceneCommitted(requestGen);
   }
@@ -1084,10 +1467,10 @@ export class StudioApp {
       () => {
         this.generating = true;
         status?.classList.add("visible");
-        if (status) status.textContent = "Draft…";
+        if (status) status.textContent = "Rendering preview…";
       },
       (result) => {
-        paint(result, "Draft — refining…");
+        paint(result, "Preview ready — refining…");
         runPreview();
       },
       () => {
@@ -1645,7 +2028,13 @@ export class StudioApp {
     );
   }
 
-  applyAnimationMethodId(methodId: string): void {
+  /** Construction arcs need a fresh timeline; camera/parameter methods preserve live clock. */
+  private animationMethodChangeResetsClock(methodId: string, spec: AnimationSpec): boolean {
+    if (methodId === "construction" || methodId === "deconstruction") return true;
+    return hasComponent(spec, "construction");
+  }
+
+  applyAnimationMethodId(methodId: string, opts?: { preserveTime?: boolean }): void {
     if (methodId === RANDOM_METHOD_ID) {
       this.animationMethodId = RANDOM_METHOD_ID;
       this.initRandomSequencer();
@@ -1662,7 +2051,11 @@ export class StudioApp {
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
-      this.syncAnimationSpecToSession(true, { resetTime: true });
+      const resetTime =
+        opts?.preserveTime === true
+          ? false
+          : this.animationMethodChangeResetsClock(methodId, this.animationSpec);
+      this.syncAnimationSpecToSession(true, { resetTime });
     }
     this.renderConfig();
   }
@@ -1755,6 +2148,8 @@ export class StudioApp {
     this.prefs.pieceId = pieceId;
     this.recipeDigest = "";
     this.renderDigest = "";
+    this.generateReadySceneKey = "";
+    this.loadedInteractiveSceneKey = "";
     if (this.mode === "animate" || this.mode === "react") {
       this.playing = true;
     }
@@ -1797,6 +2192,7 @@ export class StudioApp {
     }
     this.seed = cryptoSeed();
     this.prefs.seed = this.seed;
+    this.generateReadySceneKey = "";
     if (this.mode === "animate" || this.mode === "react") {
       this.playing = true;
     }
@@ -1998,13 +2394,16 @@ export class StudioApp {
             this.togglePlay();
             this.renderConfig();
             break;
-          case "cfg-restart-scene":
-            void this.restartScenePreview();
-            break;
-          default:
-            break;
-        }
-      },
+        case "cfg-restart-scene":
+          void this.restartScenePreview();
+          break;
+        case "scene-variation":
+          void this.randomizeSceneVariation();
+          break;
+        default:
+          break;
+      }
+    },
       true,
     );
     document.addEventListener("change", (ev) => {
@@ -2012,13 +2411,94 @@ export class StudioApp {
       if (sel.id === "scene-load" && sel.value && document.getElementById("config")?.contains(sel)) {
         void this.loadSceneRecipeById(sel.value);
       }
+      if (sel.id === "scene-behavior" && document.getElementById("config")?.contains(sel)) {
+        void this.applySceneBehaviorPreset((sel.value || "") as BehaviorPresetId | "");
+      }
     });
     document.addEventListener("input", (ev) => {
       const input = ev.target as HTMLInputElement;
       if (input.id === "scene-name" && document.getElementById("config")?.contains(input)) {
         this.sceneAuthoring = { ...this.sceneAuthoring, sceneName: input.value };
       }
+      const macro = input.getAttribute("data-macro") as CreativeMacroId | null;
+      if (macro && document.getElementById("config")?.contains(input)) {
+        this.sceneAuthoringSemantics = {
+          ...this.sceneAuthoringSemantics,
+          creativeMacros: {
+            ...this.sceneAuthoringSemantics.creativeMacros,
+            [macro]: Number(input.value),
+          },
+        };
+        void this.applyCreativeMacroAuthoring(false);
+      }
     });
+  }
+
+  /** Push numeric params to live pieces without rebuilding the whole scene graph. */
+  private syncLiveParamsFromAuthoring(): void {
+    if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id);
+      if (!piece) continue;
+      for (const [k, v] of Object.entries(this.params)) {
+        if (typeof v === "number") piece.setParameter(k, v);
+        else if (typeof v === "string" || typeof v === "boolean") piece.setParameter(k, v);
+      }
+      const lp = piece as { setColorConfig?: (c: ColorConfig) => void };
+      lp.setColorConfig?.(this.color);
+    }
+    this.session.refreshAnimationBaseParams();
+    this.kickLiveSurface();
+  }
+
+  private async applyCreativeMacroAuthoring(reloadScene = true): Promise<void> {
+    const applied = applyCreativeMacros(
+      this.pieceId,
+      this.params,
+      this.meta,
+      this.sceneAuthoringSemantics.creativeMacros,
+      this.sceneAuthoringSemantics.behaviorPresetId,
+    );
+    this.params = applied.params;
+    this.meta = applied.meta;
+    if (reloadScene) {
+      await this.applyPieceScene();
+    } else {
+      this.syncLiveParamsFromAuthoring();
+    }
+    this.renderConfig();
+  }
+
+  async applySceneBehaviorPreset(presetId: BehaviorPresetId | ""): Promise<void> {
+    this.sceneAuthoringSemantics = { ...this.sceneAuthoringSemantics, behaviorPresetId: presetId };
+    if (!presetId) {
+      this.applyAnimationMethodId(defaultAnimationMethodId(this.pieceId), { preserveTime: true });
+      await this.applyCreativeMacroAuthoring(false);
+      this.renderConfig();
+      return;
+    }
+    const compat = behaviorCompatibility(this.pieceId, presetId);
+    if (!compat.ok) {
+      toast(compat.reason);
+      this.renderConfig();
+      return;
+    }
+    await this.applyCreativeMacroAuthoring(false);
+    const specPreview = resolveLivePerformanceMethodSpec(this.pieceId, compat.methodId, this.mode);
+    const preserveTime = !this.animationMethodChangeResetsClock(compat.methodId, specPreview);
+    this.applyAnimationMethodId(compat.methodId, { preserveTime });
+    toast(`Behavior · ${compat.preset.label}`);
+  }
+
+  async randomizeSceneVariation(): Promise<void> {
+    const next = this.sceneAuthoringSemantics.variationIndex + 1;
+    this.sceneAuthoringSemantics = { ...this.sceneAuthoringSemantics, variationIndex: next };
+    this.seed = variationSeed(this.seed, next);
+    this.params = applyVariationToParams(this.params, this.pieceId, this.seed, next);
+    await this.applyCreativeMacroAuthoring(true);
+    toast(`Variation · seed ${this.seed}`);
   }
 
   private sceneRecipeCapture() {
@@ -2036,6 +2516,11 @@ export class StudioApp {
       generateFrame: this.mode === "generate" ? this.frame : 0,
       meta: { ...this.meta },
       pflStyleId: this.pflStyleId,
+      authoring: {
+        behaviorPresetId: this.sceneAuthoringSemantics.behaviorPresetId,
+        creativeMacros: { ...this.sceneAuthoringSemantics.creativeMacros },
+        variationIndex: this.sceneAuthoringSemantics.variationIndex,
+      },
     };
   }
 
@@ -2123,6 +2608,7 @@ export class StudioApp {
     this.frame = capture.generateFrame;
     this.meta = { ...capture.meta };
     this.pflStyleId = capture.pflStyleId;
+    this.sceneAuthoringSemantics = { ...capture.authoring };
     this.playing = true;
     this.syncModebarState();
     this.syncWorkflowNavState();
@@ -2828,7 +3314,11 @@ export class StudioApp {
     if (!this.locked.has("color") && !this.locked.has("hue")) {
       this.params.hue = hexToHueTurn(this.color.primary.value);
     }
-    this.session?.runtime.getPiece("L0")?.setParameter("hue", Number(this.params.hue));
+    const scene = this.session?.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      this.session?.runtime.getPiece(layer.id)?.setParameter("hue", Number(this.params.hue));
+    }
   }
 
   private applyColorPreset(presetId: string): void {
@@ -3088,60 +3578,90 @@ export class StudioApp {
     const header = document.getElementById("browser-header");
     const host = document.getElementById("browser-list-host");
     if (!header || !host) return;
-    const filters: { id: PerformanceBrowserFilter; label: string }[] = [
-      { id: "curated", label: "curated" },
-      { id: "shortlist", label: "★ shortlist" },
-      { id: "midnight", label: "midnight" },
-      { id: "intense", label: "intense" },
-      { id: "calm", label: "calm" },
-      { id: "dense", label: "dense" },
-      { id: "geometry", label: "geometry" },
-      { id: "all-animated", label: "all animate" },
-    ];
-    const list = filterPerformanceCatalog(
-      this.pieces,
-      this.performanceFilter,
-      this.performanceFavorites,
-    );
-    const cycleLabel = this.performanceCycleFavoritesOnly ? "cycle ★ only" : "cycle curated";
-    const packCycleLabel = this.performanceCyclePackOrder ? "pack order ON" : "cycle pack order";
-    header.innerHTML = `
+    const inCreateCatalog = this.workflow === "create";
+    type BrowserRow = PieceInfo & { piece_id: string };
+    let list: BrowserRow[];
+    if (inCreateCatalog) {
+      list = filterCreateCatalogPieces(
+        this.pieces,
+        this.mode,
+        this.createCatalogFamilyFilter,
+      ) as BrowserRow[];
+      const families = createCatalogFamilyOptions(this.pieces);
+      header.innerHTML = `
+      <h1 style="font-family:Syne,sans-serif;margin:0 0 0.25rem">Visual library</h1>
+      <p class="browser-lede">Pick a foundation · hover for motion preview (one at a time).</p>
+      <div class="chips" id="filters"></div>
+    `;
+      host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
+      const chips = header.querySelector("#filters")!;
+      for (const f of families) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = f === "all" ? "all families" : f;
+        if (f === this.createCatalogFamilyFilter) b.classList.add("on");
+        b.addEventListener("click", () => {
+          this.createCatalogFamilyFilter = f;
+          this.renderBrowser();
+        });
+        chips.appendChild(b);
+      }
+    } else {
+      const filters: { id: PerformanceBrowserFilter; label: string }[] = [
+        { id: "curated", label: "curated" },
+        { id: "shortlist", label: "★ shortlist" },
+        { id: "midnight", label: "midnight" },
+        { id: "intense", label: "intense" },
+        { id: "calm", label: "calm" },
+        { id: "dense", label: "dense" },
+        { id: "geometry", label: "geometry" },
+        { id: "all-animated", label: "all animate" },
+      ];
+      list = filterPerformanceCatalog(
+        this.pieces,
+        this.performanceFilter,
+        this.performanceFavorites,
+      ) as BrowserRow[];
+      const cycleLabel = this.performanceCycleFavoritesOnly ? "cycle ★ only" : "cycle curated";
+      const packCycleLabel = this.performanceCyclePackOrder ? "pack order ON" : "cycle pack order";
+      header.innerHTML = `
       <h1 style="font-family:Syne,sans-serif;margin:0 0 0.25rem">Performance catalog</h1>
       <p class="browser-lede">Poster + hover motion preview (one at a time). Shortlist · Animate · Pack.</p>
       <div class="chips" id="filters"></div>
       <button type="button" id="browser-cycle-toggle" class="browser-mini">${cycleLabel}</button>
       <button type="button" id="browser-pack-cycle-toggle" class="browser-mini">${packCycleLabel}</button>
     `;
-    host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
-    const chips = header.querySelector("#filters")!;
-    for (const f of filters) {
-      const b = document.createElement("button");
-      b.type = "button";
-      b.textContent = f.label;
-      if (f.id === this.performanceFilter) b.classList.add("on");
-      b.addEventListener("click", () => {
-        this.performanceFilter = f.id;
+      host.innerHTML = `<div id="piece-list" class="piece-grid"></div>`;
+      const chips = header.querySelector("#filters")!;
+      for (const f of filters) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = f.label;
+        if (f.id === this.performanceFilter) b.classList.add("on");
+        b.addEventListener("click", () => {
+          this.performanceFilter = f.id;
+          this.renderBrowser();
+        });
+        chips.appendChild(b);
+      }
+      header.querySelector("#browser-cycle-toggle")?.addEventListener("click", () => {
+        this.performanceCycleFavoritesOnly = !this.performanceCycleFavoritesOnly;
+        if (this.performanceCycleFavoritesOnly) this.performanceCyclePackOrder = false;
+        this.persist();
+        this.initVisualSequencer();
         this.renderBrowser();
       });
-      chips.appendChild(b);
+      header.querySelector("#browser-pack-cycle-toggle")?.addEventListener("click", () => {
+        this.performanceCyclePackOrder = !this.performanceCyclePackOrder;
+        if (this.performanceCyclePackOrder) this.performanceCycleFavoritesOnly = false;
+        this.persist();
+        this.initVisualSequencer();
+        this.renderBrowser();
+      });
     }
-    header.querySelector("#browser-cycle-toggle")?.addEventListener("click", () => {
-      this.performanceCycleFavoritesOnly = !this.performanceCycleFavoritesOnly;
-      if (this.performanceCycleFavoritesOnly) this.performanceCyclePackOrder = false;
-      this.persist();
-      this.initVisualSequencer();
-      this.renderBrowser();
-    });
-    header.querySelector("#browser-pack-cycle-toggle")?.addEventListener("click", () => {
-      this.performanceCyclePackOrder = !this.performanceCyclePackOrder;
-      if (this.performanceCyclePackOrder) this.performanceCycleFavoritesOnly = false;
-      this.persist();
-      this.initVisualSequencer();
-      this.renderBrowser();
-    });
     const listHost = host.querySelector("#piece-list")!;
     for (const p of list) {
-      const meta = performanceMeta(p.piece_id);
+      const meta = inCreateCatalog ? null : performanceMeta(p.piece_id);
       const div = document.createElement("div");
       div.className = "piece" + (p.piece_id === this.pieceId ? " selected" : "");
       div.dataset.pieceId = p.piece_id;
@@ -3157,14 +3677,25 @@ export class StudioApp {
           : !thumb
             ? "preview…"
             : "";
-      const badges = [
-        meta?.density,
-        meta?.motion,
-        ...(meta?.roles.filter((r) => r === "midnight" || r === "peak").slice(0, 2) ?? []),
-      ]
-        .filter(Boolean)
-        .map((b) => `<span class="badge">${b}</span>`)
-        .join("");
+      const badges = inCreateCatalog
+        ? [
+            pieceFamilyLabel(p.piece_id),
+            `${compatibleBehaviorCount(p.piece_id)} behaviors`,
+          ]
+            .map((b) => `<span class="badge">${b}</span>`)
+            .join("")
+        : [
+            meta?.density,
+            meta?.motion,
+            ...(meta?.roles.filter((r) => r === "midnight" || r === "peak").slice(0, 2) ?? []),
+          ]
+            .filter(Boolean)
+            .map((b) => `<span class="badge">${b}</span>`)
+            .join("");
+      const displayName = pieceDisplayLabel(p);
+      const packBtn = inCreateCatalog
+        ? ""
+        : `<button type="button" data-pack="${p.piece_id}">+ Pack</button>`;
       div.innerHTML = `
         <div class="thumb-wrap">
           <img class="thumb" data-piece="${p.piece_id}" alt="" ${thumb ? `src="${thumb}" data-loaded="1"` : ""} />
@@ -3172,14 +3703,14 @@ export class StudioApp {
         </div>
         <div class="piece-body">
           <div class="name-row">
-            <span class="name">${p.title || p.name || p.piece_id.split("/").pop()}</span>
+            <span class="name">${displayName}</span>
             <button type="button" class="star ${starred ? "on" : ""}" data-star="${p.piece_id}" title="Performance shortlist">★</button>
           </div>
           <div class="badges">${badges}</div>
-          <div class="meta">${meta?.character ?? p.description ?? p.piece_id}</div>
+          <div class="meta">${inCreateCatalog ? (p.description ?? p.piece_id) : (meta?.character ?? p.description ?? p.piece_id)}</div>
           <div class="piece-actions">
             <button type="button" data-animate="${p.piece_id}">Animate</button>
-            <button type="button" data-pack="${p.piece_id}">+ Pack</button>
+            ${packBtn}
           </div>
         </div>`;
       div.querySelector(`[data-star="${p.piece_id}"]`)?.addEventListener("click", (ev) => {
@@ -3194,7 +3725,6 @@ export class StudioApp {
         ev.stopPropagation();
         void this.setPiece(p.piece_id).then(() => this.addCurrentToPack("animation"));
       });
-      const displayName = p.title || p.name || p.piece_id.split("/").pop() || p.piece_id;
       div.addEventListener("click", () => void this.setPiece(p.piece_id));
       div.addEventListener("mouseenter", () => this.scheduleBrowserMotion(p.piece_id, displayName));
       div.addEventListener("mouseleave", () => {
@@ -3206,7 +3736,7 @@ export class StudioApp {
       });
       listHost.appendChild(div);
     }
-    if (this.browserVisible) {
+    if (this.browserVisible && this.workflow === "create" && this.setScore.surface === "idle") {
       this.ensureBrowserPreview();
       const need = list
         .map((p) => p.piece_id)
@@ -3335,10 +3865,27 @@ export class StudioApp {
   renderConfig(): void {
     const el = document.getElementById("config");
     if (!el) return;
-    const pieceOptions = this.pieces
+    let catalogPieces = filterCreateCatalogPieces(
+      this.pieces,
+      this.mode,
+      this.createCatalogFamilyFilter,
+    );
+    if (!catalogPieces.some((p) => p.piece_id === this.pieceId)) {
+      const current = this.pieces.find((p) => p.piece_id === this.pieceId);
+      if (current) catalogPieces = [current, ...catalogPieces];
+    }
+    const familyFilterOptions = createCatalogFamilyOptions(this.pieces)
+      .map(
+        (f) =>
+          `<option value="${f}" ${f === this.createCatalogFamilyFilter ? "selected" : ""}>${
+            f === "all" ? "All families" : f.charAt(0).toUpperCase() + f.slice(1)
+          }</option>`,
+      )
+      .join("");
+    const pieceOptions = catalogPieces
       .map(
         (p) =>
-          `<option value="${p.piece_id}" ${p.piece_id === this.pieceId ? "selected" : ""}>${p.piece_id}</option>`,
+          `<option value="${p.piece_id}" ${p.piece_id === this.pieceId ? "selected" : ""}>${pieceDisplayLabel(p)} · ${pieceFamilyLabel(p.piece_id)}</option>`,
       )
       .join("");
     const resOptions = RESOLUTION_PRESETS.map(
@@ -3346,6 +3893,16 @@ export class StudioApp {
         `<option value="${r.id}" ${r.id === this.exportPreset ? "selected" : ""}>${r.label}</option>`,
     ).join("");
 
+    const behaviorList = listCompatibleBehaviors(this.pieceId).map((b) => ({
+      id: b.id,
+      label: b.label,
+      description: b.description,
+      disabled: b.disabled,
+      reason: b.reason,
+      selected: this.sceneAuthoringSemantics.behaviorPresetId === b.id,
+    }));
+    const behaviorAvailable = behaviorList.filter((b) => !b.disabled);
+    const behaviorUnavailable = behaviorList.filter((b) => b.disabled);
     const scenePanel = renderCreateScenePanel({
       sceneName: this.sceneAuthoring.sceneName,
       dirty: this.isSceneAuthoringDirty(),
@@ -3356,12 +3913,18 @@ export class StudioApp {
       activeSceneId: this.sceneAuthoring.activeSceneId,
       canAddToSet: this.canAddSceneToSet(),
       addToSetHint: this.addToSetHint(),
+      behaviorAvailable,
+      behaviorUnavailable,
+      macros: this.sceneAuthoringSemantics.creativeMacros,
+      showCreativeControls: this.mode === "animate" || this.mode === "react",
     });
 
     el.innerHTML = `
       ${scenePanel}
       <label>Piece</label>
+      <select id="cfg-piece-family">${familyFilterOptions}</select>
       <select id="cfg-piece">${pieceOptions}</select>
+      <p class="muted">Open <strong>Pieces</strong> below for thumbnails and motion preview.</p>
       <details class="advanced" id="create-advanced">
       <summary>Advanced</summary>
       <label>Seed</label>
@@ -3728,6 +4291,11 @@ export class StudioApp {
 
     el.querySelector("#scene-name")?.addEventListener("change", () => this.renderConfig());
 
+    el.querySelector("#cfg-piece-family")?.addEventListener("change", (e) => {
+      this.createCatalogFamilyFilter = (e.target as HTMLSelectElement).value;
+      this.renderConfig();
+      if (this.browserVisible) this.renderBrowser();
+    });
     el.querySelector("#cfg-piece")?.addEventListener("change", (e) => {
       void this.setPiece((e.target as HTMLSelectElement).value);
     });
@@ -4217,7 +4785,10 @@ export class StudioApp {
           stallBanner.classList.remove("visible");
         }
       }
-      if (warmupMs > 2500 && diag.rafStalled && !document.hidden) {
+      const sceneSettled = this.committedSceneGeneration === this.sceneGeneration;
+      const livePhase =
+        (this.sceneApplyPhase === "live" || this.sceneApplyPhase === "frozen") && !this.generating;
+      if (warmupMs > 2500 && sceneSettled && livePhase && diag.rafStalled && !document.hidden) {
         this.stallError = [
           "RAF STALLED",
           `piece: ${this.pieceId}`,

@@ -4,6 +4,7 @@
 
 import type { SceneDef } from "../../live/types";
 import {
+  defaultSceneAuthoringSemantics,
   parseSceneRecipe,
   recipeFromLegacySceneDef,
   type PersistedSceneRecipeV1,
@@ -33,7 +34,11 @@ export function loadSceneLibrary(): SceneLibraryState {
     const scenes: Record<string, PersistedSceneRecipeV1> = {};
     for (const [id, entry] of Object.entries(parsed.scenes)) {
       const v = parseSceneRecipe(entry);
-      if (v.ok) scenes[id] = v.recipe;
+      if (v.ok) {
+        const recipe = v.recipe;
+        if (!recipe.authoring) recipe.authoring = defaultSceneAuthoringSemantics();
+        scenes[id] = recipe;
+      }
     }
     return {
       version: 1,

@@ -61,6 +61,19 @@ describe("set performance integration", () => {
     expect(mid.progress).toBeLessThan(0.6);
   });
 
+  it("morph between different piece ids exposes dual destination pass", () => {
+    const model = resolveSetModel(fixture);
+    const a = model.scenes[0]!;
+    const b = model.scenes[1]!;
+    expect(a.layers[0]?.piece).not.toBe(b.layers[0]?.piece);
+    const mid = morphScenes(a, b, 0.5);
+    const layer = mid.layers[0]!;
+    expect(layer.morphDest).toBeDefined();
+    expect(layer.morphDest!.piece).toBe(b.layers[0]!.piece);
+    expect(layer.presence).toBeGreaterThan(0.4);
+    expect(layer.morphDest!.presence).toBeGreaterThan(0.4);
+  });
+
   it("capture morph candidate does not require set mutation", () => {
     const model = resolveSetModel(fixture);
     const before = JSON.stringify(fixture);

@@ -95,9 +95,9 @@ export async function createFieldFlowLivePiece(
   const loc = (n: string) => gl.getUniformLocation(prog, n);
   const kind = pieceId.includes("nebula") ? 1 : pieceId.includes("landscape") ? 2 : 0;
   const params: Record<string, number> = {
-    density: 0.8,
+    density: kind === 1 ? 0.95 : 0.8,
     chaos: 0.3,
-    zoom: 1,
+    zoom: kind === 2 ? 0.85 : 1,
     hue: 0.55,
   };
   let last: FrameState = {

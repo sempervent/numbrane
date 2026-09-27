@@ -138,10 +138,10 @@ const MASHUP_BUILDERS: Record<
       {
         id: "L1",
         piece: "fractals/sdf-raymarch2d",
-        opacity: 0.38,
-        blend: "screen",
+        opacity: 0.26,
+        blend: "multiply",
         seed: seed ^ 0x165667b1,
-        parameters: { ...params, zoom: 1.2 },
+        parameters: { ...params, zoom: 1.15, density: 0.55 },
       },
     ]),
 };

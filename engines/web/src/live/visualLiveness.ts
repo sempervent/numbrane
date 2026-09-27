@@ -22,6 +22,7 @@ const MIN_WARMUP_SEC = 2.5;
 export class VisualLivenessWatchdog {
   private lastDigest = "";
   private lastChangePerfMs = 0;
+  private lastAnimationTimeSec = 0;
   private digestChanges = 0;
   private warmedUp = false;
   private stallReason = "";
@@ -30,10 +31,21 @@ export class VisualLivenessWatchdog {
   reset(digest: string, nowPerfMs: number): void {
     this.lastDigest = digest;
     this.lastChangePerfMs = nowPerfMs;
+    this.lastAnimationTimeSec = 0;
     this.digestChanges = 0;
     this.warmedUp = false;
     this.stallReason = "";
     this.recoveringUntilMs = 0;
+  }
+
+  /** Slow-evolving visuals may keep the same digest while animation time still advances. */
+  noteAnimationAdvance(animationTimeSec: number, nowPerfMs: number, playing: boolean): void {
+    if (!playing) return;
+    if (animationTimeSec > this.lastAnimationTimeSec + 0.04) {
+      this.lastAnimationTimeSec = animationTimeSec;
+      this.lastChangePerfMs = nowPerfMs;
+      this.stallReason = "";
+    }
   }
 
   noteDigest(digest: string, nowPerfMs: number, playing: boolean, paused: boolean): void {

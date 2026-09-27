@@ -26,6 +26,7 @@ import {
 import { addSceneToSet } from "../src/studio/setScore/edges";
 import { emptySetV2 } from "../src/studio/setScore/controller";
 import { defaultColorConfig } from "../src/studio/color/model";
+import { defaultSceneAuthoringSemantics } from "../src/studio/scene/sceneRecipe";
 
 function sampleCapture(pieceId = "fractals/strange-attractors") {
   const method = defaultAnimationMethodId(pieceId);
@@ -55,6 +56,7 @@ function sampleCapture(pieceId = "fractals/strange-attractors") {
       massive: 0.5,
     },
     pflStyleId: "",
+    authoring: defaultSceneAuthoringSemantics(),
   };
 }
 

@@ -125,7 +125,15 @@ const PARAMETER_DRIFT: AnimationMethod = {
   label: "Parameter Drift",
   category: "native",
   source: "composite",
-  compatibleWith: (p) => p.includes("fractal") || p.includes("escape") || p.includes("sdf"),
+  compatibleWith: (p) => {
+    if (p.startsWith("geometry/") && !p.includes("lsystem")) return false;
+    const caps = animationCapabilitiesFor(p);
+    return (
+      caps.sources.includes("generative") ||
+      caps.sources.includes("parameters") ||
+      caps.sources.includes("composite")
+    );
+  },
   defaultDuration: 12,
   defaultEndBehavior: "continuous",
   apply: () => {
@@ -162,6 +170,30 @@ const NATIVE_METHODS: AnimationMethod[] = [
   nativeMethod("plasma-evolution", "Plasma Evolution", "generative", "continuous", "continuous", 0, (p) =>
     p === "audiovisual/nodes" || p === "reference/audiovisual-nodes",
   ),
+  nativeMethod(
+    "generative-drift",
+    "Generative Drift",
+    "generative",
+    "drift",
+    "continuous",
+    0,
+    (p) => {
+      const caps = animationCapabilitiesFor(p);
+      return caps.sources.includes("generative") || caps.sources.includes("composite");
+    },
+  ),
+  nativeMethod(
+    "generative-flow",
+    "Generative Flow",
+    "generative",
+    "continuous",
+    "continuous",
+    0,
+    (p) => {
+      const caps = animationCapabilitiesFor(p);
+      return caps.sources.includes("generative") || caps.sources.includes("composite");
+    },
+  ),
   PARAMETER_DRIFT,
 ];
 
@@ -185,7 +217,10 @@ export function getAnimationMethod(pieceId: string, methodId: string): Animation
 
 export function defaultAnimationMethodId(pieceId: string): string {
   const methods = animationMethodsForPiece(pieceId);
-  const native = methods.find((m) => m.category === "native");
+  const generic = new Set(["generative-drift", "generative-flow", "parameter-drift"]);
+  const native =
+    methods.find((m) => m.category === "native" && !generic.has(m.id)) ??
+    methods.find((m) => m.category === "native");
   return native?.id ?? "pan-left-right";
 }
 

@@ -68,8 +68,8 @@ export async function createStrangeAttractorLivePiece(
     density: 0.7,
     chaos: 0.3,
     hue: 0.55,
-    exposure: 1.2,
-    ink: 1.4,
+    exposure: 1.45,
+    ink: 1.75,
   };
   let last: FrameState = {
     frame: 0,

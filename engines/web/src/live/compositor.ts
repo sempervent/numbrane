@@ -271,7 +271,7 @@ export class Compositor {
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_contrast"), post.contrast ?? 1);
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_saturation"), post.saturation ?? 1);
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_hue"), post.hue_shift ?? 0);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_vignette"), post.vignette ?? 0.35);
+    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_vignette"), post.vignette ?? 0);
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_bloom"), post.bloom ?? 0.15);
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_feedbackAmt"), post.feedback ?? 0.25);
     gl.uniform1f(gl.getUniformLocation(this.postProg, "u_feedbackZoom"), post.feedback_zoom ?? 1.01);

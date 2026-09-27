@@ -2,7 +2,7 @@
  * Perceptual visual quality — detect "technically changing but visually dead" output.
  */
 
-import type { PixelFrame } from "./pixelMetrics";
+import { edgeEnergyFromGrid, type PixelFrame } from "./pixelMetrics";
 import type { PerformanceDensity, PerformanceMotion } from "../studio/performance/catalog";
 
 export type VisualQualityStatus =
@@ -26,35 +26,13 @@ export type VisualQualitySnapshot = {
   reason: string;
 };
 
-export function edgeEnergyFromGrid(pixels: Uint8Array, gridW: number, gridH: number): number {
-  const luma = (i: number) => {
-    const o = i * 4;
-    return pixels[o]! * 0.299 + pixels[o + 1]! * 0.587 + pixels[o + 2]! * 0.114;
-  };
-  let acc = 0;
-  let n = 0;
-  for (let y = 0; y < gridH; y++) {
-    for (let x = 0; x < gridW; x++) {
-      const i = y * gridW + x;
-      const c = luma(i);
-      if (x + 1 < gridW) {
-        acc += Math.abs(c - luma(i + 1));
-        n += 1;
-      }
-      if (y + 1 < gridH) {
-        acc += Math.abs(c - luma(i + gridW));
-        n += 1;
-      }
-    }
-  }
-  return n > 0 ? acc / n : 0;
-}
-
 export function snapshotFromFrame(frame: PixelFrame, pixels?: Uint8Array): Omit<VisualQualitySnapshot, "status" | "secondsSinceMeaningfulMotion" | "reason"> {
   const edgeEnergy =
     pixels && pixels.length >= frame.gridW * frame.gridH * 4
       ? edgeEnergyFromGrid(pixels, frame.gridW, frame.gridH)
-      : Math.sqrt(Math.max(0, frame.luminanceVariance));
+      : frame.edgeEnergy > 0
+        ? frame.edgeEnergy
+        : Math.sqrt(Math.max(0, frame.luminanceVariance));
   return {
     meanLuminance: frame.meanLuminance,
     luminanceVariance: frame.luminanceVariance,

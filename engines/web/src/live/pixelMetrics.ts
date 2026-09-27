@@ -11,6 +11,8 @@ export type PixelFrame = {
   alphaOccupancy: number;
   changedPixelFraction: number;
   rmsDifference: number;
+  /** Spatial gradient energy (detects dark-but-structured art). */
+  edgeEnergy: number;
   digest: string;
 };
 
@@ -45,6 +47,31 @@ export function downsampleRgba(
     }
   }
   return out;
+}
+
+export function edgeEnergyFromGrid(
+  pixels: Uint8Array,
+  gridW: number,
+  gridH: number,
+): number {
+  const luma = (i: number) => luminanceAt(pixels, i);
+  let acc = 0;
+  let n = 0;
+  for (let y = 0; y < gridH; y++) {
+    for (let x = 0; x < gridW; x++) {
+      const i = y * gridW + x;
+      const c = luma(i);
+      if (x + 1 < gridW) {
+        acc += Math.abs(c - luma(i + 1));
+        n += 1;
+      }
+      if (y + 1 < gridH) {
+        acc += Math.abs(c - luma(i + gridW));
+        n += 1;
+      }
+    }
+  }
+  return n > 0 ? acc / n : 0;
 }
 
 export function analyzeRgbaGrid(
@@ -88,6 +115,7 @@ export function analyzeRgbaGrid(
 
   const mean = sum / Math.max(1, n);
   const variance = sum2 / Math.max(1, n) - mean * mean;
+  const edgeEnergy = edgeEnergyFromGrid(pixels, gridW, gridH);
   return {
     gridW,
     gridH,
@@ -97,8 +125,18 @@ export function analyzeRgbaGrid(
     alphaOccupancy: alphaOcc / Math.max(1, n),
     changedPixelFraction: prior ? changed / Math.max(1, n) : 0,
     rmsDifference: prior ? Math.sqrt(rmsAcc / Math.max(1, n)) : 0,
+    edgeEnergy,
     digest: (digest >>> 0).toString(16),
   };
+}
+
+/** Authoring preview has recognizable structure (not a bare empty/dark field). */
+export function frameHasMeaningfulStructure(px: PixelFrame): boolean {
+  if (px.luminanceVariance > 1.2 && px.occupiedFraction > 0.015) return true;
+  if (px.occupiedFraction > 0.06) return true;
+  if (px.alphaOccupancy > 0.5 && px.luminanceVariance > 0.08) return true;
+  if (px.edgeEnergy > 0.12 && px.alphaOccupancy > 0.25) return true;
+  return false;
 }
 
 /** Meaningful visual change between two decoded RGBA grids. */
@@ -114,6 +152,44 @@ export function isMeaningfulVisualChange(
     Math.abs(b.meanLuminance - a.meanLuminance) >= 1.5 ||
     (a.digest !== b.digest && b.rmsDifference >= 1)
   );
+}
+
+/** Diagnostic: central vs outer structure (flags scope-like concentration). */
+export function spatialCoverageFromGrid(
+  pixels: Uint8Array,
+  gridW: number,
+  gridH: number,
+): {
+  centerOccupied: number;
+  outerOccupied: number;
+  scopeLike: boolean;
+} {
+  const cx0 = Math.floor(gridW / 3);
+  const cx1 = Math.ceil((gridW * 2) / 3);
+  const cy0 = Math.floor(gridH / 3);
+  const cy1 = Math.ceil((gridH * 2) / 3);
+  let center = 0;
+  let centerN = 0;
+  let outer = 0;
+  let outerN = 0;
+  for (let gy = 0; gy < gridH; gy++) {
+    for (let gx = 0; gx < gridW; gx++) {
+      const idx = gy * gridW + gx;
+      const lum = luminanceAt(pixels, idx);
+      const inCenter = gx >= cx0 && gx < cx1 && gy >= cy0 && gy < cy1;
+      if (inCenter) {
+        centerN += 1;
+        if (lum > 12) center += 1;
+      } else {
+        outerN += 1;
+        if (lum > 12) outer += 1;
+      }
+    }
+  }
+  const centerOccupied = center / Math.max(1, centerN);
+  const outerOccupied = outer / Math.max(1, outerN);
+  const scopeLike = centerOccupied > 0.2 && outerOccupied < centerOccupied * 0.35;
+  return { centerOccupied, outerOccupied, scopeLike };
 }
 
 /** Guard: compressed PNG bytes must never pass as pixel buffers. */

@@ -5,8 +5,11 @@
 import type { ColorConfig } from "../color/model";
 import { mergeParamsWithColor } from "../color/serialize";
 import {
+  effectiveGenerateKind,
+  generatePreviewClassFor,
   getPieceRuntime,
   supportsMode,
+  type GeneratePreviewClass,
   type RendererKind,
 } from "./registry";
 import type { StudioMode } from "../keyboard/registry";
@@ -18,7 +21,7 @@ export function rendererKindFor(
   mode: StudioMode,
 ): RendererKind | null {
   const r = getPieceRuntime(pieceId);
-  if (mode === "generate") return r.generate;
+  if (mode === "generate") return effectiveGenerateKind(pieceId);
   if (mode === "animate") return r.animate;
   return r.react;
 }
@@ -59,4 +62,8 @@ export function paramsForApi(
 ): Record<string, number | string | boolean> {
   if (!color) return { ...params };
   return mergeParamsWithColor(params, color);
+}
+
+export function generatePreviewClass(pieceId: string): GeneratePreviewClass {
+  return generatePreviewClassFor(pieceId);
 }

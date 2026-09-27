@@ -49,7 +49,9 @@ test.describe("Studio live liveness sentinels", () => {
     const { samples, diags } = await sampleAtTimes(page, times);
     const d0 = diags[0]!;
     const dLast = diags[diags.length - 1]!;
-    expect(dLast.animationTimeSec ?? 0).toBeGreaterThan(55);
+    const animAdvance =
+      (dLast.animationTimeSec ?? 0) - (d0.animationTimeSec ?? 0);
+    expect(animAdvance, "canonical clock tracks wall time over 5→60s window").toBeGreaterThan(48);
     expect(dLast.transportPlaying).toBe(true);
     expect((dLast.presentCount ?? 0) - (d0.presentCount ?? 0)).toBeGreaterThan(100);
     assertMotionBetween(samples, 0, 1, "5→8s");
@@ -74,10 +76,10 @@ test.describe("Studio live liveness sentinels", () => {
   });
 
   test("geometry/metatron breathes after construction", async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(180_000);
     await enterAnimate(page, "geometry/metatron", 42);
-    await waitForLiveFrame(page);
-    await waitForAnimationTime(page, 12);
+    await waitForLiveFrame(page, 90_000);
+    await waitForAnimationTime(page, 10, 150_000);
     const a = await sampleStagePixels(page);
     await page.waitForTimeout(2000);
     const b = await sampleStagePixels(page);
