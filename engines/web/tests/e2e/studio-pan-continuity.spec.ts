@@ -5,13 +5,12 @@
 import { test, expect } from "@playwright/test";
 import {
   enterAnimate,
+  frameIsVisible,
   sampleStagePixels,
   studioDiag,
   waitForAnimationTime,
   waitForLiveFrame,
 } from "./animationMetrics";
-
-const SCOPE_BLACK_LUMA = 8;
 
 test.describe("Studio live pan continuity (Docker)", () => {
   test("pan left-right stays continuous past duration", async ({ page }) => {
@@ -37,7 +36,11 @@ test.describe("Studio live pan continuity (Docker)", () => {
       centerXs.push(d.cameraCenterX ?? 0);
       const px = await sampleStagePixels(page);
       digests.push(px.digest);
-      expect(px.meanLuminance).toBeGreaterThan(SCOPE_BLACK_LUMA);
+      expect(
+        frameIsVisible(px),
+        `frame visible at animation t=${t} (camera may pan through dark SDF regions)`,
+      ).toBe(true);
+      expect(d.animationTimeSec ?? 0).toBeGreaterThan(t - 0.5);
     }
 
     for (let i = 1; i < centerXs.length; i++) {

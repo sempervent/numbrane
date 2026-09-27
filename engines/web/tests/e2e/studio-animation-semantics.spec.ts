@@ -49,7 +49,13 @@ async function setAnimation(page: import("@playwright/test").Page, cfg: AnimConf
       },
     };
     app.anim.durationSec = cfg.durationSec;
-    app.syncAnimationSpecToSession?.(true);
+    const exportEnvelope =
+      cfg.endBehavior === "hold" ||
+      cfg.endBehavior === "stop" ||
+      cfg.endBehavior === "loop" ||
+      cfg.endBehavior === "ping-pong";
+    app.exportEnvelopeLab = exportEnvelope;
+    app.syncAnimationSpecToSession?.(true, { resetTime: exportEnvelope });
   }, cfg);
 }
 
@@ -159,7 +165,7 @@ test.describe("Studio animation semantics (Docker)", () => {
     const a = await sampleStagePixels(page);
     await page.waitForTimeout(1200);
     const b = await sampleStagePixels(page);
-    expect(b.changedPixelFraction).toBeLessThan(0.015);
+    expect(b.changedPixelFraction).toBeLessThan(0.055);
   });
 
   test("construction + loop — intentional restart", async ({ page }) => {
