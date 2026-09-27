@@ -148,6 +148,28 @@ const PARAMETER_DRIFT: AnimationMethod = {
 };
 
 const NATIVE_METHODS: AnimationMethod[] = [
+  nativeMethod("continuous-evolution", "Continuous Evolution", "generative", "continuous", "continuous", 12, (p) =>
+    p.includes("reaction-diffusion"),
+  ),
+  nativeMethod("trail-growth", "Trail Growth", "generative", "emergence", "continuous", 12, (p) =>
+    p.includes("slime"),
+  ),
+  nativeMethod("flow", "Flow", "generative", "continuous", "continuous", 12, (p) => p.includes("noodle")),
+  nativeMethod("native-evolution", "Native Evolution", "generative", "continuous", "continuous", 12, (p) =>
+    p === "flagship/latticefall",
+  ),
+  nativeMethod("construction", "Construction", "construction", "construction", "hold", 8, (p) =>
+    p.startsWith("geometry/") || p.includes("lsystem") || p.includes("ritual"),
+  ),
+  nativeMethod("deconstruction", "Deconstruction", "construction", "reveal", "hold", 8, (p) =>
+    p.startsWith("geometry/"),
+  ),
+  nativeMethod("composite-evolution", "Composite Evolution", "generative", "continuous", "continuous", 12, (p) =>
+    p.startsWith("mashups/"),
+  ),
+  nativeMethod("plasma-evolution", "Plasma Evolution", "generative", "continuous", "continuous", 0, (p) =>
+    p === "audiovisual/nodes" || p === "reference/audiovisual-nodes",
+  ),
   nativeMethod(
     "generative-drift",
     "Generative Drift",
@@ -172,28 +194,6 @@ const NATIVE_METHODS: AnimationMethod[] = [
       return caps.sources.includes("generative") || caps.sources.includes("composite");
     },
   ),
-  nativeMethod("continuous-evolution", "Continuous Evolution", "generative", "continuous", "continuous", 12, (p) =>
-    p.includes("reaction-diffusion"),
-  ),
-  nativeMethod("trail-growth", "Trail Growth", "generative", "emergence", "continuous", 12, (p) =>
-    p.includes("slime"),
-  ),
-  nativeMethod("flow", "Flow", "generative", "continuous", "continuous", 12, (p) => p.includes("noodle")),
-  nativeMethod("native-evolution", "Native Evolution", "generative", "continuous", "continuous", 12, (p) =>
-    p === "flagship/latticefall",
-  ),
-  nativeMethod("construction", "Construction", "construction", "construction", "hold", 8, (p) =>
-    p.startsWith("geometry/") || p.includes("lsystem") || p.includes("ritual"),
-  ),
-  nativeMethod("deconstruction", "Deconstruction", "construction", "reveal", "hold", 8, (p) =>
-    p.startsWith("geometry/"),
-  ),
-  nativeMethod("composite-evolution", "Composite Evolution", "generative", "continuous", "continuous", 12, (p) =>
-    p.startsWith("mashups/"),
-  ),
-  nativeMethod("plasma-evolution", "Plasma Evolution", "generative", "continuous", "continuous", 0, (p) =>
-    p === "audiovisual/nodes" || p === "reference/audiovisual-nodes",
-  ),
   PARAMETER_DRIFT,
 ];
 
@@ -217,7 +217,10 @@ export function getAnimationMethod(pieceId: string, methodId: string): Animation
 
 export function defaultAnimationMethodId(pieceId: string): string {
   const methods = animationMethodsForPiece(pieceId);
-  const native = methods.find((m) => m.category === "native");
+  const generic = new Set(["generative-drift", "generative-flow", "parameter-drift"]);
+  const native =
+    methods.find((m) => m.category === "native" && !generic.has(m.id)) ??
+    methods.find((m) => m.category === "native");
   return native?.id ?? "pan-left-right";
 }
 
