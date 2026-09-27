@@ -899,22 +899,49 @@ export class StudioApp {
     });
   }
 
+  /** Logical frames to prime trail/state after scene load in ANIMATE (piece capability driven). */
+  private animatePrimeFrameCount(): number {
+    if (this.pieceId.includes("audiovisual/nodes")) return 4;
+    const steps = resolveGeneratePolicy(this.pieceId).warmupSteps ?? 0;
+    if (steps >= 100) return 36;
+    if (steps >= 48) return 24;
+    if (steps >= 20) return 16;
+    return 8;
+  }
+
+  private pushStudioParamsToLivePieces(): void {
+    if (!this.session) return;
+    const scene = this.session.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      const piece = this.session.runtime.getPiece(layer.id) as
+        | { setColorConfig?: (c: ColorConfig) => void; setParameter?: (n: string, v: unknown) => void }
+        | undefined;
+      if (!piece) continue;
+      for (const [k, v] of Object.entries(this.params)) {
+        piece.setParameter?.(k, v);
+      }
+      piece.setColorConfig?.(this.color);
+    }
+  }
+
   private async finishLiveGenerate(requestGen: number, sceneKey: string): Promise<void> {
     if (!this.session || requestGen !== this.sceneGeneration) return;
     const policy = resolveGeneratePolicy(this.pieceId);
     const statusEl = document.getElementById("gen-status");
     const token = ++this.generateWarmupToken;
+    this.pushStudioParamsToLivePieces();
     this.session.paintFrames(2, performance.now());
 
-    if (
-      policy.interactive === "warmup" &&
-      this.generateReadySceneKey !== sceneKey
-    ) {
+    const steps = policy.warmupSteps ?? 0;
+    if (steps > 0 && this.generateReadySceneKey !== sceneKey) {
       this.generating = true;
       statusEl?.classList.add("visible");
-      if (statusEl) statusEl.textContent = "Initializing…";
-      const steps = policy.warmupSteps ?? 120;
-      const chunk = policy.warmupChunk ?? 10;
+      if (statusEl) {
+        statusEl.textContent =
+          policy.interactive === "warmup" ? "Initializing…" : "Priming preview…";
+      }
+      const chunk = policy.warmupChunk ?? Math.min(20, steps);
       const result = await this.session.runGenerateWarmup({
         steps,
         chunkSteps: chunk,
@@ -930,7 +957,7 @@ export class StudioApp {
       this.generating = false;
       statusEl?.classList.remove("visible");
       if (statusEl) statusEl.textContent = "";
-    } else if (policy.interactive === "immediate") {
+    } else if (this.generateReadySceneKey !== sceneKey) {
       this.generateReadySceneKey = sceneKey;
     }
 
@@ -950,13 +977,7 @@ export class StudioApp {
     document.getElementById("generate-preview")?.classList.remove("visible");
     document.getElementById("gen-status")?.classList.remove("visible");
 
-    for (const layer of this.session.runtime.getScene()?.layers ?? []) {
-      for (const [k, v] of Object.entries(this.params)) {
-        if (typeof v === "number") {
-          this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
-        }
-      }
-    }
+    this.pushStudioParamsToLivePieces();
     this.syncColorToParams();
 
     if (desired.mode === "generate") {
@@ -1081,17 +1102,7 @@ export class StudioApp {
     }
     if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
-    for (const layer of (set.protocol_version === "0.1.0" ? set.scenes[0]?.layers : []) ?? []) {
-      for (const [k, v] of Object.entries(this.params)) {
-        if (typeof v === "number") {
-          this.session.runtime.getPiece(layer.id)?.setParameter(k, v);
-        }
-      }
-      const lp = this.session.runtime.getPiece(layer.id) as
-        | { setColorConfig?: (c: ColorConfig) => void }
-        | undefined;
-      lp?.setColorConfig?.(this.color);
-    }
+    this.pushStudioParamsToLivePieces();
     if (this.pendingImportState) {
       const piece = this.session.runtime.getPiece("L0") as
         | {
@@ -1141,7 +1152,7 @@ export class StudioApp {
         performanceMode: true,
       });
       this.applyStudioPerformanceClock();
-      this.session.paintFrames(4, performance.now());
+      await this.session.paintFramesAsync(this.animatePrimeFrameCount(), performance.now());
     } else if (this.mode === "generate") {
       await this.finishLiveGenerate(requestGen, sceneKey);
     } else if (this.mode === "react") {
@@ -3124,7 +3135,11 @@ export class StudioApp {
     if (!this.locked.has("color") && !this.locked.has("hue")) {
       this.params.hue = hexToHueTurn(this.color.primary.value);
     }
-    this.session?.runtime.getPiece("L0")?.setParameter("hue", Number(this.params.hue));
+    const scene = this.session?.runtime.getScene();
+    if (!scene) return;
+    for (const layer of scene.layers) {
+      this.session?.runtime.getPiece(layer.id)?.setParameter("hue", Number(this.params.hue));
+    }
   }
 
   private applyColorPreset(presetId: string): void {
@@ -4587,7 +4602,8 @@ export class StudioApp {
           stallBanner.classList.remove("visible");
         }
       }
-      if (warmupMs > 2500 && diag.rafStalled && !document.hidden) {
+      const sceneSettled = this.committedSceneGeneration === this.sceneGeneration;
+      if (warmupMs > 2500 && sceneSettled && diag.rafStalled && !document.hidden) {
         this.stallError = [
           "RAF STALLED",
           `piece: ${this.pieceId}`,

@@ -3,7 +3,7 @@
  */
 
 import { test, expect } from "@playwright/test";
-import { enterAnimateViaUi, failureBannerText } from "./studioUi";
+import { enterAnimateViaUi, failureBannerText, waitForStudioSceneSettled } from "./studioUi";
 import { frameIsVisible, sampleStagePixels, studioDiag, waitForLiveFrame } from "./animationMetrics";
 
 const NODE_PIECES = ["audiovisual/nodes", "reference/audiovisual-nodes"] as const;
@@ -12,6 +12,7 @@ for (const piece of NODE_PIECES) {
   test(`${piece} animate is visible and keeps moving 30s`, async ({ page }) => {
     test.setTimeout(120_000);
     await enterAnimateViaUi(page, piece);
+    await waitForStudioSceneSettled(page, 90_000);
     expect(await failureBannerText(page)).toBeNull();
     await waitForLiveFrame(page, 30_000);
 

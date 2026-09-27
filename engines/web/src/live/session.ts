@@ -518,6 +518,18 @@ export class LiveSession {
     }
   }
 
+  /** Prime simulation without blocking the RAF loop (Studio ANIMATE boot). */
+  async paintFramesAsync(count = 8, wallStartMs = performance.now()): Promise<void> {
+    for (let i = 0; i < count; i++) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          this.frame(wallStartMs + i * (1000 / 60));
+          resolve();
+        });
+      });
+    }
+  }
+
   /**
    * Deterministic simulation warm-up for GENERATE on stateful pieces.
    * Advances logical simulation steps (not wall-clock animation) then leaves sim paused.
