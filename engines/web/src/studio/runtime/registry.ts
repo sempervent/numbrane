@@ -33,6 +33,7 @@ export type GeneratePolicy = {
   interactive: GenerateInteractiveMode;
   warmupSteps?: number;
   warmupChunk?: number;
+  /** Short sim prime for immediate-tier live pieces (fields/tiling). */
 };
 
 export type PieceRuntimeDescriptor = {
@@ -221,7 +222,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "webgl-stateful",
     {
       paramSchema: [{ key: "growth_rate", label: "Growth", type: "number", min: 0.2, max: 2, step: 0.05, default: 1 }, ...META],
-      generatePolicy: { interactive: "warmup", warmupSteps: 140, warmupChunk: 20 },
+      generatePolicy: { interactive: "warmup", warmupSteps: 160, warmupChunk: 16 },
     },
   ),
   "growth/lsystem": d("growth/lsystem", "python-api", "shader-native", null),
@@ -273,6 +274,7 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
   ),
   "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "webgl-stateful", "webgl-stateful", null, {
     generatePreviewClass: "interactive",
+    generatePolicy: { interactive: "warmup", warmupSteps: 120, warmupChunk: 12 },
   }),
   "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "geometry-ir", "geometry-ir", null, {
     generatePreviewClass: "interactive",
@@ -285,7 +287,10 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "webgl-stateful",
     "webgl-stateful",
     null,
-    { generatePreviewClass: "interactive" },
+    {
+      generatePreviewClass: "interactive",
+      generatePolicy: { interactive: "warmup", warmupSteps: 90, warmupChunk: 10 },
+    },
   ),
 
   "flagship/latticefall": d("flagship/latticefall", "wasm", "wasm", "wasm"),
@@ -319,10 +324,23 @@ export function animationExportBackendFor(pieceId: string): AnimationExportBacke
 
 function defaultWarmupSteps(pieceId: string): number {
   if (pieceId.includes("reaction-diffusion")) return 140;
-  if (pieceId.includes("differential-growth")) return 200;
+  if (pieceId.includes("differential-growth")) return 160;
   if (pieceId.includes("slime-mold")) return 100;
-  if (pieceId.includes("noodles")) return 80;
+  if (pieceId.includes("noodles")) return 90;
+  if (pieceId.includes("strange-attractors")) return 120;
+  if (pieceId.includes("escape-time")) return 48;
+  if (pieceId.includes("lsystem")) return 72;
+  if (pieceId.includes("latticefall")) return 36;
   return 96;
+}
+
+/** Shader-native pieces that need simulation frames before the trail/structure exists. */
+function shaderNativePrimeSteps(pieceId: string): number | null {
+  if (pieceId.includes("strange-attractors")) return 120;
+  if (pieceId.includes("escape-time")) return 48;
+  if (pieceId.includes("lsystem")) return 72;
+  if (pieceId === "flagship/latticefall") return 36;
+  return null;
 }
 
 /** Authoring-time GENERATE behavior from live capability. */
@@ -336,10 +354,20 @@ export function resolveGeneratePolicy(pieceId: string): GeneratePolicy {
     return {
       interactive: "warmup",
       warmupSteps: defaultWarmupSteps(pieceId),
-      warmupChunk: 10,
+      warmupChunk: 12,
     };
   }
-  return { interactive: "immediate" };
+  if (r.animate === "shader-native") {
+    const prime = shaderNativePrimeSteps(pieceId);
+    if (prime != null) {
+      return { interactive: "warmup", warmupSteps: prime, warmupChunk: 15 };
+    }
+    return { interactive: "immediate", warmupSteps: 20, warmupChunk: 20 };
+  }
+  if (r.animate === "wasm") {
+    return { interactive: "warmup", warmupSteps: defaultWarmupSteps(pieceId), warmupChunk: 12 };
+  }
+  return { interactive: "immediate", warmupSteps: 8, warmupChunk: 8 };
 }
 
 /** Renderer used for interactive GENERATE (matches ANIMATE when browser-native). */
