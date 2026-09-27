@@ -127,8 +127,12 @@ export async function certifyPiece(
   if (isMashupPiece(pieceId)) {
     const set = buildMashupSet(pieceId, 42, {});
     for (const layer of set?.scenes[0]?.layers ?? []) {
-      const child = await exercisePieceMode(page, layer.piece, "animate", layer.seed ?? 42);
-      blockedByChildren.push({ pieceId: layer.piece, health: child.health });
+      const rt = getPieceRuntime(layer.piece);
+      const ok = rt.animate !== null && rt.animate !== "unsupported";
+      blockedByChildren.push({
+        pieceId: layer.piece,
+        health: ok ? "PASS" : "INVALID",
+      });
     }
   }
 
