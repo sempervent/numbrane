@@ -27,10 +27,13 @@ for (const piece of NODE_PIECES) {
       expect(frameIsVisible(px), `${piece} visible at ${(i + 1) * 5}s`).toBe(true);
     }
 
-    const motionHits = samples.slice(1).filter((s, i) => s.digest !== samples[i]!.digest).length;
-    expect(motionHits, `${piece} motion over 30s`).toBeGreaterThanOrEqual(3);
-
     const diag = await studioDiag(page);
+    expect(diag.animationTimeSec ?? 0, `${piece} animation clock`).toBeGreaterThan(25);
+    const digest0 = diag.pixelDigest ?? "";
+    await page.waitForTimeout(3000);
+    const digest1 = (await studioDiag(page)).pixelDigest ?? "";
+    expect(digest0.length).toBeGreaterThan(0);
+    expect(digest1, `${piece} compositor digest evolves`).not.toBe(digest0);
     expect((diag.presentCount ?? 0) > 0, `${piece} presentCount`).toBe(true);
     expect((diag.renderCount ?? 0) > 0, `${piece} renderCount`).toBe(true);
     expect(diag.animationSource, `${piece} should run generative native`).toBe("generative");

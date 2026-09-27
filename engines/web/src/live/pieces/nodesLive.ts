@@ -141,10 +141,14 @@ export async function createNodesLivePiece(
         world.nodes.reduce((s, n) => s + Math.abs(n.vx) + Math.abs(n.vy), 0) /
         Math.max(1, world.nodes.length);
       gl.uniform2f(loc("u_res"), ctx.width, ctx.height);
-      gl.uniform1f(loc("u_time"), last.t);
-      gl.uniform1f(loc("u_chaos"), params.chaos + audio.energy * 0.35);
-      gl.uniform1f(loc("u_mutation"), params.mutation + nodeMotion * 2);
-      gl.uniform1f(loc("u_paletteHue"), params.palette + audio.high * 40);
+      const timeSec =
+        params["anim.performanceTimeSec"] ??
+        params["anim.timeSec"] ??
+        last.t;
+      gl.uniform1f(loc("u_time"), timeSec);
+      gl.uniform1f(loc("u_chaos"), params.chaos + audio.energy * 0.35 + Math.sin(timeSec * 0.55) * 0.06);
+      gl.uniform1f(loc("u_mutation"), params.mutation + nodeMotion * 2 + timeSec * 0.015);
+      gl.uniform1f(loc("u_paletteHue"), params.palette + audio.high * 40 + timeSec * 4);
       gl.uniform1f(loc("u_exposure"), params.exposure);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     },
