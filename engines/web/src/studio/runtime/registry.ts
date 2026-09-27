@@ -362,12 +362,12 @@ export function resolveGeneratePolicy(pieceId: string): GeneratePolicy {
     if (prime != null) {
       return { interactive: "warmup", warmupSteps: prime, warmupChunk: 15 };
     }
-    return { interactive: "immediate", warmupSteps: 20, warmupChunk: 20 };
+    return { interactive: "immediate" };
   }
   if (r.animate === "wasm") {
     return { interactive: "warmup", warmupSteps: defaultWarmupSteps(pieceId), warmupChunk: 12 };
   }
-  return { interactive: "immediate", warmupSteps: 8, warmupChunk: 8 };
+  return { interactive: "immediate" };
 }
 
 /** Renderer used for interactive GENERATE (matches ANIMATE when browser-native). */

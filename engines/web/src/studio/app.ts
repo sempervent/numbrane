@@ -377,6 +377,8 @@ export class StudioApp {
   /** Monotonic scene apply generation — latest request wins at commit. */
   private sceneGeneration = 0;
   private committedSceneGeneration = 0;
+  /** Scene lifecycle — watchdog must ignore loading/warming. */
+  private sceneApplyPhase: "idle" | "loading" | "warming" | "live" = "idle";
   private sceneApplyChain: Promise<void> = Promise.resolve();
   private longTaskObserver: PerformanceObserver | null = null;
   private sceneAuthoringDelegationInstalled = false;
@@ -528,6 +530,15 @@ export class StudioApp {
     }
   }
 
+  /** Always pair generation with commit so Studio cannot stay stuck unsettled. */
+  private resolveSceneApply(requestGen: number, phase: "idle" | "live" = "live"): void {
+    if (requestGen !== this.sceneGeneration) return;
+    this.markSceneCommitted(requestGen);
+    this.sceneApplyPhase = phase;
+    this.generating = false;
+    this.syncChrome();
+  }
+
   getGenerateDiagnostics(): Record<string, unknown> {
     const surface = studioSurface(this.pieceId, this.mode);
     const policy = resolveGeneratePolicy(this.pieceId);
@@ -617,6 +628,7 @@ export class StudioApp {
       buildSha: BUILD_SHA,
       buildTime: BUILD_TIME,
       consistency: this.getStudioConsistencySnapshot().consistency,
+      sceneApplyPhase: this.sceneApplyPhase,
       sessionTiming: this.session?.getSessionTimingDiagnostics() ?? null,
     };
   }
@@ -734,6 +746,8 @@ export class StudioApp {
 
   private kickLiveSurface(): void {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return;
+    // Live GENERATE holds a paused snapshot; finishLiveGenerate already primed the canvas.
+    if (this.mode === "generate" && this.session.runtime.isSimulationPaused()) return;
     this.session.ensureLoopRunning();
     // One immediate present — ongoing motion must come from RAF, not repeated paintFrames().
     this.session.frame(performance.now());
@@ -931,9 +945,8 @@ export class StudioApp {
     const statusEl = document.getElementById("gen-status");
     const token = ++this.generateWarmupToken;
     this.pushStudioParamsToLivePieces();
-    this.session.paintFrames(2, performance.now());
 
-    const steps = policy.warmupSteps ?? 0;
+    const steps = policy.interactive === "warmup" ? (policy.warmupSteps ?? 0) : 0;
     if (steps > 0 && this.generateReadySceneKey !== sceneKey) {
       this.generating = true;
       statusEl?.classList.add("visible");
@@ -961,8 +974,12 @@ export class StudioApp {
       this.generateReadySceneKey = sceneKey;
     }
 
+    this.session.runtime.setSimulationPaused(false);
+    const primeFrames =
+      steps > 0 ? Math.max(4, this.animatePrimeFrameCount()) : Math.max(32, this.animatePrimeFrameCount());
+    this.session.paintFrames(primeFrames, performance.now());
     this.session.runtime.setSimulationPaused(true);
-    this.session.paintFrames(4, performance.now());
+    this.session.stopLoop();
   }
 
   private async applyLiveSceneModeOnly(
@@ -986,12 +1003,15 @@ export class StudioApp {
       if (this.generateReadySceneKey !== sceneKey) {
         await this.finishLiveGenerate(requestGen, sceneKey);
       } else {
+        this.session.runtime.setSimulationPaused(false);
+        this.session.paintFrames(Math.max(12, this.animatePrimeFrameCount()), performance.now());
         this.session.runtime.setSimulationPaused(true);
-        this.session.paintFrames(2, performance.now());
+        this.session.stopLoop();
       }
     } else if (desired.mode === "animate") {
       this.playing = true;
       this.ensureAnimateTransport();
+      this.session.ensureLoopRunning();
       const methodForSpec =
         this.animationMethodId === RANDOM_METHOD_ID
           ? this.activeAnimationMethodId
@@ -1021,6 +1041,7 @@ export class StudioApp {
 
   private async runApplyPieceScene(requestGen: number): Promise<void> {
     if (requestGen !== this.sceneGeneration) return;
+    this.sceneApplyPhase = "loading";
     this.sceneApplyStartedMs = performance.now();
     this.generateWarmupToken += 1;
     this.hideBrowserMotionPane();
@@ -1070,7 +1091,10 @@ export class StudioApp {
     previewEl?.classList.remove("visible");
     statusEl?.classList.remove("visible");
     this.animBackend = String(rendererKindFor(desired.pieceId, desired.mode) ?? "live");
-    if (!this.session) return;
+    if (!this.session) {
+      this.resolveSceneApply(requestGen, "idle");
+      return;
+    }
 
     const sceneKey = this.interactiveSceneKey(desired);
     if (
@@ -1098,10 +1122,12 @@ export class StudioApp {
           `Piece: ${desired.pieceId}\nBackend: ${backend}\nError: ${err instanceof Error ? err.message : String(err)}`,
         );
       }
+      this.resolveSceneApply(requestGen, "idle");
       return;
     }
     if (requestGen !== this.sceneGeneration) return;
     this.session.setSeed(this.seed);
+    this.sceneApplyPhase = "warming";
     this.pushStudioParamsToLivePieces();
     if (this.pendingImportState) {
       const piece = this.session.runtime.getPiece("L0") as
@@ -1121,7 +1147,12 @@ export class StudioApp {
       this.pendingImportState = null;
     }
     this.syncColorToParams();
-    this.session.ensureLoopRunning();
+    if (this.mode === "generate" && studioSurface(this.pieceId, this.mode) === "live") {
+      this.session.stopLoop();
+      this.session.runtime.setSimulationPaused(true);
+    } else {
+      this.session.ensureLoopRunning();
+    }
     if (this.mode === "generate") {
       this.playing = false;
       this.session.runtime.transport.stop();
@@ -1152,8 +1183,18 @@ export class StudioApp {
         performanceMode: true,
       });
       this.applyStudioPerformanceClock();
-      await this.session.paintFramesAsync(this.animatePrimeFrameCount(), performance.now());
+      this.session.paintFrames(4, performance.now());
+      const extra = Math.max(0, this.animatePrimeFrameCount() - 4);
+      if (extra > 0) {
+        void this.session.paintFramesAsync(extra, performance.now());
+      }
     } else if (this.mode === "generate") {
+      if (studioSurface(this.pieceId, this.mode) === "live") {
+        this.session.setAnimationSpec(
+          normalizeSpecForLivePerformance(this.pieceId, this.animationSpec, this.mode),
+          { preserveTime: true, performanceMode: true },
+        );
+      }
       await this.finishLiveGenerate(requestGen, sceneKey);
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
@@ -1192,6 +1233,7 @@ export class StudioApp {
     this.lastVisualChangeMs = Date.now();
     this.frame = this.session.runtime.getFrame();
     this.webglStatus = "ok";
+    this.sceneApplyPhase = "live";
     this.syncChrome();
     this.markSceneCommitted(requestGen);
   }
@@ -4607,7 +4649,8 @@ export class StudioApp {
         }
       }
       const sceneSettled = this.committedSceneGeneration === this.sceneGeneration;
-      if (warmupMs > 2500 && sceneSettled && diag.rafStalled && !document.hidden) {
+      const livePhase = this.sceneApplyPhase === "live" && !this.generating;
+      if (warmupMs > 2500 && sceneSettled && livePhase && diag.rafStalled && !document.hidden) {
         this.stallError = [
           "RAF STALLED",
           `piece: ${this.pieceId}`,
