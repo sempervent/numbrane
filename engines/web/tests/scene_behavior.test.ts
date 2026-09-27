@@ -24,6 +24,16 @@ describe("Scene behavior presets and macros", () => {
     expect(list.some((b) => b.id === "evolve" && !b.disabled)).toBe(true);
   });
 
+  it("offers multiple behaviors for tiling truchet (not family-gated)", () => {
+    const list = listCompatibleBehaviors("tiling/truchet-tiles");
+    const enabled = list.filter((b) => !b.disabled);
+    expect(enabled.length).toBeGreaterThanOrEqual(4);
+    expect(enabled.some((b) => b.id === "drift")).toBe(true);
+    expect(enabled.some((b) => b.id === "pulse")).toBe(true);
+    const drift = behaviorCompatibility("tiling/truchet-tiles", "drift");
+    expect(drift.ok).toBe(true);
+  });
+
   it("maps macros deterministically and clamps", () => {
     const base = { density: 0.5, chaos: 0.2, exposure: 1, zoom: 1 };
     const high = applyCreativeMacros(

@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { classifyPixelFrame } from "../src/studio/catalog/renderHealth";
+import { behaviorSupportCount } from "../src/studio/scene/behaviorPresets";
 import { collectPieceManifests, studioVisibleManifests } from "../src/studio/catalog/manifestCollection";
 import { buildMashupSet, isMashupPiece } from "../src/studio/mashups";
 import {
@@ -70,6 +71,14 @@ describe("catalog render contract", () => {
     }
     const frame = analyzeRgbaGrid(px, w, h);
     expect(classifyPixelFrame(frame)).toBe("WRONG_OUTPUT");
+  });
+
+  it("animate-capable sentinels expose multiple autonomous behaviors", () => {
+    for (const id of HUMAN_FAILED_SENTINELS) {
+      if (!supportsMode(id, "animate")) continue;
+      const { available } = behaviorSupportCount(id);
+      expect(available, `${id} behavior count`).toBeGreaterThanOrEqual(3);
+    }
   });
 
   it("supportsMode requires non-unsupported effective backend", () => {
