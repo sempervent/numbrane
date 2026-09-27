@@ -5,8 +5,10 @@
 import type { ColorConfig } from "../color/model";
 import { mergeParamsWithColor } from "../color/serialize";
 import {
+  generatePreviewClassFor,
   getPieceRuntime,
   supportsMode,
+  type GeneratePreviewClass,
   type RendererKind,
 } from "./registry";
 import type { StudioMode } from "../keyboard/registry";
@@ -59,4 +61,8 @@ export function paramsForApi(
 ): Record<string, number | string | boolean> {
   if (!color) return { ...params };
   return mergeParamsWithColor(params, color);
+}
+
+export function generatePreviewClass(pieceId: string): GeneratePreviewClass {
+  return generatePreviewClassFor(pieceId);
 }

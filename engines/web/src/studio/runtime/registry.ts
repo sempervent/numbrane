@@ -23,11 +23,16 @@ export type ParamField = {
 
 export type AnimationExportBackend = "python-frames" | "runtime-frames" | "unsupported";
 
+/** How CREATE → GENERATE should behave in the Studio UI. */
+export type GeneratePreviewClass = "interactive" | "async-python";
+
 export type PieceRuntimeDescriptor = {
   pieceId: string;
   generate: RendererKind;
   animate: RendererKind | null;
   react: RendererKind | null;
+  /** Interactive live canvas vs /api/render still pipeline. */
+  generatePreviewClass?: GeneratePreviewClass;
   /** Explicit animation export backend (derived from animate kind when omitted). */
   exportBackend?: AnimationExportBackend;
   seedSensitive: boolean;
@@ -241,22 +246,32 @@ export const PIECE_RUNTIMES: Record<string, PieceRuntimeDescriptor> = {
     "webgl-stateful",
   ),
 
-  // Mashups: multi-layer live compositor scenes (see studio/mashups.ts).
-  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "python-api", "shader-native", null),
+  // Mashups: compositor scenes — GENERATE uses the same browser runtime as ANIMATE (frozen still).
+  "mashups/attractor-calligraphy": d("mashups/attractor-calligraphy", "shader-native", "shader-native", null, {
+    generatePreviewClass: "interactive",
+  }),
   "mashups/bureaucratic-growth-forms": d(
     "mashups/bureaucratic-growth-forms",
-    "python-api",
+    "webgl-stateful",
     "webgl-stateful",
     null,
+    { generatePreviewClass: "interactive" },
   ),
-  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "python-api", "webgl-stateful", null),
-  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "python-api", "geometry-ir", null),
-  "mashups/slime-on-sdf": d("mashups/slime-on-sdf", "python-api", "webgl-stateful", "webgl-stateful"),
+  "mashups/cosmic-venation-tiles": d("mashups/cosmic-venation-tiles", "webgl-stateful", "webgl-stateful", null, {
+    generatePreviewClass: "interactive",
+  }),
+  "mashups/ritual-diagrams": d("mashups/ritual-diagrams", "geometry-ir", "geometry-ir", null, {
+    generatePreviewClass: "interactive",
+  }),
+  "mashups/slime-on-sdf": d("mashups/slime-on-sdf", "webgl-stateful", "webgl-stateful", "webgl-stateful", {
+    generatePreviewClass: "interactive",
+  }),
   "mashups/striped-worms-eating-boxes": d(
     "mashups/striped-worms-eating-boxes",
-    "python-api",
+    "webgl-stateful",
     "webgl-stateful",
     null,
+    { generatePreviewClass: "interactive" },
   ),
 
   "flagship/latticefall": d("flagship/latticefall", "wasm", "wasm", "wasm"),
@@ -295,6 +310,13 @@ export function supportsMode(
   const r = getPieceRuntime(pieceId);
   const kind = mode === "generate" ? r.generate : mode === "animate" ? r.animate : r.react;
   return kind !== null && kind !== "unsupported";
+}
+
+export function generatePreviewClassFor(pieceId: string): GeneratePreviewClass {
+  const r = getPieceRuntime(pieceId);
+  if (r.generatePreviewClass) return r.generatePreviewClass;
+  if (r.generate === "python-api") return "async-python";
+  return "interactive";
 }
 
 const BROWSER_NATIVE_ANIMATE = new Set<RendererKind>([

@@ -135,6 +135,7 @@ import {
   previewSize,
   rendererKindFor,
   studioSurface,
+  generatePreviewClass,
 } from "./runtime/surface";
 import {
   buildStudioSetDef,
@@ -287,6 +288,9 @@ export class StudioApp {
   animationSpec: AnimationSpec = defaultSpecForPiece("fractals/sdf-raymarch2d");
   /** E2E export-semantics lab: finite envelope (hold/loop/stop) without live performance clock. */
   exportEnvelopeLab = false;
+  /** Wall ms from scene apply start to first kickLiveSurface (interactive GENERATE). */
+  lastInteractivePreviewMs = 0;
+  private sceneApplyStartedMs = 0;
   animationMethodId = "pan-left-right";
   /** Resolved method id when animationMethodId is random or composite. */
   activeAnimationMethodId = "pan-left-right";
@@ -517,6 +521,22 @@ export class StudioApp {
     if (requestGen === this.sceneGeneration) {
       this.committedSceneGeneration = requestGen;
     }
+  }
+
+  getGenerateDiagnostics(): Record<string, unknown> {
+    const surface = studioSurface(this.pieceId, this.mode);
+    return {
+      piece: this.pieceId,
+      mode: this.mode,
+      seed: this.seed,
+      surface,
+      generatePreviewClass: generatePreviewClass(this.pieceId),
+      generating: this.generating,
+      lastInteractivePreviewMs: this.lastInteractivePreviewMs,
+      lastRenderMs: this.lastRenderMs,
+      recipeDigest: this.recipeDigest,
+      renderDigest: this.renderDigest,
+    };
   }
 
   getAnimationDiagnostics(): Record<string, unknown> {
@@ -862,6 +882,7 @@ export class StudioApp {
 
   private async runApplyPieceScene(requestGen: number): Promise<void> {
     if (requestGen !== this.sceneGeneration) return;
+    this.sceneApplyStartedMs = performance.now();
     this.hideBrowserMotionPane();
     await this.browserPreview?.teardown();
     if (requestGen !== this.sceneGeneration) return;
@@ -993,6 +1014,8 @@ export class StudioApp {
       });
       this.applyStudioPerformanceClock();
       this.session.paintFrames(4, performance.now());
+    } else if (this.mode === "generate") {
+      this.session.paintFrames(6, performance.now());
     } else if (this.mode === "react") {
       this.applyStudioPerformanceClock();
     }
@@ -1023,6 +1046,7 @@ export class StudioApp {
       }
     }
     this.kickLiveSurface();
+    this.lastInteractivePreviewMs = performance.now() - this.sceneApplyStartedMs;
     this.stallError = "";
     this.pieceLoadedAt = Date.now();
     this.lastVisualChangeMs = Date.now();
@@ -1124,10 +1148,10 @@ export class StudioApp {
       () => {
         this.generating = true;
         status?.classList.add("visible");
-        if (status) status.textContent = "Draft…";
+        if (status) status.textContent = "Quick preview…";
       },
       (result) => {
-        paint(result, "Draft — refining…");
+        paint(result, "Preview ready — refining…");
         runPreview();
       },
       () => {
