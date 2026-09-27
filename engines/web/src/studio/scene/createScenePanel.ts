@@ -82,10 +82,10 @@ export function renderCreateScenePanel(model: CreateScenePanelModel): string {
       <label for="scene-behavior">Autonomous behavior</label>
       <select id="scene-behavior">
         <option value="">(piece default)</option>
-        ${model.behaviorAvailable
+        ${[...model.behaviorAvailable, ...model.behaviorUnavailable]
           .map(
             (b) =>
-              `<option value="${b.id}" ${b.selected ? "selected" : ""} title="${escapeHtml(b.description ?? b.label)}">${escapeHtml(b.label)}</option>`,
+              `<option value="${b.id}" ${b.disabled ? "disabled" : ""} ${b.selected ? "selected" : ""} title="${escapeHtml(b.reason ?? b.description ?? b.label)}">${escapeHtml(b.label)}${b.disabled ? " (unavailable)" : ""}</option>`,
           )
           .join("")}
       </select>

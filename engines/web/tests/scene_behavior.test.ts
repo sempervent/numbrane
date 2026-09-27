@@ -24,6 +24,23 @@ describe("Scene behavior presets and macros", () => {
     expect(list.some((b) => b.id === "evolve" && !b.disabled)).toBe(true);
   });
 
+  it("animate-capable sentinels expose at least four selectable behaviors", () => {
+    const pieces = [
+      "tiling/truchet-tiles",
+      "tiling/voronoi-stained-glass",
+      "fractals/strange-attractors",
+      "growth/differential-growth",
+      "fields/nebula",
+      "particles/noodles",
+      "flagship/latticefall",
+      "mashups/attractor-calligraphy",
+    ];
+    for (const pieceId of pieces) {
+      const enabled = listCompatibleBehaviors(pieceId).filter((b) => !b.disabled);
+      expect(enabled.length, pieceId).toBeGreaterThanOrEqual(4);
+    }
+  });
+
   it("offers multiple behaviors for tiling truchet (not family-gated)", () => {
     const list = listCompatibleBehaviors("tiling/truchet-tiles");
     const enabled = list.filter((b) => !b.disabled);

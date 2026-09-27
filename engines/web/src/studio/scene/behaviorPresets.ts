@@ -5,6 +5,73 @@
 import { animationCapabilitiesFor } from "../animation/capabilities";
 import { animationMethodsForPiece } from "../animation/methods";
 
+/** Capability tags — behaviors compose these, not backend families. */
+export type MotionCapability =
+  | "spatial-drift"
+  | "camera-orbit"
+  | "scale-breathe"
+  | "param-pulse"
+  | "field-flow"
+  | "sim-evolve"
+  | "perturb-turbulence"
+  | "settle-collapse";
+
+const PRESET_CAPABILITIES: Record<BehaviorPresetId, MotionCapability[]> = {
+  drift: ["spatial-drift"],
+  flow: ["field-flow", "spatial-drift"],
+  orbit: ["camera-orbit"],
+  breathe: ["scale-breathe"],
+  pulse: ["param-pulse", "scale-breathe"],
+  evolve: ["sim-evolve"],
+  turbulence: ["perturb-turbulence", "param-pulse"],
+  collapse: ["settle-collapse"],
+};
+
+export function motionCapabilitiesForPiece(pieceId: string): Set<MotionCapability> {
+  const caps = animationCapabilitiesFor(pieceId);
+  const out = new Set<MotionCapability>();
+  const hasCamera =
+    caps.sources.includes("camera") || caps.sources.includes("composite");
+  const hasGenerative =
+    caps.sources.includes("generative") || caps.sources.includes("composite");
+  const hasParams =
+    caps.sources.includes("parameters") || caps.sources.includes("composite");
+  const hasConstruction =
+    caps.sources.includes("construction") || caps.sources.includes("composite");
+
+  if (hasCamera || caps.motions.includes("drift") || caps.motions.includes("pan")) {
+    out.add("spatial-drift");
+    out.add("camera-orbit");
+    out.add("scale-breathe");
+    out.add("settle-collapse");
+  }
+  if (hasGenerative) {
+    out.add("spatial-drift");
+    out.add("field-flow");
+    out.add("sim-evolve");
+    out.add("perturb-turbulence");
+  }
+  if (hasParams || hasGenerative) {
+    out.add("param-pulse");
+    out.add("perturb-turbulence");
+  }
+  if (hasConstruction) {
+    out.add("sim-evolve");
+    if (pieceId.startsWith("geometry/")) out.add("settle-collapse");
+  }
+  if (pieceId.startsWith("mashups/") && hasGenerative) {
+    out.add("field-flow");
+    out.add("sim-evolve");
+  }
+  return out;
+}
+
+export function behaviorPresetCapabilityOk(pieceId: string, presetId: BehaviorPresetId): boolean {
+  const need = PRESET_CAPABILITIES[presetId];
+  const have = motionCapabilitiesForPiece(pieceId);
+  return need.some((n) => have.has(n));
+}
+
 export type BehaviorPresetId =
   | "drift"
   | "orbit"
@@ -71,13 +138,39 @@ export const BEHAVIOR_PRESETS: BehaviorPresetDef[] = [
 
 /** Preferred animation method ids per behavior (first match wins). */
 const BEHAVIOR_METHOD_ROUTES: Record<BehaviorPresetId, string[]> = {
-  drift: ["slow-drift", "parameter-drift", "flow", "continuous-evolution", "native-evolution", "pan-left-right"],
-  flow: ["flow", "pan-left-right", "parameter-drift", "slow-drift", "continuous-evolution"],
+  drift: [
+    "slow-drift",
+    "generative-drift",
+    "parameter-drift",
+    "flow",
+    "continuous-evolution",
+    "native-evolution",
+    "composite-evolution",
+    "pan-left-right",
+  ],
+  flow: [
+    "generative-flow",
+    "flow",
+    "generative-drift",
+    "pan-left-right",
+    "parameter-drift",
+    "slow-drift",
+    "continuous-evolution",
+    "composite-evolution",
+  ],
   orbit: ["pan-zoom", "pan-diagonal", "pan-left-right"],
   breathe: ["zoom-in", "zoom-out", "pan-zoom"],
   pulse: ["parameter-drift", "zoom-in", "pan-zoom"],
-  evolve: ["construction", "trail-growth", "native-evolution", "continuous-evolution", "slow-drift"],
-  turbulence: ["parameter-drift", "slow-drift", "flow", "continuous-evolution"],
+  evolve: [
+    "construction",
+    "generative-flow",
+    "trail-growth",
+    "native-evolution",
+    "continuous-evolution",
+    "composite-evolution",
+    "slow-drift",
+  ],
+  turbulence: ["parameter-drift", "generative-flow", "slow-drift", "flow", "continuous-evolution"],
   collapse: ["deconstruction", "zoom-out", "slow-drift"],
 };
 
@@ -128,11 +221,17 @@ export function behaviorCompatibility(pieceId: string, presetId: BehaviorPresetI
   if (caps.sources.length === 0) {
     return { ok: false, reason: "Piece has no animate surface" };
   }
+  if (!behaviorPresetCapabilityOk(pieceId, presetId)) {
+    return {
+      ok: false,
+      reason: UNAVAILABLE_REASON[presetId] ?? "Not available for this runtime",
+    };
+  }
   const methodId = resolveBehaviorMethodId(pieceId, presetId);
   if (!methodId) {
     return {
       ok: false,
-      reason: UNAVAILABLE_REASON[presetId] ?? "Not available for this runtime",
+      reason: UNAVAILABLE_REASON[presetId] ?? "No animation route for this behavior",
     };
   }
   return { ok: true, preset, methodId };

@@ -148,6 +148,30 @@ const PARAMETER_DRIFT: AnimationMethod = {
 };
 
 const NATIVE_METHODS: AnimationMethod[] = [
+  nativeMethod(
+    "generative-drift",
+    "Generative Drift",
+    "generative",
+    "drift",
+    "continuous",
+    0,
+    (p) => {
+      const caps = animationCapabilitiesFor(p);
+      return caps.sources.includes("generative") || caps.sources.includes("composite");
+    },
+  ),
+  nativeMethod(
+    "generative-flow",
+    "Generative Flow",
+    "generative",
+    "continuous",
+    "continuous",
+    0,
+    (p) => {
+      const caps = animationCapabilitiesFor(p);
+      return caps.sources.includes("generative") || caps.sources.includes("composite");
+    },
+  ),
   nativeMethod("continuous-evolution", "Continuous Evolution", "generative", "continuous", "continuous", 12, (p) =>
     p.includes("reaction-diffusion"),
   ),

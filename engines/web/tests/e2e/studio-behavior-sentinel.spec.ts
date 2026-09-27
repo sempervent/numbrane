@@ -16,6 +16,8 @@ const CASES = [
   { piece: "mashups/attractor-calligraphy", a: "drift", b: "pulse" },
 ] as const;
 
+test.describe.configure({ mode: "serial" });
+
 test.describe("behavior sentinel", () => {
   for (const { piece, a, b } of CASES) {
     test(`${piece} — ${a} vs ${b} live`, async ({ page }) => {
