@@ -1855,7 +1855,7 @@ export class StudioApp {
     return hasComponent(spec, "construction");
   }
 
-  applyAnimationMethodId(methodId: string): void {
+  applyAnimationMethodId(methodId: string, opts?: { preserveTime?: boolean }): void {
     if (methodId === RANDOM_METHOD_ID) {
       this.animationMethodId = RANDOM_METHOD_ID;
       this.initRandomSequencer();
@@ -1872,9 +1872,11 @@ export class StudioApp {
     this.anim.durationSec = this.animationSpec.durationSec;
     this.anim.loop = exportLoopFlag(this.animationSpec.endBehavior);
     if (this.mode === "animate") {
-      this.syncAnimationSpecToSession(true, {
-        resetTime: this.animationMethodChangeResetsClock(methodId, this.animationSpec),
-      });
+      const resetTime =
+        opts?.preserveTime === true
+          ? false
+          : this.animationMethodChangeResetsClock(methodId, this.animationSpec);
+      this.syncAnimationSpecToSession(true, { resetTime });
     }
     this.renderConfig();
   }
@@ -2278,6 +2280,7 @@ export class StudioApp {
       this.params,
       this.meta,
       this.sceneAuthoringSemantics.creativeMacros,
+      this.sceneAuthoringSemantics.behaviorPresetId,
     );
     this.params = applied.params;
     this.meta = applied.meta;
@@ -2292,6 +2295,8 @@ export class StudioApp {
   async applySceneBehaviorPreset(presetId: BehaviorPresetId | ""): Promise<void> {
     this.sceneAuthoringSemantics = { ...this.sceneAuthoringSemantics, behaviorPresetId: presetId };
     if (!presetId) {
+      this.applyAnimationMethodId(defaultAnimationMethodId(this.pieceId), { preserveTime: true });
+      await this.applyCreativeMacroAuthoring(false);
       this.renderConfig();
       return;
     }
@@ -2301,15 +2306,10 @@ export class StudioApp {
       this.renderConfig();
       return;
     }
-    if (compat.preset.paramDelta) {
-      for (const [k, v] of Object.entries(compat.preset.paramDelta)) {
-        if (typeof this.params[k] === "number") {
-          this.params[k] = Number(this.params[k]) + v;
-        }
-      }
-    }
     await this.applyCreativeMacroAuthoring(false);
-    this.applyAnimationMethodId(compat.methodId);
+    const specPreview = resolveLivePerformanceMethodSpec(this.pieceId, compat.methodId, this.mode);
+    const preserveTime = !this.animationMethodChangeResetsClock(compat.methodId, specPreview);
+    this.applyAnimationMethodId(compat.methodId, { preserveTime });
     toast(`Behavior · ${compat.preset.label}`);
   }
 
@@ -3714,13 +3714,16 @@ export class StudioApp {
         `<option value="${r.id}" ${r.id === this.exportPreset ? "selected" : ""}>${r.label}</option>`,
     ).join("");
 
-    const behaviorOptions = listCompatibleBehaviors(this.pieceId).map((b) => ({
+    const behaviorList = listCompatibleBehaviors(this.pieceId).map((b) => ({
       id: b.id,
       label: b.label,
+      description: b.description,
       disabled: b.disabled,
       reason: b.reason,
       selected: this.sceneAuthoringSemantics.behaviorPresetId === b.id,
     }));
+    const behaviorAvailable = behaviorList.filter((b) => !b.disabled);
+    const behaviorUnavailable = behaviorList.filter((b) => b.disabled);
     const scenePanel = renderCreateScenePanel({
       sceneName: this.sceneAuthoring.sceneName,
       dirty: this.isSceneAuthoringDirty(),
@@ -3731,7 +3734,8 @@ export class StudioApp {
       activeSceneId: this.sceneAuthoring.activeSceneId,
       canAddToSet: this.canAddSceneToSet(),
       addToSetHint: this.addToSetHint(),
-      behaviorOptions,
+      behaviorAvailable,
+      behaviorUnavailable,
       macros: this.sceneAuthoringSemantics.creativeMacros,
       showCreativeControls: this.mode === "animate" || this.mode === "react",
     });

@@ -9,6 +9,7 @@ import type { PersistedSceneRecipeV1 } from "./sceneRecipe";
 export type BehaviorOption = {
   id: BehaviorPresetId;
   label: string;
+  description?: string;
   disabled: boolean;
   reason?: string;
   selected: boolean;
@@ -24,7 +25,8 @@ export type CreateScenePanelModel = {
   activeSceneId: string | null;
   canAddToSet: boolean;
   addToSetHint: string;
-  behaviorOptions: BehaviorOption[];
+  behaviorAvailable: BehaviorOption[];
+  behaviorUnavailable: BehaviorOption[];
   macros: CreativeMacroValues;
   showCreativeControls: boolean;
 };
@@ -80,13 +82,28 @@ export function renderCreateScenePanel(model: CreateScenePanelModel): string {
       <label for="scene-behavior">Autonomous behavior</label>
       <select id="scene-behavior">
         <option value="">(piece default)</option>
-        ${model.behaviorOptions
+        ${model.behaviorAvailable
           .map(
             (b) =>
-              `<option value="${b.id}" ${b.selected ? "selected" : ""} ${b.disabled ? "disabled" : ""} title="${escapeHtml(b.reason ?? "")}">${escapeHtml(b.label)}</option>`,
+              `<option value="${b.id}" ${b.selected ? "selected" : ""} title="${escapeHtml(b.description ?? b.label)}">${escapeHtml(b.label)}</option>`,
           )
           .join("")}
       </select>
+      ${
+        model.behaviorAvailable.find((b) => b.selected)?.description
+          ? `<p class="muted behavior-hint">${escapeHtml(model.behaviorAvailable.find((b) => b.selected)?.description ?? "")}</p>`
+          : ""
+      }
+      ${
+        model.behaviorUnavailable.length
+          ? `<details class="behavior-compat"><summary>Unavailable behaviors (${model.behaviorUnavailable.length})</summary><ul>${model.behaviorUnavailable
+              .map(
+                (b) =>
+                  `<li><strong>${escapeHtml(b.label)}</strong> — ${escapeHtml(b.reason ?? "unsupported")}</li>`,
+              )
+              .join("")}</ul></details>`
+          : ""
+      }
       <h2>Creative controls</h2>
       ${(Object.keys(MACRO_LABELS) as CreativeMacroId[])
         .map(

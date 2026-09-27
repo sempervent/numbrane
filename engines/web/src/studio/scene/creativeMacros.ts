@@ -4,6 +4,7 @@
 
 import type { MetaAxis } from "../explore/variants";
 import { getPieceRuntime } from "../runtime/registry";
+import { behaviorPresetById, type BehaviorPresetId } from "./behaviorPresets";
 
 export type CreativeMacroId = "energy" | "density" | "motion" | "chaos";
 
@@ -34,6 +35,7 @@ export function applyCreativeMacros(
   params: Record<string, number | string | boolean>,
   meta: Record<MetaAxis, number>,
   macros: CreativeMacroValues,
+  behaviorPresetId: BehaviorPresetId | "" = "",
 ): { params: Record<string, number | string | boolean>; meta: Record<MetaAxis, number> } {
   const nextParams = { ...params };
   const nextMeta = { ...meta };
@@ -60,6 +62,15 @@ export function applyCreativeMacros(
   nextMeta.chaos = chaos;
   nextMeta.kinetic = motion;
   nextMeta.organic = clamp01(1 - chaos * 0.65);
+
+  const preset = behaviorPresetId ? behaviorPresetById(behaviorPresetId) : undefined;
+  if (preset?.paramDelta) {
+    for (const [k, delta] of Object.entries(preset.paramDelta)) {
+      if (typeof nextParams[k] === "number") {
+        nextParams[k] = clampParam(k, pieceId, Number(nextParams[k]) + delta);
+      }
+    }
+  }
 
   return { params: nextParams, meta: nextMeta };
 }

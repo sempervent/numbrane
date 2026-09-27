@@ -1,10 +1,9 @@
 /**
- * Autonomous behavior presets — map creative intent to animation methods + param nudges.
+ * Autonomous behavior presets — capability-driven routing to animation methods.
  */
 
-import { animationMethodsForPiece, defaultAnimationMethodId } from "../animation/methods";
 import { animationCapabilitiesFor } from "../animation/capabilities";
-import { familyOf } from "../catalog";
+import { animationMethodsForPiece } from "../animation/methods";
 
 export type BehaviorPresetId =
   | "drift"
@@ -20,139 +19,138 @@ export type BehaviorPresetDef = {
   id: BehaviorPresetId;
   label: string;
   description: string;
-  /** Preferred animation method id when compatible. */
-  animationMethodId: string;
-  /** Optional param deltas applied after macro pass. */
+  /** Optional param nudges applied via macro pass (not cumulative). */
   paramDelta?: Record<string, number>;
-  families?: string[];
-  pieceIds?: string[];
 };
 
 export const BEHAVIOR_PRESETS: BehaviorPresetDef[] = [
   {
     id: "drift",
     label: "Drift",
-    description: "Slow generative drift",
-    animationMethodId: "parameter-drift",
-    families: ["fractal", "field", "particle"],
+    description: "Slow continuous spatial movement",
+    paramDelta: { zoom: 0.02 },
   },
   {
     id: "flow",
     label: "Flow",
     description: "Field-like continuous motion",
-    animationMethodId: "pan-left-right",
-    paramDelta: { density: 0.05 },
-    families: ["field", "geometry"],
+    paramDelta: { density: 0.04 },
   },
   {
     id: "orbit",
     label: "Orbit",
-    description: "Camera orbit feel",
-    animationMethodId: "pan-zoom",
-    families: ["geometry", "fractal"],
+    description: "Rotational camera movement",
   },
   {
     id: "breathe",
     label: "Breathe",
-    description: "Pulse zoom in/out",
-    animationMethodId: "zoom-in",
-    families: ["geometry", "fractal", "reaction"],
+    description: "Rhythmic zoom in and out",
   },
   {
     id: "pulse",
     label: "Pulse",
-    description: "Parameter pulse",
-    animationMethodId: "parameter-drift",
-    families: ["fractal", "particle", "reaction"],
+    description: "Rhythmic parameter amplitude",
   },
   {
     id: "evolve",
     label: "Evolve",
-    description: "Construction / emergence",
-    animationMethodId: "construction",
-    families: ["geometry", "growth"],
+    description: "Construction or emergence arc",
   },
   {
     id: "turbulence",
     label: "Turbulence",
-    description: "Higher chaos motion",
-    animationMethodId: "parameter-drift",
-    paramDelta: { chaos: 0.15 },
-    families: ["field", "particle", "fractal"],
+    description: "Higher chaos and motion",
+    paramDelta: { chaos: 0.12 },
   },
   {
     id: "collapse",
     label: "Collapse",
-    description: "Settle / collapse arc",
-    animationMethodId: "deconstruction",
-    families: ["fractal", "particle"],
+    description: "Settle or collapse arc",
   },
 ];
+
+/** Preferred animation method ids per behavior (first match wins). */
+const BEHAVIOR_METHOD_ROUTES: Record<BehaviorPresetId, string[]> = {
+  drift: ["slow-drift", "parameter-drift", "flow", "continuous-evolution", "native-evolution", "pan-left-right"],
+  flow: ["flow", "pan-left-right", "parameter-drift", "slow-drift", "continuous-evolution"],
+  orbit: ["pan-zoom", "pan-diagonal", "pan-left-right"],
+  breathe: ["zoom-in", "zoom-out", "pan-zoom"],
+  pulse: ["parameter-drift", "zoom-in", "pan-zoom"],
+  evolve: ["construction", "trail-growth", "native-evolution", "continuous-evolution", "slow-drift"],
+  turbulence: ["parameter-drift", "slow-drift", "flow", "continuous-evolution"],
+  collapse: ["deconstruction", "zoom-out", "slow-drift"],
+};
+
+const UNAVAILABLE_REASON: Partial<Record<BehaviorPresetId, string>> = {
+  orbit: "No transformable camera path for this piece",
+  breathe: "No zoom/camera envelope for this piece",
+  evolve: "No construction or native evolution path",
+  collapse: "No collapse/deconstruction path",
+};
 
 export type BehaviorCompatibility =
   | { ok: true; preset: BehaviorPresetDef; methodId: string }
   | { ok: false; reason: string };
 
-function methodExists(pieceId: string, methodId: string): boolean {
-  return animationMethodsForPiece(pieceId).some((m) => m.id === methodId);
-}
-
-/** Map catalog path prefix / manifest family to preset taxonomy (singular). */
 export function behaviorFamilyForPiece(pieceId: string): string {
-  const raw = familyOf(pieceId).toLowerCase();
+  const seg = pieceId.split("/")[0] ?? pieceId;
   const aliases: Record<string, string> = {
     fractals: "fractal",
     particles: "particle",
     fields: "field",
-    geometry: "geometry",
+    tiling: "tiling",
     growth: "growth",
     mashups: "mashup",
-    reaction: "reaction",
     "reaction-diffusion": "reaction",
     audiovisual: "field",
     landscape: "field",
-    calligraphy: "field",
-    attractors: "fractal",
+    flagship: "flagship",
   };
-  if (aliases[raw]) return aliases[raw];
-  if (raw.endsWith("s") && raw.length > 3) {
-    const singular = raw.slice(0, -1);
-    if (["fractal", "particle", "field"].includes(singular)) return singular;
-  }
-  if (pieceId.includes("attractor")) return "fractal";
-  if (pieceId.includes("calligraphy")) return "field";
-  return raw;
+  return aliases[seg] ?? seg;
 }
 
 export function behaviorPresetById(id: string): BehaviorPresetDef | undefined {
   return BEHAVIOR_PRESETS.find((p) => p.id === id);
 }
 
+function resolveBehaviorMethodId(pieceId: string, presetId: BehaviorPresetId): string | null {
+  const allowed = new Set(animationMethodsForPiece(pieceId).map((m) => m.id));
+  for (const mid of BEHAVIOR_METHOD_ROUTES[presetId]) {
+    if (allowed.has(mid)) return mid;
+  }
+  return null;
+}
+
 export function behaviorCompatibility(pieceId: string, presetId: BehaviorPresetId): BehaviorCompatibility {
   const preset = behaviorPresetById(presetId);
   if (!preset) return { ok: false, reason: "Unknown behavior" };
-  const family = behaviorFamilyForPiece(pieceId);
-  if (preset.pieceIds && !preset.pieceIds.includes(pieceId)) {
-    return { ok: false, reason: "Not supported for this piece" };
-  }
-  if (preset.families && !preset.families.includes(family)) {
-    return { ok: false, reason: `Best for ${preset.families.join(", ")} visuals` };
-  }
-  let methodId = preset.animationMethodId;
-  if (!methodExists(pieceId, methodId)) {
-    methodId = defaultAnimationMethodId(pieceId);
-  }
   const caps = animationCapabilitiesFor(pieceId);
   if (caps.sources.length === 0) {
     return { ok: false, reason: "Piece has no animate surface" };
   }
+  const methodId = resolveBehaviorMethodId(pieceId, presetId);
+  if (!methodId) {
+    return {
+      ok: false,
+      reason: UNAVAILABLE_REASON[presetId] ?? "Not available for this runtime",
+    };
+  }
   return { ok: true, preset, methodId };
 }
 
-export function listCompatibleBehaviors(pieceId: string): Array<BehaviorPresetDef & { methodId: string; disabled: boolean; reason?: string }> {
+export function listCompatibleBehaviors(
+  pieceId: string,
+): Array<BehaviorPresetDef & { methodId: string; disabled: boolean; reason?: string }> {
   return BEHAVIOR_PRESETS.map((preset) => {
     const c = behaviorCompatibility(pieceId, preset.id);
     if (c.ok) return { ...preset, methodId: c.methodId, disabled: false };
-    return { ...preset, methodId: preset.animationMethodId, disabled: true, reason: c.reason };
+    return { ...preset, methodId: "", disabled: true, reason: c.reason };
   });
+}
+
+/** Count of selectable non-default behaviors (certification). */
+export function behaviorSupportCount(pieceId: string): { available: number; total: number } {
+  const list = listCompatibleBehaviors(pieceId);
+  const available = list.filter((b) => !b.disabled).length;
+  return { available, total: list.length };
 }

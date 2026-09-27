@@ -125,7 +125,15 @@ const PARAMETER_DRIFT: AnimationMethod = {
   label: "Parameter Drift",
   category: "native",
   source: "composite",
-  compatibleWith: (p) => p.includes("fractal") || p.includes("escape") || p.includes("sdf"),
+  compatibleWith: (p) => {
+    if (p.startsWith("geometry/") && !p.includes("lsystem")) return false;
+    const caps = animationCapabilitiesFor(p);
+    return (
+      caps.sources.includes("generative") ||
+      caps.sources.includes("parameters") ||
+      caps.sources.includes("composite")
+    );
+  },
   defaultDuration: 12,
   defaultEndBehavior: "continuous",
   apply: () => {
