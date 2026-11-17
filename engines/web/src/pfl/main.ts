@@ -1,5 +1,5 @@
 /**
- * PFL Episode 1 — standalone flow-field visualizer (no Studio).
+ * PFL Episode 1 — multi-artwork visualizer (no Studio).
  */
 
 import { PflAudioEngine } from "./audio";
@@ -10,18 +10,26 @@ import {
   mapAudioToVisual,
   visualParamsDigest,
 } from "./features";
-import { nextVariationSeed } from "./composition";
+import {
+  type ArtworkId,
+  nextVariationSeed,
+  parseArtworkFromUrl,
+  syncUrlParams,
+} from "./artworkTypes";
+import { switchArtwork, artworkLabel, type GenerativeArtwork } from "./artworkManager";
 import { normalizedP99 } from "./luma";
-import { FlowFieldRenderer } from "./renderer";
 
 const canvas = document.getElementById("pfl-canvas") as HTMLCanvasElement | null;
 const dockEl = document.getElementById("pfl-dock") as HTMLDivElement | null;
 if (!canvas || !dockEl) throw new Error("PFL DOM missing");
 const dock: HTMLDivElement = dockEl;
 
-let seed = (Number(new URLSearchParams(location.search).get("seed")) || 424242) >>> 0;
+const url = new URLSearchParams(location.search);
+let seed = (Number(url.get("seed")) || 424242) >>> 0;
+let artworkType = parseArtworkFromUrl(url.get("type"));
+
 const audio = new PflAudioEngine();
-const renderer = new FlowFieldRenderer(canvas, { seed });
+let artwork: GenerativeArtwork = switchArtwork(null, canvas, artworkType, seed);
 let modState = createModulationState();
 
 let raf = 0;
@@ -32,8 +40,44 @@ let dockHidden = false;
 let logicalFrame = 0;
 let lastParamsDigest = "";
 
+function refreshVariationLabel(): void {
+  ui.setVariationLabel(seed, artwork.getVariationFacet(), artworkType);
+}
+
+function applyArtworkType(nextType: ArtworkId): boolean {
+  if (nextType === artworkType) return true;
+  try {
+    artwork = switchArtwork(artwork, canvas, nextType, seed);
+    artworkType = nextType;
+    primeArtwork(100);
+    syncUrlParams(artworkType, seed);
+    refreshVariationLabel();
+    return true;
+  } catch (err) {
+    console.error("artwork init failed", err);
+    return false;
+  }
+}
+
+function primeArtwork(frames: number): void {
+  const silent = mapAudioToVisual(
+    { energy: 0, low: 0, mid: 0, high: 0, onset: false },
+    modState,
+    1 / 60,
+  );
+  for (let i = 0; i < frames; i++) {
+    artwork.step(1 / 60, silent.params, i / 60);
+  }
+}
+
 const ui = mountControls(dock, {
   initialSeed: seed,
+  initialArtwork: artworkType,
+  onArtworkType: (t) => {
+    if (!applyArtworkType(t)) {
+      ui.setArtworkType(artworkType);
+    }
+  },
   onMode: async (mode) => {
     dockHidden = false;
     dock.classList.remove("hidden");
@@ -68,8 +112,10 @@ const ui = mountControls(dock, {
   },
   onSeed: () => {
     seed = nextVariationSeed(seed);
-    renderer.applyVariation(seed);
-    ui.setVariationLabel(seed, renderer.getArchetype());
+    artwork.applyVariation(seed);
+    primeArtwork(artworkType === "flow-field" ? 96 : 60);
+    syncUrlParams(artworkType, seed);
+    refreshVariationLabel();
   },
   onSensitivity: (v) => audio.setSensitivity(v),
   onFullscreen: () => {
@@ -103,7 +149,7 @@ function frame(now: number): void {
   const features = audio.tick(dt);
   const mapped = mapAudioToVisual(features, modState, dt);
   modState = mapped.state;
-  renderer.step(dt, mapped.params);
+  artwork.step(dt, mapped.params);
   lastParamsDigest = visualParamsDigest(mapped.params);
   ui.setMeter(features.energy);
   logicalFrame += 1;
@@ -114,7 +160,7 @@ function frame(now: number): void {
   }
 }
 
-window.addEventListener("resize", () => renderer.resize());
+window.addEventListener("resize", () => artwork.resize());
 window.addEventListener("keydown", (e) => {
   if (e.key === "h" || e.key === "H") toggleDock();
   if (e.key === " " && e.target === document.body) {
@@ -130,43 +176,40 @@ document.addEventListener("mousemove", () => {
   dock.classList.remove("hidden");
 });
 
+syncUrlParams(artworkType, seed);
+refreshVariationLabel();
 raf = requestAnimationFrame(frame);
-
-/** Test / diagnostics (not used in performance mode). */
-ui.setVariationLabel(seed, renderer.getArchetype());
 
 (window as unknown as { __PFL__?: Record<string, unknown> }).__PFL__ = {
   getSeed: () => seed,
-  getArchetype: () => renderer.getArchetype(),
+  getArtworkType: () => artworkType,
+  getArchetype: () => artwork.getVariationFacet(),
+  getVariationLabel: () => artworkLabel(artwork),
   getLogicalFrame: () => logicalFrame,
   getParamsDigest: () => lastParamsDigest,
-  sampleLuma: () => renderer.sampleMeanLuma(),
-  sampleLumaReport: () => renderer.sampleLumaReport(),
-  normalizedP99: () => normalizedP99(renderer.sampleLumaReport()),
+  sampleLuma: () => artwork.sampleLumaReport().mean,
+  sampleLumaReport: () => artwork.sampleLumaReport(),
+  normalizedP99: () => normalizedP99(artwork.sampleLumaReport()),
+  setArtworkType: (t: string) => applyArtworkType(parseArtworkFromUrl(t)),
   applyVariation: (s: number) => {
     seed = s >>> 0;
-    renderer.applyVariation(seed);
-    ui.setVariationLabel(seed, renderer.getArchetype());
+    artwork.applyVariation(seed);
+    primeArtwork(80);
+    syncUrlParams(artworkType, seed);
+    refreshVariationLabel();
   },
-  primeSilent: (frames = 120) => {
-    const silent = mapAudioToVisual(
-      { energy: 0, low: 0, mid: 0, high: 0, onset: false },
-      modState,
-      1 / 60,
-    );
-    for (let i = 0; i < frames; i++) {
-      renderer.step(1 / 60, silent.params, i / 60);
-    }
-  },
+  primeSilent: (frames = 120) => primeArtwork(frames),
   stepForTest: (dt: number, demoTimeSec: number) => {
     const f = demoFeaturesAt(demoTimeSec, 1);
     const m = mapAudioToVisual(f, modState, dt);
-    renderer.step(dt, m.params, demoTimeSec);
+    modState = m.state;
+    artwork.step(dt, m.params, demoTimeSec);
     return { features: f, params: m.params };
   },
   dispose: () => {
     running = false;
     cancelAnimationFrame(raf);
+    artwork.dispose();
     audio.dispose();
   },
 };

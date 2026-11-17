@@ -1,6 +1,8 @@
-# PFL Episode 1 — Flow Field Visualizer
+# PFL Episode 1 — Multi-Artwork Visualizer
 
 Standalone entry point for Positive Feedback Loop recording. **Does not use Studio.**
+
+Artwork types: **Flow Field** (streamlines), **Fractal Morph** (IFS density), **Block Lattice** (isometric blocks). Deep-link with `?type=fractal-morph&seed=424242`.
 
 ## Run
 
@@ -30,7 +32,8 @@ Production build includes the same URL path under `dist/pfl.html` after `npm run
 | Demo | Synthetic musical features (no permission) |
 | File | Local audio via Web Audio `MediaElementSource` |
 | Input | Microphone / loopback device (never monitored to speakers) |
-| New variation | New deterministic seed |
+| Artwork | Select algorithm (audio path unchanged) |
+| New variation | New seed within the selected type |
 | Gain | Analyzer sensitivity |
 | H | Toggle control dock |
 
@@ -41,7 +44,9 @@ npm run test -- --run tests/pfl_features.test.ts tests/pfl_composition.test.ts
 PW_CHROMIUM_ARGS="" npx playwright test -c playwright.pfl.config.ts
 ```
 
-Visual QA contact sheet: `engines/web/tmp/pfl-review/variation-seed-*.png`
+Visual QA: `engines/web/tmp/pfl-review/` — `variation-seed-*.png`, `type-*-default.png`, `contact-*-seed-*.png`
+
+Reference notes (Reddit inspo, uncertainty): `docs/pfl-reference-notes.md`
 
 Regression targets (canvas artwork only): normalized **p99 luma > 0.18**, ≥5 distinct variation digests.
 

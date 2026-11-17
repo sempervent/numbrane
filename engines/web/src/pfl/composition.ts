@@ -144,7 +144,4 @@ export function compositionFromSeed(seed: number): CompositionBundle {
   }
 }
 
-export function nextVariationSeed(seed: number): number {
-  const rng = mulberry32((seed ^ 0x9e3779b9) >>> 0);
-  return (Math.floor(rng() * 0xffff_ffff) ^ (seed << 13)) >>> 0;
-}
+export { nextVariationSeed } from "./artworkTypes";

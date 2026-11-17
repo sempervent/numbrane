@@ -3,9 +3,12 @@
  */
 
 import type { AudioMode } from "./audio";
+import { ARTWORK_IDS, artworkDisplayName, type ArtworkId } from "./artworkTypes";
 
 export type PflControlCallbacks = {
   initialSeed?: number;
+  initialArtwork?: ArtworkId;
+  onArtworkType: (type: ArtworkId) => void;
   onMode: (mode: AudioMode) => void;
   onFile: (file: File) => void;
   onDevice: (deviceId: string) => void;
@@ -22,10 +25,19 @@ export function mountControls(
 ): {
   setMeter: (v: number) => void;
   setPlaying: (on: boolean) => void;
-  setVariationLabel: (seed: number, archetype: string) => void;
+  setVariationLabel: (seed: number, facet: string, type: ArtworkId) => void;
+  setArtworkType: (type: ArtworkId) => void;
 } {
+  const typeOptions = ARTWORK_IDS.map(
+    (id) => `<option value="${id}">${artworkDisplayName(id)}</option>`,
+  ).join("");
+
   host.innerHTML = `
-    <h1>PFL · Flow Field</h1>
+    <h1>PFL · Visualizer</h1>
+    <div class="pfl-row">
+      <label>Artwork</label>
+      <select id="pfl-artwork-type">${typeOptions}</select>
+    </div>
     <div class="pfl-row">
       <label>Source</label>
       <select id="pfl-source">
@@ -57,6 +69,12 @@ export function mountControls(
 
   const meterBar = host.querySelector<HTMLSpanElement>("#pfl-meter span")!;
   const playBtn = host.querySelector<HTMLButtonElement>("#pfl-play")!;
+  const typeSel = host.querySelector<HTMLSelectElement>("#pfl-artwork-type")!;
+  if (callbacks.initialArtwork) typeSel.value = callbacks.initialArtwork;
+
+  typeSel.addEventListener("change", () => {
+    callbacks.onArtworkType(typeSel.value as ArtworkId);
+  });
 
   host.querySelector("#pfl-source")?.addEventListener("change", (e) => {
     callbacks.onMode((e.target as HTMLSelectElement).value as AudioMode);
@@ -90,10 +108,13 @@ export function mountControls(
     setPlaying: (on: boolean) => {
       playBtn.textContent = on ? "Pause" : "Play";
     },
-    setVariationLabel: (seed: number, archetype: string) => {
+    setVariationLabel: (seed: number, facet: string, type: ArtworkId) => {
       if (variationEl) {
-        variationEl.textContent = `Variation · ${archetype} · seed ${seed}`;
+        variationEl.textContent = `${artworkDisplayName(type)} · ${facet} · seed ${seed}`;
       }
+    },
+    setArtworkType: (type: ArtworkId) => {
+      typeSel.value = type;
     },
   };
 }
