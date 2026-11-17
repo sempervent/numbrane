@@ -6,7 +6,7 @@ const port = 5199;
 export default defineConfig({
   ...base,
   testDir: "./tests/e2e",
-  testMatch: "**/pfl-visualizer.spec.ts",
+  testMatch: ["**/pfl-visualizer.spec.ts", "**/pfl-visual-quality.spec.ts"],
   webServer: {
     command: `npm run dev -- --host 127.0.0.1 --port ${port}`,
     url: `http://127.0.0.1:${port}/pfl.html`,

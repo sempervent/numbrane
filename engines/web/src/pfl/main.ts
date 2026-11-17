@@ -10,8 +10,9 @@ import {
   mapAudioToVisual,
   visualParamsDigest,
 } from "./features";
+import { nextVariationSeed } from "./composition";
+import { normalizedP99 } from "./luma";
 import { FlowFieldRenderer } from "./renderer";
-import { mulberry32 } from "./rng";
 
 const canvas = document.getElementById("pfl-canvas") as HTMLCanvasElement | null;
 const dockEl = document.getElementById("pfl-dock") as HTMLDivElement | null;
@@ -32,6 +33,7 @@ let logicalFrame = 0;
 let lastParamsDigest = "";
 
 const ui = mountControls(dock, {
+  initialSeed: seed,
   onMode: async (mode) => {
     dockHidden = false;
     dock.classList.remove("hidden");
@@ -65,9 +67,9 @@ const ui = mountControls(dock, {
     ui.setPlaying(audio.isFilePlaying());
   },
   onSeed: () => {
-    const rng = mulberry32((seed ^ logicalFrame) >>> 0);
-    seed = (Math.floor(rng() * 0xffff_ffff) ^ 0x51ed) >>> 0;
-    renderer.setSeed(seed);
+    seed = nextVariationSeed(seed);
+    renderer.applyVariation(seed);
+    ui.setVariationLabel(seed, renderer.getArchetype());
   },
   onSensitivity: (v) => audio.setSensitivity(v),
   onFullscreen: () => {
@@ -131,11 +133,31 @@ document.addEventListener("mousemove", () => {
 raf = requestAnimationFrame(frame);
 
 /** Test / diagnostics (not used in performance mode). */
+ui.setVariationLabel(seed, renderer.getArchetype());
+
 (window as unknown as { __PFL__?: Record<string, unknown> }).__PFL__ = {
   getSeed: () => seed,
+  getArchetype: () => renderer.getArchetype(),
   getLogicalFrame: () => logicalFrame,
   getParamsDigest: () => lastParamsDigest,
   sampleLuma: () => renderer.sampleMeanLuma(),
+  sampleLumaReport: () => renderer.sampleLumaReport(),
+  normalizedP99: () => normalizedP99(renderer.sampleLumaReport()),
+  applyVariation: (s: number) => {
+    seed = s >>> 0;
+    renderer.applyVariation(seed);
+    ui.setVariationLabel(seed, renderer.getArchetype());
+  },
+  primeSilent: (frames = 120) => {
+    const silent = mapAudioToVisual(
+      { energy: 0, low: 0, mid: 0, high: 0, onset: false },
+      modState,
+      1 / 60,
+    );
+    for (let i = 0; i < frames; i++) {
+      renderer.step(1 / 60, silent.params, i / 60);
+    }
+  },
   stepForTest: (dt: number, demoTimeSec: number) => {
     const f = demoFeaturesAt(demoTimeSec, 1);
     const m = mapAudioToVisual(f, modState, dt);

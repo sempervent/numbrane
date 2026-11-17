@@ -37,11 +37,13 @@ Production build includes the same URL path under `dist/pfl.html` after `npm run
 ## Tests
 
 ```bash
-npm run test -- --run tests/pfl_features.test.ts
-PW_CHROMIUM_ARGS="" npx playwright test tests/e2e/pfl-visualizer.spec.ts
+npm run test -- --run tests/pfl_features.test.ts tests/pfl_composition.test.ts
+PW_CHROMIUM_ARGS="" npx playwright test -c playwright.pfl.config.ts
 ```
 
-Screenshots on failure/success: `engines/web/tmp/pfl-review/`
+Visual QA contact sheet: `engines/web/tmp/pfl-review/variation-seed-*.png`
+
+Regression targets (canvas artwork only): normalized **p99 luma > 0.18**, ≥5 distinct variation digests.
 
 ## Legacy Studio
 

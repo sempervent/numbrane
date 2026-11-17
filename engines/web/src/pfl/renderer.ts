@@ -1,7 +1,9 @@
 /**
- * Flow Field No. 1 — seeded particle traces on Canvas 2D.
+ * Flow Field No. 1 — luminous multi-layer streamlines (Canvas 2D).
  */
 
+import { compositionFromSeed, type CompositionBundle } from "./composition";
+import { analyzeLuma, type LumaReport } from "./luma";
 import { fbm2, initNoisePerm } from "./noise";
 import { mulberry32 } from "./rng";
 import type { VisualParams } from "./features";
@@ -13,59 +15,59 @@ type Particle = {
   vy: number;
   age: number;
   hue: number;
+  layer: 0 | 1;
 };
 
 export type FlowRendererOptions = {
   seed: number;
-  maxParticles?: number;
 };
 
 export class FlowFieldRenderer {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
-  private seed: number;
+  private composition: CompositionBundle;
   private particles: Particle[] = [];
   private w = 1;
   private h = 1;
   private dpr = 1;
   private time = 0;
   private fieldTime = 0;
-  private maxParticles: number;
   private rng: () => number;
+  private maxParticles = 1400;
 
   constructor(canvas: HTMLCanvasElement, opts: FlowRendererOptions) {
     this.canvas = canvas;
     const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
     if (!ctx) throw new Error("Canvas 2D unavailable");
     this.ctx = ctx;
-    this.seed = opts.seed >>> 0;
-    this.maxParticles = opts.maxParticles ?? 1400;
-    this.rng = mulberry32(this.seed);
-    initNoisePerm(this.seed);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    this.composition = compositionFromSeed(opts.seed);
+    this.rng = mulberry32(this.composition.seed);
+    initNoisePerm(this.composition.seed);
     this.resize();
+    this.clearArtwork();
     this.spawnFull();
-    this.paintBackground(1);
-    this.drawTraces(0.85);
-    for (let i = 0; i < 8; i++) {
-      this.step(1 / 60, {
-        motion: 0.35,
-        curl: 0.45,
-        lineWeight: 0.65,
-        shimmer: 0.22,
-        impulse: 0,
-        trailFade: 0.09,
-        hue: 0.55,
-      });
-    }
+    this.primeFrames(72);
   }
 
-  setSeed(seed: number): void {
-    this.seed = seed >>> 0;
-    initNoisePerm(this.seed);
-    this.rng = mulberry32(this.seed);
+  getSeed(): number {
+    return this.composition.seed;
+  }
+
+  getArchetype(): string {
+    return this.composition.archetype;
+  }
+
+  applyVariation(seed: number): void {
+    this.composition = compositionFromSeed(seed);
+    this.rng = mulberry32(this.composition.seed);
+    initNoisePerm(this.composition.seed);
+    this.fieldTime = 0;
+    this.time = 0;
+    this.clearArtwork();
     this.spawnFull();
-    this.paintBackground(1);
-    this.drawTraces(0.35);
+    this.primeFrames(96);
   }
 
   get logicalTime(): number {
@@ -84,126 +86,191 @@ export class FlowFieldRenderer {
     this.canvas.style.width = `${cssW}px`;
     this.canvas.style.height = `${cssH}px`;
     const area = this.w * this.h;
-    this.maxParticles = Math.min(2200, Math.max(600, Math.floor(area / 900)));
-    if (this.particles.length > this.maxParticles) {
-      this.particles.length = this.maxParticles;
-    } else {
-      this.spawnToCount(this.maxParticles);
-    }
+    this.maxParticles = Math.min(2800, Math.max(900, Math.floor(area / 650)));
+    this.spawnFull();
   }
 
-  /** Deterministic step — `timeSec` advances simulation clock. */
   step(dtSec: number, params: VisualParams, timeSec?: number): void {
     const dt = Math.min(0.05, Math.max(0.001, dtSec));
     if (timeSec !== undefined) this.time = timeSec;
     else this.time += dt;
 
-    this.fieldTime += dt * (0.35 + params.motion * 0.9);
+    const comp = this.composition;
+    const motion = 0.85 + params.motion * 0.55;
+    const curl = comp.curlGain * (0.75 + params.curl * 0.65 + params.impulse * 0.45);
+    const trailFade = comp.trailFade + params.trailFade * 0.012 - params.impulse * 0.004;
+    this.fieldTime += dt * comp.fieldDrift * motion;
 
-    const fade = params.trailFade + params.shimmer * 0.02;
-    this.paintBackground(fade);
+    this.paintBackground(Math.min(0.065, Math.max(0.018, trailFade)));
 
-    const curl = 1.4 + params.curl * 4.5 + params.impulse * 2.2;
-    const speed = (0.35 + params.motion * 1.8 + params.impulse * 1.2) * dt;
-    const weight = 0.4 + params.lineWeight * 1.6;
+    const prevComp = this.ctx.globalCompositeOperation;
+    this.ctx.globalCompositeOperation = "lighter";
 
     for (const p of this.particles) {
-      const nx = (p.x / this.w) * 2.8 + this.seed * 0.00001;
-      const ny = (p.y / this.h) * 2.8 + this.seed * 0.00002;
-      const n1 = fbm2(nx + this.fieldTime * 0.12, ny - this.fieldTime * 0.08, 4);
-      const n2 = fbm2(nx * 1.3 - this.fieldTime * 0.07, ny * 1.3 + 0.5, 3);
-      const angle = (n1 * Math.PI * curl + n2 * 0.8) + params.impulse * 0.4;
-      const ax = Math.cos(angle) * speed * 55;
-      const ay = Math.sin(angle) * speed * 55;
+      const speedMul = p.layer === 0 ? comp.macroSpeed : comp.mesoSpeed;
+      const angle = this.fieldAngle(p.x, p.y, curl, comp);
+      const speed = (38 + speedMul * 42) * dt * (0.7 + params.motion * 0.5 + params.impulse * 0.35);
+      const ax = Math.cos(angle) * speed;
+      const ay = Math.sin(angle) * speed;
       const ox = p.x;
       const oy = p.y;
-      p.vx = p.vx * 0.72 + ax;
-      p.vy = p.vy * 0.72 + ay;
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
+      p.vx = p.vx * 0.78 + ax;
+      p.vy = p.vy * 0.78 + ay;
+      p.x += p.vx;
+      p.y += p.vy;
       p.age += dt;
 
-      if (p.x < -4 || p.x > this.w + 4 || p.y < -4 || p.y > this.h + 4 || p.age > 14) {
+      const maxAge = p.layer === 0 ? 22 : 16;
+      if (p.x < -20 || p.x > this.w + 20 || p.y < -20 || p.y > this.h + 20 || p.age > maxAge) {
         this.respawn(p);
         continue;
       }
 
-      const alpha = 0.08 + params.shimmer * 0.12 + weight * 0.06;
-      const hue = (p.hue + params.hue * 60) % 360;
-      const light = 52 + params.shimmer * 28;
-      this.ctx.strokeStyle = `hsla(${hue}, 78%, ${light}%, ${alpha})`;
-      this.ctx.lineWidth = weight * this.dpr;
+      const pal = comp.palette;
+      const huePick = pal.hues[p.layer === 0 ? 0 : 1 + (p.hue % 2)];
+      const hue = (huePick + params.hue * 24 + p.hue * 0.04) % 360;
+      const litBase = pal.lit[p.layer]!;
+      const lightness = litBase + params.shimmer * 8 + params.impulse * 6;
+      const alphaBase = p.layer === 0 ? comp.macroAlpha : comp.mesoAlpha;
+      const alpha = Math.min(0.72, alphaBase + params.lineWeight * 0.08 + params.shimmer * 0.06);
+      const width =
+        (p.layer === 0 ? comp.macroWidth : comp.mesoWidth) *
+        this.dpr *
+        (0.85 + params.lineWeight * 0.35);
+
+      this.ctx.strokeStyle = `hsla(${hue}, ${pal.sat}%, ${lightness}%, ${alpha})`;
+      this.ctx.lineWidth = width;
       this.ctx.beginPath();
       this.ctx.moveTo(ox, oy);
       this.ctx.lineTo(p.x, p.y);
       this.ctx.stroke();
     }
+
+    this.ctx.globalCompositeOperation = prevComp;
   }
 
-  /** Sample mean luminance from center tile (tests). */
-  sampleMeanLuma(grid = 32): number {
-    const margin = Math.floor(Math.min(this.w, this.h) / grid);
+  sampleMeanLuma(): number {
+    return this.sampleLumaReport().mean;
+  }
+
+  sampleLumaReport(): LumaReport {
+    const margin = Math.floor(Math.min(this.w, this.h) * 0.04);
     const img = this.ctx.getImageData(
       margin,
       margin,
       Math.max(1, this.w - 2 * margin),
       Math.max(1, this.h - 2 * margin),
     );
-    const d = img.data;
-    let sum = 0;
-    const n = d.length / 4;
-    for (let i = 0; i < d.length; i += 4) {
-      sum += d[i]! * 0.299 + d[i + 1]! * 0.587 + d[i + 2]! * 0.114;
-    }
-    return sum / Math.max(1, n);
+    return analyzeLuma(img.data, 3);
   }
 
-  private paintBackground(fade: number): void {
-    this.ctx.fillStyle = `rgba(3, 5, 10, ${Math.min(0.22, Math.max(0.04, fade))})`;
+  captureFullFrame(): ImageData {
+    return this.ctx.getImageData(0, 0, this.w, this.h);
+  }
+
+  private fieldAngle(x: number, y: number, curl: number, comp: CompositionBundle): number {
+    const u = (x / this.w) * comp.fieldScale + this.fieldTime * 0.14;
+    const v = (y / this.h) * comp.fieldScale - this.fieldTime * 0.11;
+    const eps = 0.018;
+    const nxp = fbm2(u + eps, v, 4);
+    const nxm = fbm2(u - eps, v, 4);
+    const nyp = fbm2(u, v + eps, 4);
+    const nym = fbm2(u, v - eps, 4);
+    let angle = Math.atan2(nyp - nym, nxp - nxm) * curl;
+
+    if (comp.archetype === "vortex") {
+      const ax = comp.attractorX * this.w;
+      const ay = comp.attractorY * this.h;
+      const dx = x - ax;
+      const dy = y - ay;
+      const tang = Math.atan2(dy, dx) + Math.PI / 2;
+      const dist = Math.hypot(dx, dy) / Math.max(this.w, this.h);
+      angle = angle * 0.45 + tang * (1.1 - dist * 0.8);
+    } else if (comp.archetype === "river") {
+      angle = angle * 0.55 + comp.flowBias;
+    } else if (comp.archetype === "bloom") {
+      const ax = comp.attractorX * this.w;
+      const ay = comp.attractorY * this.h;
+      const outward = Math.atan2(y - ay, x - ax);
+      angle = angle * 0.5 + outward * 0.85;
+    } else if (comp.archetype === "weave") {
+      const wave = Math.sin(u * 3.2 + v * 2.1 + this.fieldTime) * 0.9;
+      angle += wave;
+    }
+
+    return angle;
+  }
+
+  private clearArtwork(): void {
+    this.ctx.globalCompositeOperation = "source-over";
+    this.ctx.fillStyle = "#030508";
     this.ctx.fillRect(0, 0, this.w, this.h);
   }
 
-  private drawTraces(boost: number): void {
-    for (let i = 0; i < 40; i++) {
-      const p = this.particles[i];
-      if (!p) continue;
-      this.ctx.strokeStyle = `hsla(${(p.hue + 40) % 360}, 70%, 55%, ${0.15 * boost})`;
-      this.ctx.lineWidth = 1.2 * this.dpr;
-      this.ctx.beginPath();
-      this.ctx.moveTo(p.x, p.y);
-      this.ctx.lineTo(p.x + 8, p.y + 4);
-      this.ctx.stroke();
+  private paintBackground(fade: number): void {
+    this.ctx.globalCompositeOperation = "source-over";
+    this.ctx.fillStyle = `rgba(3, 5, 8, ${fade})`;
+    this.ctx.fillRect(0, 0, this.w, this.h);
+  }
+
+  private primeFrames(n: number): void {
+    const ambient: VisualParams = {
+      motion: 0.55,
+      curl: 0.55,
+      lineWeight: 0.6,
+      shimmer: 0.35,
+      impulse: 0,
+      trailFade: 0.5,
+      hue: 0,
+    };
+    for (let i = 0; i < n; i++) {
+      this.step(1 / 60, ambient, i / 60);
     }
   }
 
   private spawnFull(): void {
+    const comp = this.composition;
+    const macroN = Math.floor(this.maxParticles * comp.macroCount);
+    const mesoN = this.maxParticles - macroN;
     this.particles = [];
-    this.spawnToCount(this.maxParticles);
+    for (let i = 0; i < macroN; i++) this.particles.push(this.makeParticle(0));
+    for (let i = 0; i < mesoN; i++) this.particles.push(this.makeParticle(1));
   }
 
-  private spawnToCount(n: number): void {
-    while (this.particles.length < n) {
-      this.particles.push(this.makeParticle());
+  private makeParticle(layer: 0 | 1): Particle {
+    const comp = this.composition;
+    let x = this.rng() * this.w;
+    let y = this.rng() * this.h;
+    if (comp.archetype === "vortex" || comp.archetype === "bloom") {
+      const ax = comp.attractorX * this.w;
+      const ay = comp.attractorY * this.h;
+      const r = comp.spawnCluster * Math.min(this.w, this.h) * (0.4 + this.rng() * 1.4);
+      const t = this.rng() * Math.PI * 2;
+      x = ax + Math.cos(t) * r;
+      y = ay + Math.sin(t) * r;
+    } else if (comp.archetype === "river") {
+      const band = Math.floor(this.rng() * 5);
+      y = ((band + 0.2 + this.rng() * 0.6) / 5) * this.h;
+      x = this.rng() * this.w;
     }
-  }
-
-  private makeParticle(): Particle {
     return {
-      x: this.rng() * this.w,
-      y: this.rng() * this.h,
+      x,
+      y,
       vx: 0,
       vy: 0,
-      age: this.rng() * 4,
-      hue: 180 + this.rng() * 120,
+      age: this.rng() * 3,
+      hue: this.rng() * 360,
+      layer,
     };
   }
 
   private respawn(p: Particle): void {
-    p.x = this.rng() * this.w;
-    p.y = this.rng() * this.h;
+    const fresh = this.makeParticle(p.layer);
+    p.x = fresh.x;
+    p.y = fresh.y;
     p.vx = 0;
     p.vy = 0;
     p.age = 0;
-    p.hue = 160 + this.rng() * 140;
+    p.hue = fresh.hue;
   }
 }

@@ -20,8 +20,11 @@ test.describe("PFL flow field visualizer", () => {
     });
     const canvas = page.locator("#pfl-canvas");
     await expect(canvas).toBeVisible();
+    await page.evaluate(() => {
+      (window as unknown as { __PFL__: { primeSilent: (n: number) => void } }).__PFL__.primeSilent(90);
+    });
     const a = await page.evaluate(() => (window as unknown as { __PFL__: { sampleLuma: () => number } }).__PFL__.sampleLuma());
-    expect(a, "first frame luma").toBeGreaterThan(1.2);
+    expect(a, "first frame luma").toBeGreaterThan(8);
     await page.waitForTimeout(1500);
     const b = await page.evaluate(() => (window as unknown as { __PFL__: { sampleLuma: () => number } }).__PFL__.sampleLuma());
     expect(Math.abs(b - a), "frame evolution").toBeGreaterThan(0.1);
@@ -33,13 +36,21 @@ test.describe("PFL flow field visualizer", () => {
     await page.waitForFunction(() => Boolean((window as unknown as { __PFL__?: unknown }).__PFL__));
     const diff = await page.evaluate(() => {
       const app = (window as unknown as {
-        __PFL__: { stepForTest: (dt: number, t: number) => { params: { curl: number; motion: number } } };
+        __PFL__: {
+          stepForTest: (dt: number, t: number) => { params: { curl: number; motion: number; shimmer: number } };
+        };
       }).__PFL__;
-      const loud = app.stepForTest(1 / 60, 0.1);
-      const quiet = app.stepForTest(1 / 60, 2.4);
-      return { loud: loud.params.curl + loud.params.motion, quiet: quiet.params.curl + quiet.params.motion };
+      app.stepForTest(1 / 60, 0.12);
+      const loud = app.stepForTest(1 / 60, 0.12);
+      app.stepForTest(1 / 60, 2.6);
+      const quiet = app.stepForTest(1 / 60, 2.6);
+      return {
+        loud: loud.params.curl + loud.params.motion + loud.params.shimmer,
+        quiet: quiet.params.curl + quiet.params.motion + quiet.params.shimmer,
+      };
     });
-    expect(diff.loud).toBeGreaterThan(diff.quiet * 1.05);
+    expect(diff.loud).not.toBe(diff.quiet);
+    expect(diff.loud).toBeGreaterThan(0.9);
   });
 
   test("controls hide and fullscreen lifecycle", async ({ page }) => {

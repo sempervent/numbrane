@@ -20,14 +20,23 @@ export type VisualParams = {
   hue: number;
 };
 
+/** Baseline visibility — art must read with zero audio. */
 const AMBIENT: VisualParams = {
-  motion: 0.22,
-  curl: 0.35,
-  lineWeight: 0.55,
-  shimmer: 0.15,
+  motion: 0.48,
+  curl: 0.42,
+  lineWeight: 0.58,
+  shimmer: 0.38,
   impulse: 0,
-  trailFade: 0.082,
-  hue: 0.58,
+  trailFade: 0.42,
+  hue: 0,
+};
+
+const AUDIO_GAIN = {
+  motion: 0.22,
+  curl: 0.28,
+  lineWeight: 0.12,
+  shimmer: 0.18,
+  trailFade: -0.06,
 };
 
 /** Deterministic demo pattern from logical time (seconds). */
@@ -68,21 +77,21 @@ export function mapAudioToVisual(
   if (f.onset) impulse = Math.max(impulse, 1);
   impulse = Math.max(0, impulse - dtSec * 2.8);
 
-  const motion = AMBIENT.motion + f.energy * 0.72;
-  const curl = AMBIENT.curl + f.low * 0.9 + impulse * 0.35;
-  const lineWeight = AMBIENT.lineWeight + f.mid * 0.55;
-  const shimmer = AMBIENT.shimmer + f.high * 0.65;
-  const trailFade = AMBIENT.trailFade - f.energy * 0.018 + impulse * 0.012;
-  const hue = AMBIENT.hue + f.high * 0.08 - f.low * 0.04;
+  const motion = AMBIENT.motion + f.energy * AUDIO_GAIN.motion;
+  const curl = AMBIENT.curl + f.low * AUDIO_GAIN.curl + impulse * 0.35;
+  const lineWeight = AMBIENT.lineWeight + f.mid * AUDIO_GAIN.lineWeight;
+  const shimmer = AMBIENT.shimmer + f.high * AUDIO_GAIN.shimmer;
+  const trailFade = AMBIENT.trailFade + f.energy * AUDIO_GAIN.trailFade;
+  const hue = f.high * 0.12 - f.low * 0.04;
 
   return {
     params: {
-      motion: clamp01(motion),
-      curl: clamp01(curl),
-      lineWeight: clamp01(lineWeight),
-      shimmer: clamp01(shimmer),
+      motion: clamp(0.4, 1, motion),
+      curl: clamp(0.35, 1, curl),
+      lineWeight: clamp(0.45, 1, lineWeight),
+      shimmer: clamp(0.3, 1, shimmer),
       impulse: clamp01(impulse),
-      trailFade: clamp(0.035, 0.14, trailFade),
+      trailFade: clamp(0.35, 0.65, trailFade),
       hue: hue % 1,
     },
     state: { impulse },

@@ -5,6 +5,7 @@
 import type { AudioMode } from "./audio";
 
 export type PflControlCallbacks = {
+  initialSeed?: number;
   onMode: (mode: AudioMode) => void;
   onFile: (file: File) => void;
   onDevice: (deviceId: string) => void;
@@ -18,7 +19,11 @@ export type PflControlCallbacks = {
 export function mountControls(
   host: HTMLElement,
   callbacks: PflControlCallbacks,
-): { setMeter: (v: number) => void; setPlaying: (on: boolean) => void } {
+): {
+  setMeter: (v: number) => void;
+  setPlaying: (on: boolean) => void;
+  setVariationLabel: (seed: number, archetype: string) => void;
+} {
   host.innerHTML = `
     <h1>PFL · Flow Field</h1>
     <div class="pfl-row">
@@ -46,6 +51,7 @@ export function mountControls(
       <button type="button" id="pfl-fullscreen">Fullscreen</button>
       <button type="button" id="pfl-hide">Hide (H)</button>
     </div>
+      <p id="pfl-variation" class="pfl-hint">Variation · seed ${callbacks.initialSeed ?? "?"}</p>
     <p class="pfl-hint">Hide controls for OBS · Press H to toggle · Demo runs without permission.</p>
   `;
 
@@ -75,12 +81,19 @@ export function mountControls(
   host.querySelector("#pfl-fullscreen")?.addEventListener("click", () => callbacks.onFullscreen());
   host.querySelector("#pfl-hide")?.addEventListener("click", () => callbacks.onHide());
 
+  const variationEl = host.querySelector<HTMLParagraphElement>("#pfl-variation");
+
   return {
     setMeter: (v: number) => {
       meterBar.style.width = `${Math.min(100, Math.max(0, v * 100))}%`;
     },
     setPlaying: (on: boolean) => {
       playBtn.textContent = on ? "Pause" : "Play";
+    },
+    setVariationLabel: (seed: number, archetype: string) => {
+      if (variationEl) {
+        variationEl.textContent = `Variation · ${archetype} · seed ${seed}`;
+      }
     },
   };
 }
