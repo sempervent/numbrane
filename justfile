@@ -338,6 +338,16 @@ studio:
     echo "Mic stays in the browser (getUserMedia). Docker only serves static assets."
     npm run dev -- --host 127.0.0.1 --port 5173 --open /studio.html
 
+# ── PFL Episode 1 visualizer (standalone /pfl.html) ───────────────────
+
+[group('pfl')]
+pfl:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    echo "PFL Flow Field → http://127.0.0.1:5173/pfl.html"
+    npm run dev:pfl -- --host 127.0.0.1 --port 5173
+
 [group('studio')]
 studio-test:
     cd "{{root}}/engines/web" && npm run test:studio
