@@ -19,9 +19,10 @@ import {
 import { switchArtwork, artworkLabel, type GenerativeArtwork } from "./artworkManager";
 import { normalizedP99 } from "./luma";
 
-const canvas = document.getElementById("pfl-canvas") as HTMLCanvasElement | null;
+const canvasNode = document.getElementById("pfl-canvas");
 const dockEl = document.getElementById("pfl-dock") as HTMLDivElement | null;
-if (!canvas || !dockEl) throw new Error("PFL DOM missing");
+if (!(canvasNode instanceof HTMLCanvasElement) || !dockEl) throw new Error("PFL DOM missing");
+const canvas: HTMLCanvasElement = canvasNode;
 const dock: HTMLDivElement = dockEl;
 
 const url = new URLSearchParams(location.search);

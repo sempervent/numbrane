@@ -39,6 +39,9 @@ jobs:
           uv sync --directory engines/python --frozen --extra dev
           npm ci --prefix engines/web
 
+      - name: Install Playwright Chromium (PFL e2e)
+        run: cd engines/web && npx playwright install chromium --with-deps
+
       - name: Fast PR validation
         run: just pr-fast
 
