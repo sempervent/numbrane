@@ -117,6 +117,10 @@ describe("determinism hygiene", () => {
       if (file.includes(`${sep}studio${sep}`)) {
         return;
       }
+      // PFL standalone visualizer: RAF + dock timers only; artwork is seed-driven.
+      if (file.includes(`${sep}pfl${sep}`)) {
+        return;
+      }
       if (/\bperformance\.now\s*\(/.test(text)) {
         hits.push(file);
       }
