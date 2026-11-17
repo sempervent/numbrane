@@ -36,7 +36,6 @@ import { parseResolution } from "./types";
 import type { FrameState } from "./piece";
 import {
   analyzeRgbaGrid,
-  downsampleRgba,
   luminanceAt,
   type PixelFrame,
 } from "./pixelMetrics";
@@ -251,6 +250,10 @@ export class LiveSession {
   private setPerformanceMode: SetExecutionMode = "perform";
   private capturedCandidates: SceneDef[] = [];
   private midiClockMissCount = 0;
+  /** Reused per-frame modulation source map (avoid Object.fromEntries churn). */
+  private readonly modSources: Record<string, number> = {};
+  /** Reused digest pixel buffer (64×36 RGBA). */
+  private digestPixelBuf: Uint8Array | null = null;
 
   constructor(opts: LiveSessionOptions) {
     this.canvas = opts.canvas;
@@ -313,7 +316,12 @@ export class LiveSession {
   }
 
   setProductionCaptureMode(enabled: boolean): void {
-    this.digestSampleIntervalMs = enabled ? 1200 : 250;
+    // Performance mode already samples slowly; production capture stretches further.
+    if (this.animationRuntime.performanceMode) {
+      this.digestSampleIntervalMs = enabled ? 2000 : 1000;
+    } else {
+      this.digestSampleIntervalMs = enabled ? 1200 : 250;
+    }
   }
 
   getSessionTimingDiagnostics(): LiveSessionTimingDiagnostics {
@@ -388,6 +396,17 @@ export class LiveSession {
     return { w, h };
   }
 
+  /** Yield so RAF / input can run between expensive mashup layer inits. */
+  private yieldToMain(): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof requestAnimationFrame === "function") {
+        requestAnimationFrame(() => resolve());
+      } else {
+        setTimeout(resolve, 0);
+      }
+    });
+  }
+
   private async prepareScenePieces(
     set: SetDef,
     liveMode: "animate" | "react",
@@ -409,73 +428,68 @@ export class LiveSession {
     const layerEnabled = new Map<string, boolean>();
     const layerRenderOrder: string[] = [];
 
-    for (const layer of scene.layers) {
-      if (!this.isLoadCurrent(token)) {
-        this.disposePreparedScene({
-          pieces,
-          baseParams,
-          layerOpacity,
-          layerBlend,
-          layerEnabled,
-          layerRenderOrder,
-          basePost: {},
-          w,
-          h,
-          mappings: [],
-        });
-        throw new StaleSceneLoadError();
+    const failPrepare = (err: unknown): never => {
+      this.disposePreparedScene({
+        pieces,
+        baseParams,
+        layerOpacity,
+        layerBlend,
+        layerEnabled,
+        layerRenderOrder,
+        basePost: {},
+        w,
+        h,
+        mappings: [],
+      });
+      if (err instanceof UnsupportedLivePieceError) {
+        throw new Error(`${err.message}`);
       }
+      throw err;
+    };
+
+    // Create layers with cooperative yields — multi-layer mashups previously
+    // blocked the main thread for multiple seconds during sequential init.
+    for (let li = 0; li < scene.layers.length; li++) {
+      const layer = scene.layers[li]!;
+      if (!this.isLoadCurrent(token)) {
+        failPrepare(new StaleSceneLoadError());
+      }
+      const layerStart = performance.now();
       let piece;
       try {
         piece = await createLivePiece(gl, layer.piece, liveMode);
       } catch (err) {
-        this.disposePreparedScene({
-          pieces,
-          baseParams,
-          layerOpacity,
-          layerBlend,
-          layerEnabled,
-          layerRenderOrder,
-          basePost: {},
-          w,
-          h,
-          mappings: [],
-        });
         if (err instanceof UnsupportedLivePieceError) {
-          throw new Error(`${layer.piece}: ${err.message}`);
+          failPrepare(new Error(`${layer.piece}: ${err.message}`));
         }
-        throw err;
+        failPrepare(err);
       }
       const seed = layer.seed ?? this.runtime.getSeed();
-      await piece.initialize({ piece: layer.piece }, seed);
+      await piece!.initialize({ piece: layer.piece }, seed);
       if (!this.isLoadCurrent(token)) {
-        piece.dispose();
-        this.disposePreparedScene({
-          pieces,
-          baseParams,
-          layerOpacity,
-          layerBlend,
-          layerEnabled,
-          layerRenderOrder,
-          basePost: {},
-          w,
-          h,
-          mappings: [],
-        });
-        throw new StaleSceneLoadError();
+        piece!.dispose();
+        failPrepare(new StaleSceneLoadError());
       }
-      piece.resize(w, h);
+      piece!.resize(w, h);
       if (layer.parameters) {
         for (const [k, v] of Object.entries(layer.parameters)) {
-          piece.setParameter(k, v);
+          piece!.setParameter(k, v);
         }
       }
-      pieces.set(layer.id, piece);
-      baseParams.set(layer.id, { ...piece.getBaseParameters() });
+      pieces.set(layer.id, piece!);
+      baseParams.set(layer.id, { ...piece!.getBaseParameters() });
       layerOpacity.set(layer.id, layer.opacity ?? 1);
       layerBlend.set(layer.id, layer.blend ?? "normal");
       layerEnabled.set(layer.id, true);
       layerRenderOrder.push(layer.id);
+      this.noteMainThreadBlock(performance.now() - layerStart);
+      // Yield between layers so the primary RAF can present and input stays responsive.
+      if (li < scene.layers.length - 1) {
+        await this.yieldToMain();
+        if (!this.isLoadCurrent(token)) {
+          failPrepare(new StaleSceneLoadError());
+        }
+      }
     }
     if (pieces.size === 0) {
       throw new Error("No live runtimes loaded for scene");
@@ -698,6 +712,44 @@ export class LiveSession {
 
   getFramePacingSnapshot(): FramePacingSnapshot {
     return this.framePacing.snapshot(this.hud.fps, this.rafHz);
+  }
+
+  /** Clear rolling frame samples (call after scene settle before a measurement window). */
+  resetFramePacing(): void {
+    this.framePacing.reset();
+    this.longestMainThreadBlockMs = 0;
+    this.recentLongTaskCount = 0;
+  }
+
+  /**
+   * Opt-in performance diagnostic report for reproducing stalls / pacing issues.
+   * Cheap to call — reads already-collected rings and counters (no extra GPU work).
+   */
+  exportPerformanceReport(extra: Record<string, unknown> = {}): Record<string, unknown> {
+    const pacing = this.getFramePacingSnapshot();
+    const timing = this.getSessionTimingDiagnostics();
+    const diag = this.getDiagnostics();
+    const droppedEstimate =
+      pacing.sampleCount > 0
+        ? Math.round((1000 * pacing.over33Ms) / Math.max(1, pacing.sampleCount)) / 10
+        : 0;
+    return {
+      exportedAt: new Date().toISOString(),
+      framePacing: pacing,
+      sessionTiming: timing,
+      hud: { ...this.hud },
+      layers: diag.activeLayerCount,
+      logicalFrame: diag.logicalFrame,
+      presentEpoch: diag.presentEpoch,
+      presentationMode: diag.presentationMode,
+      performanceMode: diag.performanceMode,
+      quality: this.quality,
+      resolution: this.resolution,
+      canvas: { w: diag.canvasWidth, h: diag.canvasHeight },
+      estimatedDroppedFramePctOver33ms: droppedEstimate,
+      visualLiveness: diag.visualLiveness,
+      ...extra,
+    };
   }
 
   private orderedLayers(scene: SceneDef): SceneDef["layers"] {
@@ -1245,13 +1297,7 @@ export class LiveSession {
   /** Fraction of pixels changed vs stored baseline grid. */
   comparePresentedToBaseline(gridW = 64, gridH = 36): number | null {
     if (!this.baselinePresentedGrid) return null;
-    const gl = this.compositor.gl;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
-    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const grid = this.compositor.readOutputPixels(gridW, gridH);
     const stats = analyzeRgbaGrid(grid, gridW, gridH, {
       pixels: this.baselinePresentedGrid,
       stats: this.baselinePresentedStats!,
@@ -1265,13 +1311,7 @@ export class LiveSession {
     innerMeanLuma: number;
     corners: { tl: number; tr: number; bl: number; br: number };
   } {
-    const gl = this.compositor.gl;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
-    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
+    const grid = this.compositor.readOutputPixels(gridW, gridH);
     let borderSum = 0;
     let borderN = 0;
     let innerSum = 0;
@@ -1308,36 +1348,30 @@ export class LiveSession {
     bl: number;
     br: number;
   } {
-    const gl = this.compositor.gl;
-    const cw = this.canvas.width;
-    const ch = this.canvas.height;
-    const raw = new Uint8Array(Math.max(1, cw * ch * 4));
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
     return this.readPresentedScopeMetrics(gridW, gridH).corners;
   }
 
-  /** Read the visible #stage canvas after compositor present (actual RGBA pixels). */
+  /** Read presented pixels via a tiny downsample FBO (not full-framebuffer readPixels). */
   readPresentedPixels(gridW = 64, gridH = 36, trackForComparison = true): PixelFrame {
     const rp0 = performance.now();
-    const gl = this.compositor.gl;
     this.drainGlErrors();
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    const cw = Math.max(1, gl.drawingBufferWidth);
-    const ch = Math.max(1, gl.drawingBufferHeight);
-    const raw = new Uint8Array(cw * ch * 4);
-    gl.readPixels(0, 0, cw, ch, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    const need = Math.max(1, gridW) * Math.max(1, gridH) * 4;
+    if (!this.digestPixelBuf || this.digestPixelBuf.length < need) {
+      this.digestPixelBuf = new Uint8Array(need);
+    }
+    const grid = this.compositor.readOutputPixels(gridW, gridH, this.digestPixelBuf);
     this.drainGlErrors();
     this.lastReadPixelsMs = performance.now() - rp0;
     this.noteMainThreadBlock(this.lastReadPixelsMs);
-    const grid = downsampleRgba(raw, cw, ch, gridW, gridH);
     const prior =
       trackForComparison && this.lastPresentedGrid
         ? { pixels: this.lastPresentedGrid, stats: this.lastPresentedStats! }
         : undefined;
-    const stats = analyzeRgbaGrid(grid, gridW, gridH, prior);
+    // Copy when tracking so subsequent digests do not mutate the prior grid buffer.
+    const owned = trackForComparison ? grid.slice(0, need) : grid;
+    const stats = analyzeRgbaGrid(owned, gridW, gridH, prior);
     if (trackForComparison) {
-      this.lastPresentedGrid = grid;
+      this.lastPresentedGrid = owned;
       this.lastPresentedStats = stats;
     }
     this.pixelDigest = stats.digest;
@@ -1445,30 +1479,29 @@ export class LiveSession {
 
     const lfo = this.lfos.sample(frame.beat, frame.bpm);
     const env = this.envelopes.sample(frame.t);
-    const sources: Record<string, number> = {
-      "audio.energy": this.features.energy,
-      "audio.peak": this.features.peak,
-      "audio.low": this.features.low,
-      "audio.mid": this.features.mid,
-      "audio.high": this.features.high,
-      "audio.centroid": this.features.centroid,
-      "audio.flux": this.features.flux,
-      "audio.onset": this.features.onset ? 1 : 0,
-      "transport.beat": frame.beatPhase,
-      "transport.beatPhase": frame.beatPhase,
-      "transport.bar": frame.bar % 1 === 0 ? frame.beatPhase : (frame.beat / 4) % 1,
-      "transport.phase": frame.beatPhase,
-      ...Object.fromEntries(
-        Object.entries(lfo).map(([k, v]) => [k.startsWith("lfo.") ? k : `lfo.${k}`, v]),
-      ),
-      ...Object.fromEntries(
-        Object.entries(env).map(([k, v]) => [k.startsWith("env.") ? k : `env.${k}`, v]),
-      ),
-      ...Object.fromEntries(this.midiCcSources),
-    };
-    // alias LFO ids from defs
-    for (const [k, v] of Object.entries(lfo)) sources[k] = v;
-    for (const [k, v] of Object.entries(env)) sources[k] = v;
+    const sources = this.modSources;
+    sources["audio.energy"] = this.features.energy;
+    sources["audio.peak"] = this.features.peak;
+    sources["audio.low"] = this.features.low;
+    sources["audio.mid"] = this.features.mid;
+    sources["audio.high"] = this.features.high;
+    sources["audio.centroid"] = this.features.centroid;
+    sources["audio.flux"] = this.features.flux;
+    sources["audio.onset"] = this.features.onset ? 1 : 0;
+    sources["transport.beat"] = frame.beatPhase;
+    sources["transport.beatPhase"] = frame.beatPhase;
+    sources["transport.bar"] =
+      frame.bar % 1 === 0 ? frame.beatPhase : (frame.beat / 4) % 1;
+    sources["transport.phase"] = frame.beatPhase;
+    for (const [k, v] of Object.entries(lfo)) {
+      sources[k] = v;
+      if (!k.startsWith("lfo.")) sources[`lfo.${k}`] = v;
+    }
+    for (const [k, v] of Object.entries(env)) {
+      sources[k] = v;
+      if (!k.startsWith("env.")) sources[`env.${k}`] = v;
+    }
+    for (const [k, v] of this.midiCcSources) sources[k] = v;
 
     const mods = this.modulation.evaluate(sources);
     this.applyMods(mods);

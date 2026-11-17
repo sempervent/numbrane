@@ -15,7 +15,7 @@ services:
   studio:
     image: numbrane-studio:local
     ports:
-      - "8080:8080"
+      - "8880:8080"
     depends_on:
       - renderer
     volumes:
@@ -26,7 +26,7 @@ services:
     image: numbrane-docs:local
     profiles: ["docs"]
     ports:
-      - "8081:8080"
+      - "8881:8080"
 
   python:
     image: numbrane-python:local

@@ -9,6 +9,8 @@ function compileBlit(gl: WebGL2RenderingContext): {
   prog: WebGLProgram;
   buf: WebGLBuffer;
   tex: WebGLTexture;
+  attribA: number;
+  uniformU: WebGLUniformLocation | null;
 } {
   const vsSrc = `#version 300 es
 in vec2 a; out vec2 v; void main(){ v=a*0.5+0.5; gl_Position=vec4(a,0.,1.);}`;
@@ -36,7 +38,13 @@ void main(){ o = texture(u, vec2(v.x, 1.0 - v.y)); }`;
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  return { prog, buf, tex };
+  return {
+    prog,
+    buf,
+    tex,
+    attribA: gl.getAttribLocation(prog, "a"),
+    uniformU: gl.getUniformLocation(prog, "u"),
+  };
 }
 
 export async function createGeometryIrPiece(
@@ -45,6 +53,8 @@ export async function createGeometryIrPiece(
 ): Promise<LivePiece> {
   const blit = compileBlit(gl);
   const scratch = document.createElement("canvas");
+  let scratchW = 0;
+  let scratchH = 0;
   let ir: GeomIR = buildGeometryIr(pieceId, 42, {});
   let seed = 42;
   let last: FrameState = {
@@ -71,6 +81,16 @@ export async function createGeometryIrPiece(
 
   const rebuild = () => {
     ir = buildGeometryIr(pieceId, seed, params);
+  };
+
+  const ensureScratch = (w: number, h: number): CanvasRenderingContext2D | null => {
+    if (scratchW !== w || scratchH !== h) {
+      scratch.width = w;
+      scratch.height = h;
+      scratchW = w;
+      scratchH = h;
+    }
+    return scratch.getContext("2d");
   };
 
   return {
@@ -121,18 +141,24 @@ export async function createGeometryIrPiece(
     render(ctx: RenderContext) {
       gl.bindFramebuffer(gl.FRAMEBUFFER, ctx.framebuffer);
       gl.viewport(0, 0, ctx.width, ctx.height);
-      scratch.width = ctx.width;
-      scratch.height = ctx.height;
-      const c2 = scratch.getContext("2d");
+      // Cap Canvas2D working size — full 1080p vector redraw + upload dominates live cost.
+      const maxEdge = 960;
+      const scaleDown =
+        Math.max(ctx.width, ctx.height) > maxEdge
+          ? maxEdge / Math.max(ctx.width, ctx.height)
+          : 1;
+      const drawW = Math.max(1, Math.round(ctx.width * scaleDown));
+      const drawH = Math.max(1, Math.round(ctx.height * scaleDown));
+      const c2 = ensureScratch(drawW, drawH);
       if (!c2) return;
-      const cx = ctx.width * 0.5;
-      const cy = ctx.height * 0.5;
+      const cx = drawW * 0.5;
+      const cy = drawH * 0.5;
       const constructionT = Math.min(1, Math.max(0, params["anim.constructionT"] ?? 1));
       const endBehavior = params["anim.endBehavior"] ?? 5;
       const buildProgress = constructionT;
       const livePerf = (params["anim.livePerformance"] ?? 0) > 0.5;
       const holdComplete = constructionT >= 0.999 && endBehavior === 0 && !livePerf;
-      const scale = Math.min(ctx.width, ctx.height) * 0.35 * params.zoom *
+      const scale = Math.min(drawW, drawH) * 0.35 * params.zoom *
         (holdComplete ? 1 : 1 + audio.energy * 0.12);
       const breathe =
         holdComplete
@@ -142,16 +168,15 @@ export async function createGeometryIrPiece(
               Math.sin(last.t * 1.15) *
               (endBehavior === 5 || livePerf ? 1 : 0);
       const drawScale = scale * breathe;
-      const bg = c2.createRadialGradient(cx, cy, 0, cx, cy, Math.max(ctx.width, ctx.height) * 0.65);
-      bg.addColorStop(0, `hsla(${params.hue * 360}, 35%, 12%, 1)`);
-      bg.addColorStop(0.45, "#080a12");
-      bg.addColorStop(1, "#020204");
-      c2.fillStyle = bg;
-      c2.fillRect(0, 0, ctx.width, ctx.height);
+      const hueDeg = params.hue * 360;
+      // Flat fill is far cheaper than a radial gradient rebuild every frame.
+      c2.fillStyle = "#080a12";
+      c2.fillRect(0, 0, drawW, drawH);
       c2.globalAlpha = 0.08 + params.density * 0.06;
-      c2.fillStyle = `hsl(${params.hue * 360} 40% 30%)`;
-      for (let i = 0; i < 48; i++) {
-        const a = (i / 48) * Math.PI * 2 + last.t * 0.02;
+      c2.fillStyle = `hsl(${hueDeg} 40% 30%)`;
+      const sparkleCount = holdComplete ? 16 : 32;
+      for (let i = 0; i < sparkleCount; i++) {
+        const a = (i / sparkleCount) * Math.PI * 2 + last.t * 0.02;
         const rr = drawScale * (0.35 + (i % 7) * 0.04);
         c2.fillRect(cx + Math.cos(a) * rr - 1, cy + Math.sin(a) * rr - 1, 2, 2);
       }
@@ -162,26 +187,19 @@ export async function createGeometryIrPiece(
       const cos = Math.cos(rot);
       const sin = Math.sin(rot);
       const lum = 42 + params.exposure * 12 + audio.energy * 22;
-      const rgb = `hsl(${params.hue * 360} 78% ${lum}%)`;
-      const glow = `hsla(${params.hue * 360}, 85%, 62%, 0.35)`;
+      const rgb = `hsl(${hueDeg} 78% ${lum}%)`;
+      const glow = `hsla(${hueDeg}, 85%, 62%, 0.35)`;
+      const lineW = 1.4 + params.density * 1.4;
       c2.lineCap = "round";
       c2.lineJoin = "round";
-      c2.lineWidth = 1.4 + params.density * 1.4;
-      c2.shadowColor = glow;
-      c2.shadowBlur = 10 + params.density * 14;
+      c2.lineWidth = lineW;
+      // Soft glow without Canvas shadowBlur (very expensive on CPU backends).
+      c2.shadowColor = "transparent";
+      c2.shadowBlur = 0;
       c2.strokeStyle = rgb;
       c2.globalAlpha = 0.95;
+      // Single stroke (previous dual pass with heavy shadowBlur dominated frame time).
       const strokeLine = (x0: number, y0: number, x1: number, y1: number) => {
-        c2.globalAlpha = 0.22;
-        c2.lineWidth = (1.4 + params.density * 1.4) * 2.2;
-        c2.shadowBlur = 18;
-        c2.beginPath();
-        c2.moveTo(x0, y0);
-        c2.lineTo(x1, y1);
-        c2.stroke();
-        c2.globalAlpha = 0.95;
-        c2.lineWidth = 1.4 + params.density * 1.4;
-        c2.shadowBlur = 10 + params.density * 14;
         c2.beginPath();
         c2.moveTo(x0, y0);
         c2.lineTo(x1, y1);
@@ -195,6 +213,7 @@ export async function createGeometryIrPiece(
           c2.fillStyle = glow;
           c2.fill();
           c2.globalAlpha = 0.95;
+          c2.strokeStyle = rgb;
         }
         c2.stroke();
       };
@@ -254,12 +273,11 @@ export async function createGeometryIrPiece(
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scratch);
       gl.useProgram(blit.prog);
       gl.bindBuffer(gl.ARRAY_BUFFER, blit.buf);
-      const loc = gl.getAttribLocation(blit.prog, "a");
-      gl.enableVertexAttribArray(loc);
-      gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+      gl.enableVertexAttribArray(blit.attribA);
+      gl.vertexAttribPointer(blit.attribA, 2, gl.FLOAT, false, 0, 0);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, blit.tex);
-      gl.uniform1i(gl.getUniformLocation(blit.prog, "u"), 0);
+      gl.uniform1i(blit.uniformU, 0);
       gl.clearColor(0.02, 0.02, 0.03, 1);
       gl.clear(gl.COLOR_BUFFER_BIT);
       gl.drawArrays(gl.TRIANGLES, 0, 3);

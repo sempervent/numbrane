@@ -16,6 +16,38 @@ const BLEND_INDEX: Record<BlendMode, number> = {
   darken: 6,
 };
 
+type BlendLocs = {
+  texA: WebGLUniformLocation | null;
+  texB: WebGLUniformLocation | null;
+  opacity: WebGLUniformLocation | null;
+  blend: WebGLUniformLocation | null;
+  progress: WebGLUniformLocation | null;
+};
+
+type PostLocs = {
+  scene: WebGLUniformLocation | null;
+  feedback: WebGLUniformLocation | null;
+  res: WebGLUniformLocation | null;
+  exposure: WebGLUniformLocation | null;
+  contrast: WebGLUniformLocation | null;
+  saturation: WebGLUniformLocation | null;
+  hue: WebGLUniformLocation | null;
+  vignette: WebGLUniformLocation | null;
+  bloom: WebGLUniformLocation | null;
+  feedbackAmt: WebGLUniformLocation | null;
+  feedbackZoom: WebGLUniformLocation | null;
+  feedbackRot: WebGLUniformLocation | null;
+  chromatic: WebGLUniformLocation | null;
+  grain: WebGLUniformLocation | null;
+  time: WebGLUniformLocation | null;
+  blackout: WebGLUniformLocation | null;
+};
+
+type CameraLocs = {
+  tex: WebGLUniformLocation | null;
+  cam: WebGLUniformLocation | null;
+};
+
 function createTex(gl: WebGL2RenderingContext, w: number, h: number, alpha: boolean): WebGLTexture {
   const t = gl.createTexture()!;
   gl.bindTexture(gl.TEXTURE_2D, t);
@@ -69,6 +101,44 @@ async function compile(
   return p;
 }
 
+function cacheBlendLocs(gl: WebGL2RenderingContext, prog: WebGLProgram): BlendLocs {
+  return {
+    texA: gl.getUniformLocation(prog, "u_texA"),
+    texB: gl.getUniformLocation(prog, "u_texB"),
+    opacity: gl.getUniformLocation(prog, "u_opacity"),
+    blend: gl.getUniformLocation(prog, "u_blend"),
+    progress: gl.getUniformLocation(prog, "u_progress"),
+  };
+}
+
+function cachePostLocs(gl: WebGL2RenderingContext, prog: WebGLProgram): PostLocs {
+  return {
+    scene: gl.getUniformLocation(prog, "u_scene"),
+    feedback: gl.getUniformLocation(prog, "u_feedback"),
+    res: gl.getUniformLocation(prog, "u_res"),
+    exposure: gl.getUniformLocation(prog, "u_exposure"),
+    contrast: gl.getUniformLocation(prog, "u_contrast"),
+    saturation: gl.getUniformLocation(prog, "u_saturation"),
+    hue: gl.getUniformLocation(prog, "u_hue"),
+    vignette: gl.getUniformLocation(prog, "u_vignette"),
+    bloom: gl.getUniformLocation(prog, "u_bloom"),
+    feedbackAmt: gl.getUniformLocation(prog, "u_feedbackAmt"),
+    feedbackZoom: gl.getUniformLocation(prog, "u_feedbackZoom"),
+    feedbackRot: gl.getUniformLocation(prog, "u_feedbackRot"),
+    chromatic: gl.getUniformLocation(prog, "u_chromatic"),
+    grain: gl.getUniformLocation(prog, "u_grain"),
+    time: gl.getUniformLocation(prog, "u_time"),
+    blackout: gl.getUniformLocation(prog, "u_blackout"),
+  };
+}
+
+function cacheCameraLocs(gl: WebGL2RenderingContext, prog: WebGLProgram): CameraLocs {
+  return {
+    tex: gl.getUniformLocation(prog, "u_tex"),
+    cam: gl.getUniformLocation(prog, "u_cam"),
+  };
+}
+
 export class Compositor {
   readonly gl: WebGL2RenderingContext;
   private w = 1;
@@ -86,8 +156,15 @@ export class Compositor {
   private blendProg!: WebGLProgram;
   private postProg!: WebGLProgram;
   private cameraProg!: WebGLProgram;
+  private blendLocs!: BlendLocs;
+  private postLocs!: PostLocs;
+  private cameraLocs!: CameraLocs;
   private snapTex!: WebGLTexture;
   private snapFbo!: WebGLFramebuffer;
+  private digestTex: WebGLTexture | null = null;
+  private digestFbo: WebGLFramebuffer | null = null;
+  private digestW = 0;
+  private digestH = 0;
   private quadVao!: WebGLVertexArrayObject;
   private ready = false;
   transparent = false;
@@ -109,6 +186,9 @@ export class Compositor {
     this.blendProg = await compile(gl, vert, "live_blend.frag");
     this.postProg = await compile(gl, vert, "live_post.frag");
     this.cameraProg = await compile(gl, vert, "live_camera.frag");
+    this.blendLocs = cacheBlendLocs(gl, this.blendProg);
+    this.postLocs = cachePostLocs(gl, this.postProg);
+    this.cameraLocs = cacheCameraLocs(gl, this.cameraProg);
 
     const buf = gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, buf);
@@ -164,39 +244,35 @@ export class Compositor {
   /** Copy post-processed output into frozen source snapshot (camera-only pan/zoom). */
   capturePresentationSnapshot(): void {
     const gl = this.gl;
+    const L = this.blendLocs;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.snapFbo);
     gl.viewport(0, 0, this.w, this.h);
     gl.useProgram(this.blendProg);
     gl.bindVertexArray(this.quadVao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+    gl.uniform1i(L.texA, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_progress"), 0);
+    gl.uniform1i(L.texB, 1);
+    gl.uniform1f(L.opacity, 1);
+    gl.uniform1i(L.blend, 0);
+    gl.uniform1f(L.progress, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
   }
 
   private drawCameraPresent(camera: CameraView, tex: WebGLTexture): void {
     const gl = this.gl;
+    const C = this.cameraLocs;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
     gl.useProgram(this.cameraProg);
     gl.bindVertexArray(this.quadVao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.uniform1i(gl.getUniformLocation(this.cameraProg, "u_tex"), 0);
-    gl.uniform4f(
-      gl.getUniformLocation(this.cameraProg, "u_cam"),
-      camera.centerX,
-      camera.centerY,
-      camera.scale,
-      camera.rotation,
-    );
+    gl.uniform1i(C.tex, 0);
+    gl.uniform4f(C.cam, camera.centerX, camera.centerY, camera.scale, camera.rotation);
     gl.clearColor(0, 0, 0, this.transparent ? 0 : 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -219,6 +295,7 @@ export class Compositor {
   /** Composite current layer texture onto accum with blend/opacity. */
   compositeLayer(blend: BlendMode, opacity: number): void {
     const gl = this.gl;
+    const L = this.blendLocs;
     // Draw accum + layer -> accumB, then swap
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.accumFboB);
     gl.viewport(0, 0, this.w, this.h);
@@ -226,13 +303,13 @@ export class Compositor {
     gl.bindVertexArray(this.quadVao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.accumTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+    gl.uniform1i(L.texA, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.layerTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), opacity);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), BLEND_INDEX[blend] ?? 0);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_progress"), 0);
+    gl.uniform1i(L.texB, 1);
+    gl.uniform1f(L.opacity, opacity);
+    gl.uniform1i(L.blend, BLEND_INDEX[blend] ?? 0);
+    gl.uniform1f(L.progress, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     // swap
     const t = this.accumTex;
@@ -256,33 +333,32 @@ export class Compositor {
       return;
     }
     const gl = this.gl;
+    const P = this.postLocs;
+    const L = this.blendLocs;
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo);
     gl.viewport(0, 0, this.w, this.h);
     gl.useProgram(this.postProg);
     gl.bindVertexArray(this.quadVao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.accumTex);
-    gl.uniform1i(gl.getUniformLocation(this.postProg, "u_scene"), 0);
+    gl.uniform1i(P.scene, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.feedbackTex);
-    gl.uniform1i(gl.getUniformLocation(this.postProg, "u_feedback"), 1);
-    gl.uniform2f(gl.getUniformLocation(this.postProg, "u_res"), this.w, this.h);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_exposure"), post.exposure ?? 1);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_contrast"), post.contrast ?? 1);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_saturation"), post.saturation ?? 1);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_hue"), post.hue_shift ?? 0);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_vignette"), post.vignette ?? 0);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_bloom"), post.bloom ?? 0.15);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_feedbackAmt"), post.feedback ?? 0.25);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_feedbackZoom"), post.feedback_zoom ?? 1.01);
-    gl.uniform1f(
-      gl.getUniformLocation(this.postProg, "u_feedbackRot"),
-      post.feedback_rotation ?? 0,
-    );
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_chromatic"), post.chromatic ?? 0);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_grain"), post.grain ?? 0.1);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_time"), t);
-    gl.uniform1f(gl.getUniformLocation(this.postProg, "u_blackout"), blackout ? 1 : 0);
+    gl.uniform1i(P.feedback, 1);
+    gl.uniform2f(P.res, this.w, this.h);
+    gl.uniform1f(P.exposure, post.exposure ?? 1);
+    gl.uniform1f(P.contrast, post.contrast ?? 1);
+    gl.uniform1f(P.saturation, post.saturation ?? 1);
+    gl.uniform1f(P.hue, post.hue_shift ?? 0);
+    gl.uniform1f(P.vignette, post.vignette ?? 0);
+    gl.uniform1f(P.bloom, post.bloom ?? 0.15);
+    gl.uniform1f(P.feedbackAmt, post.feedback ?? 0.25);
+    gl.uniform1f(P.feedbackZoom, post.feedback_zoom ?? 1.01);
+    gl.uniform1f(P.feedbackRot, post.feedback_rotation ?? 0);
+    gl.uniform1f(P.chromatic, post.chromatic ?? 0);
+    gl.uniform1f(P.grain, post.grain ?? 0.1);
+    gl.uniform1f(P.time, t);
+    gl.uniform1f(P.blackout, blackout ? 1 : 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     // copy out -> feedback for next frame
@@ -292,13 +368,13 @@ export class Compositor {
     gl.useProgram(this.blendProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+    gl.uniform1i(L.texA, 0);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
-    gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
-    gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_progress"), 0);
+    gl.uniform1i(L.texB, 1);
+    gl.uniform1f(L.opacity, 1);
+    gl.uniform1i(L.blend, 0);
+    gl.uniform1f(L.progress, 0);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
 
     if (drawToScreen) {
@@ -310,12 +386,12 @@ export class Compositor {
         gl.useProgram(this.blendProg);
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texA"), 0);
+        gl.uniform1i(L.texA, 0);
         gl.activeTexture(gl.TEXTURE1);
         gl.bindTexture(gl.TEXTURE_2D, this.outTex);
-        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_texB"), 1);
-        gl.uniform1f(gl.getUniformLocation(this.blendProg, "u_opacity"), 1);
-        gl.uniform1i(gl.getUniformLocation(this.blendProg, "u_blend"), 0);
+        gl.uniform1i(L.texB, 1);
+        gl.uniform1f(L.opacity, 1);
+        gl.uniform1i(L.blend, 0);
         gl.clearColor(0, 0, 0, this.transparent ? 0 : 1);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
@@ -329,5 +405,44 @@ export class Compositor {
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.feedbackFbo);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  /**
+   * Downsample the presented output into a tiny FBO and read only that.
+   * Avoids full-framebuffer readPixels (multi-MB sync GPU→CPU) on the hot path.
+   */
+  readOutputPixels(gridW: number, gridH: number, into?: Uint8Array): Uint8Array {
+    const gl = this.gl;
+    const w = Math.max(1, gridW | 0);
+    const h = Math.max(1, gridH | 0);
+    if (!this.digestTex || !this.digestFbo || this.digestW !== w || this.digestH !== h) {
+      if (this.digestTex) gl.deleteTexture(this.digestTex);
+      if (this.digestFbo) gl.deleteFramebuffer(this.digestFbo);
+      this.digestTex = createTex(gl, w, h, true);
+      this.digestFbo = createFbo(gl, this.digestTex);
+      this.digestW = w;
+      this.digestH = h;
+    }
+    const L = this.blendLocs;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.digestFbo);
+    gl.viewport(0, 0, w, h);
+    gl.useProgram(this.blendProg);
+    gl.bindVertexArray(this.quadVao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+    gl.uniform1i(L.texA, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.outTex);
+    gl.uniform1i(L.texB, 1);
+    gl.uniform1f(L.opacity, 1);
+    gl.uniform1i(L.blend, 0);
+    gl.uniform1f(L.progress, 0);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const need = w * h * 4;
+    const raw = into && into.length >= need ? into : new Uint8Array(need);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+    gl.bindVertexArray(null);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return raw.length === need ? raw : raw.subarray(0, need);
   }
 }

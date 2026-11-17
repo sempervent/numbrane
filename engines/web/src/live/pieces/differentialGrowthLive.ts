@@ -68,7 +68,13 @@ export async function createDifferentialGrowthPiece(
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  const loc = (name: string) => gl.getUniformLocation(dispProg, name);
+  const locs = {
+    trail: gl.getUniformLocation(dispProg, "u_trail"),
+    res: gl.getUniformLocation(dispProg, "u_res"),
+    hue: gl.getUniformLocation(dispProg, "u_hue"),
+    energy: gl.getUniformLocation(dispProg, "u_energy"),
+    density: gl.getUniformLocation(dispProg, "u_density"),
+  };
 
   let rng = seed >>> 0 || 1;
   const rnd = () => {
@@ -238,11 +244,11 @@ export async function createDifferentialGrowthPiece(
       gl.useProgram(dispProg);
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.uniform1i(loc("u_trail"), 0);
-      gl.uniform2f(loc("u_res"), ctx.width, ctx.height);
-      gl.uniform1f(loc("u_hue"), params.hue);
-      gl.uniform1f(loc("u_energy"), audio.energy);
-      gl.uniform1f(loc("u_density"), params.density);
+      gl.uniform1i(locs.trail, 0);
+      gl.uniform2f(locs.res, ctx.width, ctx.height);
+      gl.uniform1f(locs.hue, params.hue);
+      gl.uniform1f(locs.energy, audio.energy);
+      gl.uniform1f(locs.density, params.density);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       void last;
     },

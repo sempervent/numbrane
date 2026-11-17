@@ -413,6 +413,19 @@ studio-performance:
     npx playwright test -c playwright.performance.config.ts
 
 [group('studio')]
+studio-runtime-bench:
+    #!/usr/bin/env bash
+    # Reproducible LIVE frame-pacing bench → artifacts/performance/*.json
+    # Prefers a running Studio on STUDIO_URL (default http://127.0.0.1:5173).
+    set -euo pipefail
+    cd "{{root}}/engines/web"
+    mkdir -p "{{root}}/artifacts/performance"
+    export PW_CHROMIUM_ARGS="${PW_CHROMIUM_ARGS:---use-angle=swiftshader --enable-webgl --ignore-gpu-blocklist}"
+    export STUDIO_URL="${STUDIO_URL:-http://127.0.0.1:5173}"
+    npx playwright test -c playwright.runtime-bench.config.ts
+    echo "Runtime bench → {{root}}/artifacts/performance/"
+
+[group('studio')]
 studio-performance-soak:
     #!/usr/bin/env bash
     set -euo pipefail

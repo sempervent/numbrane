@@ -735,6 +735,29 @@ export class StudioApp {
     this.session.pinPresentedBaseline();
   }
 
+  /** Clear live frame-pacing samples (benchmarks / settle windows). */
+  resetFramePacing(): void {
+    this.session?.resetFramePacing();
+  }
+
+  /** Export a lightweight performance diagnostic report (opt-in; no extra per-frame cost). */
+  exportPerformanceReport(): Record<string, unknown> {
+    const base = this.session?.exportPerformanceReport({
+      studioPiece: this.pieceId,
+      studioMode: this.mode,
+      compositionId: this.compositionId,
+      animationMethodId: this.animationMethodId,
+      sceneApplyPhase: this.sceneApplyPhase,
+      primaryLiveSessionCount: this.getPrimaryLiveSessionCount(),
+    }) ?? {
+      exportedAt: new Date().toISOString(),
+      error: "no live session",
+      studioPiece: this.pieceId,
+      studioMode: this.mode,
+    };
+    return base;
+  }
+
   comparePixelBaseline(): number | null {
     if (!this.session || studioSurface(this.pieceId, this.mode) !== "live") return null;
     return this.session.comparePresentedToBaseline(64, 36);
@@ -3536,8 +3559,9 @@ export class StudioApp {
         this.generating ? " · generating…" : ""
       }`;
     }
+    // Animate/React digests are diagnostic-only — keep them sparse during live play.
     this.session?.setProductionCaptureMode(
-      this.mode === "animate" && !this.controlsVisible && !this.browserVisible,
+      this.mode === "animate" || this.mode === "react",
     );
   }
 

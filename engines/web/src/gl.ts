@@ -198,11 +198,34 @@ void main() {
   gl_Position = vec4(positions[gl_VertexID], 0.0, 1.0);
 }`;
 
+/** In-flight / resolved shader source cache — mashups share display shaders. */
+const shaderSourceCache = new Map<string, Promise<string>>();
+
 /** Load shader text from Vite-served /shaders/ directory. */
 export async function loadShader(filename: string): Promise<string> {
-  const response = await fetch(`/shaders/${filename}`);
-  if (!response.ok) {
-    throw new Error(`Failed to load shader: ${filename}`);
+  const cached = shaderSourceCache.get(filename);
+  if (cached) return cached;
+  const pending = (async () => {
+    const response = await fetch(`/shaders/${filename}`);
+    if (!response.ok) {
+      throw new Error(`Failed to load shader: ${filename}`);
+    }
+    return response.text();
+  })();
+  shaderSourceCache.set(filename, pending);
+  try {
+    return await pending;
+  } catch (err) {
+    shaderSourceCache.delete(filename);
+    throw err;
   }
-  return response.text();
+}
+
+/** Test/diagnostics: drop cached shader sources (does not free GL programs). */
+export function clearShaderSourceCache(): void {
+  shaderSourceCache.clear();
+}
+
+export function shaderSourceCacheSize(): number {
+  return shaderSourceCache.size;
 }
