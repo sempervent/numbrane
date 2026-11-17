@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>NUMBRANE · PFL Flow Field</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #030508;
+        color: #c8e4ff;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+      }
+      #pfl-stage {
+        position: fixed;
+        inset: 0;
+      }
+      #pfl-canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+        touch-action: none;
+      }
+      #pfl-dock {
+        position: fixed;
+        left: 50%;
+        bottom: max(12px, env(safe-area-inset-bottom));
+        transform: translateX(-50%);
+        z-index: 10;
+        max-width: min(560px, calc(100vw - 24px));
+        padding: 12px 14px;
+        border-radius: 14px;
+        background: rgba(8, 12, 20, 0.88);
+        border: 1px solid rgba(120, 180, 255, 0.22);
+        backdrop-filter: blur(12px);
+        transition: opacity 0.35s ease, transform 0.35s ease;
+      }
+      #pfl-dock.hidden {
+        opacity: 0;
+        pointer-events: none;
+        transform: translate(-50%, 12px);
+      }
+      #pfl-dock h1 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: #8ec8ff;
+      }
+      .pfl-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin-bottom: 8px;
+      }
+      .pfl-row:last-child {
+        margin-bottom: 0;
+      }
+      label {
+        font-size: 11px;
+        opacity: 0.85;
+      }
+      select,
+      button,
+      input[type="range"],
+      input[type="file"] {
+        font: inherit;
+        font-size: 12px;
+      }
+      button {
+        cursor: pointer;
+        padding: 6px 12px;
+        border-radius: 8px;
+        border: 1px solid rgba(140, 200, 255, 0.35);
+        background: rgba(20, 40, 70, 0.6);
+        color: inherit;
+      }
+      button.primary {
+        background: linear-gradient(135deg, #1a4a7a, #2d6ba8);
+      }
+      #pfl-meter {
+        flex: 1;
+        min-width: 120px;
+        height: 8px;
+        border-radius: 4px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      #pfl-meter > span {
+        display: block;
+        height: 100%;
+        width: 0%;
+        background: linear-gradient(90deg, #3a9eff, #a8f0ff);
+        transition: width 0.05s linear;
+      }
+      .pfl-hint {
+        font-size: 10px;
+        opacity: 0.55;
+        margin-top: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="pfl-stage">
+      <canvas id="pfl-canvas" aria-label="PFL flow field visualizer"></canvas>
+    </div>
+    <div id="pfl-dock" aria-label="Controls"></div>
+    <script type="module" src="/src/pfl/main.ts"></script>
+  </body>
+</html>

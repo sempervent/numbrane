@@ -381,6 +381,7 @@ export default defineConfig({
         live: resolve(root, "live.html"),
         "live-output": resolve(root, "live-output.html"),
         studio: resolve(root, "studio.html"),
+        pfl: resolve(root, "pfl.html"),
       },
     },
   },
